@@ -1,5 +1,4 @@
 mod context;
-mod envelope;
 mod gc;
 mod heap;
 mod impls;
