@@ -5,8 +5,11 @@ use crate::gc::ToHeap;
 use crate::objects::Value;
 use crate::vm::VmRuntimeError;
 
-pub type StackRef<'a, const N: usize> = core::cell::Ref<'a, Stack<N, Value<'a>>>;
-pub type StackRefMut<'a, const N: usize> = core::cell::RefMut<'a, Stack<N, Value<'a>>>;
+// pub type StackRef<'a, const N: usize> = core::cell::Ref<'a, Stack<N, Value<'a>>>;
+// pub type StackRefMut<'a, const N: usize> = core::cell::RefMut<'a, Stack<N, Value<'a>>>;
+
+pub type StackRef<'a, const N: usize> = &'a Stack<N, Value<'a>>;
+pub type StackRefMut<'a, const N: usize> = &'a mut Stack<N, Value<'a>>;
 type Result<T, E = StackError> = core::result::Result<T, E>;
 
 pub enum StackError {

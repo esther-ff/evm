@@ -1,4 +1,5 @@
 mod context;
+mod envelope;
 mod gc;
 mod heap;
 mod impls;
@@ -21,7 +22,11 @@ macro_rules! RootType {
         $crate::gc::RootableShim<dyn for<$lf> $crate::gc::RootItem<$lf, Root = $ty>>
     };
 
-    (Gc, $ty:ty) => {
+    (NoGc, $ty:ty) => {
         RootType!('__gc, Gc<'__gc, $ty>)
+    };
+
+    (Gc, $ty:ty) => {
+        RootType!('__gc, $ty)
     }
 }

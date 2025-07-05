@@ -100,25 +100,22 @@ impl Frame {
         self.locals.push(local)
     }
 
-    pub fn load_local<'a, 'b, const N: usize>(
+    pub fn load_local<'a, const N: usize>(
         &self,
         id: LocalId,
-        stack: &StackRef<'a, N>,
-    ) -> Option<Value<'b>>
-    where
-        'a: 'b,
-    {
+        stack: &Stack<N, Value<'a>>,
+    ) -> Option<Value<'a>> {
         self.locals.get(id).and_then(|var| var.load(&stack))
     }
 
     pub fn store_local<'a, const N: usize>(
         &self,
         id: LocalId,
-        mut stack: StackRefMut<'a, N>,
+        stack: &mut Stack<N, Value<'a>>,
         value: Value<'a>,
     ) -> bool {
         if let Some(local) = self.locals.get(id) {
-            return local.store(&mut stack, value);
+            return local.store(stack, value);
         }
 
         false

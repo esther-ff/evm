@@ -1,11 +1,10 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::RootType;
 
 use crate::bytecode::{BytecodeCompiler, BytecodeError};
 use crate::call_stack::{CallStack, Frame, LocalId};
-use crate::gc::{Gc, Heap};
+use crate::gc::Heap;
 use crate::instruction::{Instr, Instructions};
 use crate::objects::{FnRef, Functions, Objects, Value};
 use crate::stack::Stack;
@@ -15,7 +14,7 @@ const MAX_STACK_SIZE: usize = 64;
 
 pub type Operand = u32;
 pub type Result<T, E = VmRuntimeError> = core::result::Result<T, E>;
-type RootStack = Heap<RootType![Gc, RefCell<Stack<MAX_STACK_SIZE, Value<'__gc>>>]>;
+type RootStack = Heap<RootType![Gc, Stack<MAX_STACK_SIZE, Value<'__gc>>]>;
 
 pub enum VmRuntimeError {
     StackTooLow,
@@ -191,7 +190,7 @@ impl Vm {
         let (objects, instructions, fns) = parser.read_evm_bytecode().unwrap();
 
         let mut vm = Self {
-            stack: Heap::new(|period| Gc::new(period, RefCell::new(Stack::new()))),
+            stack: Heap::new(|_period| Stack::new()),
             instructions,
             fns,
 
@@ -227,43 +226,61 @@ impl Vm {
         frame
     }
 
-    fn debug_report<A>(&self, _opcode: A, _show_stack: bool)
+    #[cfg(debug_assertions)]
+    fn debug_report<A>(&mut self, opcode: A, show_stack: bool)
     where
         A: Into<Option<Instr>>,
     {
-        // let op = opcode.into();
-        // #[cfg(debug_assertions)]
-        // println!(
-        //     "[vm] (instruction: {op:?}) | stack ptr: {} | instr ptr: {} | stack left: {} |",
-        //     self.stack.stack_pointer(),
-        //     self.instructions.ip().0,
-        //     self.stack.free()
-        // );
-        // println!(
-        //     "[vm] flags: eq: {}, gt: {}, le: {}",
-        //     self.cmp_flags.equal, self.cmp_flags.greater, self.cmp_flags.lesser
-        // );
+        let (stack_ptr, free) = self
+            .stack
+            .enter(|_, stack| (stack.stack_pointer(), stack.free()));
 
-        // let mut pointer = String::from("[\n");
+        match opcode.into() {
+            None => {
+                println!(
+                    "[vm] start | stack ptr: {} | instr ptr: {} | stack left: {} |",
+                    stack_ptr,
+                    self.instructions.ip().0,
+                    free
+                );
+            }
 
-        // for (ix, val) in self.stack.buffer().iter().enumerate() {
-        //     use std::fmt::Write;
-        //     write!(&mut pointer, "{val:>6?}").unwrap();
+            Some(op) => {
+                println!(
+                    "[vm] (instruction: {op:?}) | stack ptr: {} | instr ptr: {} | stack left: {} |",
+                    stack_ptr,
+                    self.instructions.ip().0,
+                    free
+                );
+            }
+        }
+        println!(
+            "[vm] flags: eq: {}, gt: {}, le: {}",
+            self.cmp_flags.equal, self.cmp_flags.greater, self.cmp_flags.lesser
+        );
 
-        //     if ix == self.stack.stack_pointer() {
-        //         pointer.push_str(" <--- STACK POINTER\n");
-        //     } else {
-        //         pointer.push('\n');
-        //     }
-        // }
+        let mut pointer = String::from("[\n");
 
-        // pointer.push_str("]\n");
+        self.stack.enter(|_, stack| {
+            for (ix, val) in stack.buffer().iter().enumerate() {
+                use std::fmt::Write;
+                write!(&mut pointer, "{val:>6?}").unwrap();
 
-        // println!("call stack: {:?}", &self.call_stack);
+                if ix == stack.stack_pointer() {
+                    pointer.push_str(" <--- STACK POINTER\n");
+                } else {
+                    pointer.push('\n');
+                }
+            }
+        });
 
-        // if show_stack {
-        //     println!("stack after instruction: {pointer}");
-        // }
+        pointer.push_str("]\n");
+
+        println!("call stack: {:?}", &self.call_stack);
+
+        if show_stack {
+            println!("stack after instruction: {pointer}");
+        }
     }
     #[allow(clippy::too_many_lines)]
     fn interpret_one(&mut self) -> Result<bool, VmRuntimeError> {
@@ -278,9 +295,7 @@ impl Vm {
         };
 
         match op {
-            Add => self.stack.enter(|period, root| {
-                let mut stack = root.borrow_mut(period);
-
+            Add => self.stack.enter_mut(|_period, stack| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -289,9 +304,7 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Sub => self.stack.enter(|period, root| {
-                let mut stack = root.borrow_mut(period);
-
+            Sub => self.stack.enter_mut(|_period, stack| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -300,9 +313,7 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Mul => self.stack.enter(|period, root| {
-                let mut stack = root.borrow_mut(period);
-
+            Mul => self.stack.enter_mut(|_period, stack| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -311,9 +322,7 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Div => self.stack.enter(|period, root| {
-                let mut stack = root.borrow_mut(period);
-
+            Div => self.stack.enter_mut(|_period, stack| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -324,7 +333,7 @@ impl Vm {
 
             Push(item) => self
                 .stack
-                .enter(|period, root| root.borrow_mut(period).push(Value::Number(item)))?,
+                .enter_mut(|_, stack| stack.push(Value::Number(item)))?,
 
             CmpVal => {
                 // let lhs = self.stack.pop()?;
@@ -378,17 +387,15 @@ impl Vm {
                     stack: &mut RootStack,
                     local_id: LocalId,
                 ) -> Result<(), VmRuntimeError> {
-                    stack.enter(|period, root| {
-                        let first = root.borrow(period);
-
-                        let Some(val) = callstack
+                    stack.enter_mut(|_period, stack| {
+                        if let Some(val) = callstack
                             .current_frame_mut_assert()
-                            .load_local(local_id, &first)
-                        else {
-                            return Err(VmRuntimeError::LocalVariableMissing(local_id));
-                        };
-
-                        root.borrow_mut(period).push(val).map_err(Into::into)
+                            .load_local(local_id, stack)
+                        {
+                            stack.push(val).map_err(Into::into)
+                        } else {
+                            Err(VmRuntimeError::LocalVariableMissing(local_id))
+                        }
                     })
                 }
 
@@ -398,15 +405,10 @@ impl Vm {
             Store(local_id) => {
                 let frame = self.call_stack.current_frame_mut_assert();
 
-                self.stack.enter(|period, root| {
-                    let new_value = root
-                        .borrow_mut(period)
-                        .pop()
-                        .map_err(Into::<VmRuntimeError>::into)?;
+                self.stack.enter_mut(|_, stack| {
+                    let new_value = stack.pop().map_err(Into::<VmRuntimeError>::into)?;
 
-                    let place = root.borrow_mut(period);
-
-                    let output = frame.store_local(local_id, place, new_value);
+                    let output = frame.store_local(local_id, stack, new_value);
 
                     if !output {
                         return Err(VmRuntimeError::LocalVariableMissing(
@@ -426,31 +428,30 @@ impl Vm {
                     frame.allocate_local(stack)
                 }
 
-                self.stack.enter(|period, root| {
-                    if !alloc_local(
-                        &mut root.borrow_mut(period),
-                        self.call_stack.current_frame_mut_assert(),
-                    ) {
-                        panic!("couldn't allocate a local variable!") // todo?
+                self.stack.enter_mut(|_period, stack| {
+                    if !alloc_local(stack, self.call_stack.current_frame_mut_assert()) {
+                        todo!("couldn't allocate a local variable!") // todo?
                     }
                 });
             }
 
             Dup => {
-                self.stack
-                    .enter(|period, root| root.borrow_mut(period).duplicate())?;
+                self.stack.enter_mut(|_period, stack| stack.duplicate())?;
             }
 
             End => vm_continue = false,
         }
 
+        #[cfg(debug_assertions)]
         self.debug_report(op, true);
 
         Ok(vm_continue)
     }
 
     fn interpret_all(&mut self) -> Result<()> {
+        #[cfg(debug_assertions)]
         self.debug_report(None, false);
+
         while self.interpret_one()? {}
 
         Ok(())
