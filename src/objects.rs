@@ -1,3 +1,6 @@
+use crate::instruction::ProgramCounter;
+use std::sync::Arc;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Value {
     Object(ObjRef),
@@ -6,8 +9,14 @@ pub(crate) enum Value {
     Function(FnRef),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FnRef(pub u32);
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
+pub struct FnRef(pub u32);
+
+impl FnRef {
+    /// a `FnRef` pointing to the function at index 0
+    /// which should be the `main` function.
+    pub const MAIN_FN: FnRef = FnRef(0);
+}
 
 pub(crate) struct Functions(Vec<Func>);
 
@@ -26,24 +35,24 @@ impl Functions {
 }
 
 pub(crate) struct Func {
-    jump_ip: usize,
-    name: Box<str>,
+    jump_ip: ProgramCounter,
+    name: Arc<str>,
     arity: u16,
 }
 
 impl Func {
-    pub(crate) fn new<A>(jump_ip: usize, name: A, arity: u16) -> Self
+    pub(crate) fn new<A>(jump_ip: u32, name: A, arity: u16) -> Self
     where
-        A: Into<Box<str>>,
+        A: Into<Arc<str>>,
     {
         Self {
             name: name.into(),
-            jump_ip,
+            jump_ip: ProgramCounter(jump_ip),
             arity,
         }
     }
 
-    pub(crate) fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &Arc<str> {
         &self.name
     }
 
@@ -51,7 +60,7 @@ impl Func {
         self.arity
     }
 
-    pub(crate) fn jump_ip(&self) -> usize {
+    pub(crate) fn jump_ip(&self) -> ProgramCounter {
         self.jump_ip
     }
 }
@@ -59,6 +68,7 @@ impl Func {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ObjRef(u32);
 
+#[derive(Clone, Copy)]
 pub(crate) enum Object {
     Todo,
 }
@@ -81,22 +91,4 @@ impl Objects {
     pub(crate) fn insert(&mut self, obj: Object) {
         self.storage.push(obj);
     }
-
-    // pub(crate) fn inc_ref_count(&mut self, idx: usize) -> Option<usize> {
-    //     self.storage.get_mut(idx).map(|obj| {
-    //         let old = obj.ref_count;
-    //         obj.ref_count += 1;
-
-    //         old
-    //     })
-    // }
-
-    // pub(crate) fn dec_ref_count(&mut self, idx: usize) -> Option<usize> {
-    //     self.storage.get_mut(idx).map(|obj| {
-    //         let old = obj.ref_count;
-    //         obj.ref_count -= 1;
-
-    //         old
-    //     })
-    // }
 }

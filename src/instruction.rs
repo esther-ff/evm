@@ -1,4 +1,6 @@
-type Op = u64;
+use crate::call_stack::LocalId;
+use crate::objects::FnRef;
+use crate::vm::Operand;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Instr {
@@ -6,23 +8,32 @@ pub(crate) enum Instr {
     Sub,
     Mul,
     Div,
-    Push(Op),
-    Call(Op),
+    Push(Operand),
+    Call(FnRef),
     Return,
-    JumpIfGr(Op),
-    JumpIfEq(Op),
-    JumpIfLe(Op),
-    Jump(Op),
+    JumpIfGr(ProgramCounter),
+    JumpIfEq(ProgramCounter),
+    JumpIfLe(ProgramCounter),
+    Jump(ProgramCounter),
     CmpVal,
     CmpObj,
     Dup,
 
-    Load(Op),
-    Store(Op),
+    Load(LocalId),
+    Store(LocalId),
 
     AllocLocal,
 
     End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProgramCounter(pub(crate) u32);
+
+impl ProgramCounter {
+    pub fn new(ip: u32) -> Self {
+        Self(ip)
+    }
 }
 
 #[derive(Debug)]
@@ -45,11 +56,15 @@ impl Instructions {
         val
     }
 
-    pub(crate) fn jump(&mut self, new_ip: usize) {
-        self.instr_ptr += new_ip
+    pub(crate) fn jump(&mut self, new_ip: ProgramCounter) {
+        self.instr_ptr += new_ip.0 as usize
     }
 
     pub(crate) fn len(&self) -> usize {
         self.stream.len()
+    }
+
+    pub fn ip(&self) -> ProgramCounter {
+        ProgramCounter(self.instr_ptr as u32)
     }
 }

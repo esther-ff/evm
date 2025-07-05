@@ -1,6 +1,10 @@
-use super::VmRuntimeError;
 use super::instruction::{Instr, Instructions};
 use super::objects::{Func, Functions, Objects};
+use crate::call_stack::LocalId;
+use crate::instruction::ProgramCounter;
+
+use crate::objects::FnRef;
+use crate::vm::VmRuntimeError;
 
 use core::fmt::Display;
 
@@ -14,7 +18,6 @@ const FN_DECL: &[u8] = &[1, 1];
 pub(crate) enum BytecodeError {
     Invalid,
 
-    // functions
     FnParse { reason: &'static str, offset: usize },
 
     InvalidInstruction { offset: usize, instr: u8 },
@@ -59,7 +62,7 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     pub(crate) fn read_evm_bytecode(&mut self) -> Result<(Objects, Instructions, Functions)> {
-        let mut objs = Objects::new();
+        let objs = Objects::new();
         let mut instructions = Vec::new();
         let mut fns = Functions::new();
 
@@ -73,7 +76,7 @@ impl<'a> BytecodeCompiler<'a> {
             self.pos += 2;
 
             match arr {
-                FN_DECL => self.parse_fn_decl(&mut objs, &mut instructions, &mut fns)?,
+                FN_DECL => self.parse_fn_decl(&mut instructions, &mut fns)?,
 
                 _ => todo!(),
             }
@@ -90,12 +93,7 @@ impl<'a> BytecodeCompiler<'a> {
             .is_some_and(|arr| arr == EVM_MARKER)
     }
 
-    fn parse_fn_decl(
-        &mut self,
-        objs: &mut Objects,
-        instrs: &mut Vec<Instr>,
-        fns: &mut Functions,
-    ) -> Result<()> {
+    fn parse_fn_decl(&mut self, instrs: &mut Vec<Instr>, fns: &mut Functions) -> Result<()> {
         let mut fn_name_ix_end = self.pos;
 
         for byte in &self.src[self.pos..] {
@@ -148,7 +146,7 @@ impl<'a> BytecodeCompiler<'a> {
         let jump_up = self.pos + 1;
 
         let (fn_start, mut fn_end) = (self.pos + 1, 0);
-        let fn_def = Func::new(jump_up, fn_name, arity);
+        let fn_def = Func::new(jump_up as u32, fn_name, arity);
         fns.insert(fn_def);
 
         for byte in &self.src[self.pos..] {
@@ -181,9 +179,9 @@ impl<'a> BytecodeCompiler<'a> {
         dbg!(bytecode);
         let mut pos = 0;
         macro_rules! operand_op {
-            ($num:expr, $self:ident, $op:ident) => {{
+            ($num:expr, $self:ident, $op:ident, $constr:ident) => {{
                 let old = pos;
-                pos += 8;
+                pos += 4;
                 let Some(bytes) = $self
                     .src
                     .get(old..pos)
@@ -195,7 +193,7 @@ impl<'a> BytecodeCompiler<'a> {
                     });
                 };
 
-                Instr::$op(u64::from_ne_bytes(bytes))
+                Instr::$op($constr(u32::from_ne_bytes(bytes)))
             }};
         }
         while bytecode.len() > pos {
@@ -208,7 +206,7 @@ impl<'a> BytecodeCompiler<'a> {
 
                 4 => {
                     let old = pos;
-                    pos += 8;
+                    pos += 4;
 
                     let Some(bytes) = self
                         .src
@@ -221,24 +219,24 @@ impl<'a> BytecodeCompiler<'a> {
                         });
                     };
 
-                    Instr::Push(u64::from_ne_bytes(bytes))
+                    Instr::Push(u32::from_ne_bytes(bytes))
                 }
 
                 5 => Instr::CmpVal,
                 6 => Instr::CmpObj,
 
-                7 => operand_op!(7, self, Jump),
-                8 => operand_op!(8, self, JumpIfGr),
-                9 => operand_op!(9, self, JumpIfEq),
-                10 => operand_op!(10, self, JumpIfLe),
+                7 => operand_op!(7, self, Jump, ProgramCounter),
+                8 => operand_op!(8, self, JumpIfGr, ProgramCounter),
+                9 => operand_op!(9, self, JumpIfEq, ProgramCounter),
+                10 => operand_op!(10, self, JumpIfLe, ProgramCounter),
 
-                11 => operand_op!(11, self, Call),
+                11 => operand_op!(11, self, Call, FnRef),
                 12 => Instr::Return,
 
                 13 => Instr::Dup,
 
-                14 => operand_op!(14, self, Load),
-                15 => operand_op!(15, self, Store),
+                14 => operand_op!(14, self, Load, LocalId),
+                15 => operand_op!(15, self, Store, LocalId),
                 16 => Instr::AllocLocal,
 
                 255 => Instr::End,
@@ -262,7 +260,7 @@ impl<'a> BytecodeCompiler<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::objects::FnRef;
+    use crate::{instruction::ProgramCounter, objects::FnRef};
 
     use super::*;
 
@@ -281,7 +279,7 @@ mod tests {
 
         let mut parser = BytecodeCompiler::new(&bytecode);
 
-        let (mut objs, instrs, fns) = parser.read_evm_bytecode().unwrap();
+        let (mut _objs, instrs, fns) = parser.read_evm_bytecode().unwrap();
         dbg!(instrs);
 
         // let first_obj = objs.map(0, |x| match x {
@@ -296,8 +294,8 @@ mod tests {
 
         let fndef = fns.get(FnRef(0)).unwrap();
 
-        assert_eq!(fndef.name(), "main");
+        assert_eq!(fndef.name().as_ref(), "main");
         assert_eq!(fndef.arity(), 1);
-        assert_eq!(fndef.jump_ip(), 23);
+        assert_eq!(fndef.jump_ip(), ProgramCounter(23));
     }
 }
