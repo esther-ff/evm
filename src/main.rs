@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 mod bytecode;
 mod call_stack;
 mod gc;

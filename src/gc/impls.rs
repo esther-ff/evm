@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
@@ -95,5 +96,11 @@ where
         for value in self.values() {
             value.trace(val);
         }
+    }
+}
+
+impl<'gc, T: ToHeap<'gc>> ToHeap<'gc> for RefCell<T> {
+    fn trace<V: Trace<'gc>>(&self, val: &mut V) {
+        self.borrow().trace(val);
     }
 }

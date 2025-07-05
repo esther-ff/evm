@@ -1,8 +1,11 @@
-#![warn(clippy::pedantic)]
+use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::RootType;
+
 use crate::bytecode::{BytecodeCompiler, BytecodeError};
-use crate::call_stack::{CallStack, Frame};
+use crate::call_stack::{CallStack, Frame, LocalId};
+use crate::gc::{Gc, Heap};
 use crate::instruction::{Instr, Instructions};
 use crate::objects::{FnRef, Functions, Objects, Value};
 use crate::stack::Stack;
@@ -12,23 +15,26 @@ const MAX_STACK_SIZE: usize = 64;
 
 pub type Operand = u32;
 pub type Result<T, E = VmRuntimeError> = core::result::Result<T, E>;
+type RootStack = Heap<RootType![Gc, RefCell<Stack<MAX_STACK_SIZE, Value<'__gc>>>]>;
 
-#[derive(Debug)]
 pub enum VmRuntimeError {
     StackTooLow,
     StackOverflow,
 
     VariableNotFound(u64),
     TooMuchLocalVariables,
-    LocalVariableMissing(usize),
+    LocalVariableMissing(LocalId),
 
-    MissingFn(u64),
+    MissingFn(FnRef),
     Bytecode(BytecodeError),
 }
 
 impl core::fmt::Display for VmRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use VmRuntimeError::*;
+        use VmRuntimeError::{
+            Bytecode, LocalVariableMissing, MissingFn, StackOverflow, StackTooLow,
+            TooMuchLocalVariables, VariableNotFound,
+        };
 
         match self {
             StackTooLow => write!(
@@ -43,9 +49,14 @@ impl core::fmt::Display for VmRuntimeError {
             ),
             LocalVariableMissing(idx) => write!(
                 f,
-                "attempted to access a local variable at index: #{idx} which was not found"
+                "attempted to access a local variable at index: #{} which was not found",
+                idx.0
             ),
-            MissingFn(idx) => write!(f, "this executable has no main function (at index {idx})"),
+            MissingFn(idx) => write!(
+                f,
+                "this executable has no main function (at index {})",
+                idx.0
+            ),
 
             Bytecode(err) => err.fmt(f),
         }
@@ -153,7 +164,7 @@ impl Variables {
 
 pub struct Vm {
     /// Main VM stack
-    stack: Stack<MAX_STACK_SIZE, Value>,
+    stack: RootStack,
 
     /// Stream of pre-compiled instructions
     instructions: Instructions,
@@ -180,7 +191,7 @@ impl Vm {
         let (objects, instructions, fns) = parser.read_evm_bytecode().unwrap();
 
         let mut vm = Self {
-            stack: Stack::new(),
+            stack: Heap::new(|period| Gc::new(period, RefCell::new(Stack::new()))),
             instructions,
             fns,
 
@@ -216,47 +227,50 @@ impl Vm {
         frame
     }
 
-    fn debug_report<A>(&self, opcode: A, show_stack: bool)
+    fn debug_report<A>(&self, _opcode: A, _show_stack: bool)
     where
         A: Into<Option<Instr>>,
     {
-        let op = opcode.into();
-        #[cfg(debug_assertions)]
-        println!(
-            "[vm] (instruction: {op:?}) | stack ptr: {} | instr ptr: {} | stack left: {} |",
-            self.stack.stack_pointer(),
-            self.instructions.ip().0,
-            self.stack.free()
-        );
-        println!(
-            "[vm] flags: eq: {}, gt: {}, le: {}",
-            self.cmp_flags.equal, self.cmp_flags.greater, self.cmp_flags.lesser
-        );
+        // let op = opcode.into();
+        // #[cfg(debug_assertions)]
+        // println!(
+        //     "[vm] (instruction: {op:?}) | stack ptr: {} | instr ptr: {} | stack left: {} |",
+        //     self.stack.stack_pointer(),
+        //     self.instructions.ip().0,
+        //     self.stack.free()
+        // );
+        // println!(
+        //     "[vm] flags: eq: {}, gt: {}, le: {}",
+        //     self.cmp_flags.equal, self.cmp_flags.greater, self.cmp_flags.lesser
+        // );
 
-        let mut pointer = String::from("[\n");
+        // let mut pointer = String::from("[\n");
 
-        for (ix, val) in self.stack.buffer().iter().enumerate() {
-            use std::fmt::Write;
-            write!(&mut pointer, "{val:>6?}").unwrap();
+        // for (ix, val) in self.stack.buffer().iter().enumerate() {
+        //     use std::fmt::Write;
+        //     write!(&mut pointer, "{val:>6?}").unwrap();
 
-            if ix == self.stack.stack_pointer() {
-                pointer.push_str(" <--- STACK POINTER\n");
-            } else {
-                pointer.push('\n');
-            }
-        }
+        //     if ix == self.stack.stack_pointer() {
+        //         pointer.push_str(" <--- STACK POINTER\n");
+        //     } else {
+        //         pointer.push('\n');
+        //     }
+        // }
 
-        pointer.push_str("]\n");
+        // pointer.push_str("]\n");
 
-        println!("call stack: {:?}", &self.call_stack);
+        // println!("call stack: {:?}", &self.call_stack);
 
-        if show_stack {
-            println!("stack after instruction: {pointer}");
-        }
+        // if show_stack {
+        //     println!("stack after instruction: {pointer}");
+        // }
     }
-
+    #[allow(clippy::too_many_lines)]
     fn interpret_one(&mut self) -> Result<bool, VmRuntimeError> {
-        use Instr::*;
+        use Instr::{
+            Add, AllocLocal, Call, CmpObj, CmpVal, Div, Dup, End, Jump, JumpIfEq, JumpIfGr,
+            JumpIfLe, Load, Mul, Push, Return, Store, Sub,
+        };
 
         let mut vm_continue = true;
         let Some(op) = self.instructions.next() else {
@@ -264,15 +278,53 @@ impl Vm {
         };
 
         match op {
-            Add => self.math(|x, y| x + y)?,
+            Add => self.stack.enter(|period, root| {
+                let mut stack = root.borrow_mut(period);
 
-            Sub => self.math(|x, y| x - y)?,
+                let lhs = stack.pop()?;
+                let rhs = stack.pop()?;
 
-            Mul => self.math(|x, y| x * y)?,
+                let val = Vm::math(|x, y| x + y, lhs, rhs);
 
-            Div => self.math(|x, y| x / y)?,
+                stack.push(val)
+            })?,
 
-            Push(item) => self.stack.push(Value::Number(item))?,
+            Sub => self.stack.enter(|period, root| {
+                let mut stack = root.borrow_mut(period);
+
+                let lhs = stack.pop()?;
+                let rhs = stack.pop()?;
+
+                let val = Vm::math(|x, y| x + y, lhs, rhs);
+
+                stack.push(val)
+            })?,
+
+            Mul => self.stack.enter(|period, root| {
+                let mut stack = root.borrow_mut(period);
+
+                let lhs = stack.pop()?;
+                let rhs = stack.pop()?;
+
+                let val = Vm::math(|x, y| x * y, lhs, rhs);
+
+                stack.push(val)
+            })?,
+
+            Div => self.stack.enter(|period, root| {
+                let mut stack = root.borrow_mut(period);
+
+                let lhs = stack.pop()?;
+                let rhs = stack.pop()?;
+
+                let val = Vm::math(|x, y| x / y, lhs, rhs);
+
+                stack.push(val)
+            })?,
+
+            Push(item) => self
+                .stack
+                .enter(|period, root| root.borrow_mut(period).push(Value::Number(item)))?,
 
             CmpVal => {
                 // let lhs = self.stack.pop()?;
@@ -321,35 +373,49 @@ impl Vm {
             }
 
             Load(local_id) => {
-                let Some(local) = self.current_frame().load_local(local_id, &self.stack) else {
-                    return Err(VmRuntimeError::LocalVariableMissing(0)); // todo
-                };
+                fn load(
+                    callstack: &mut CallStack,
+                    stack: &mut RootStack,
+                    local_id: LocalId,
+                ) -> Result<(), VmRuntimeError> {
+                    stack.enter(|period, root| {
+                        let first = root.borrow(period);
 
-                self.stack.push(local)?;
+                        let Some(val) = callstack
+                            .current_frame_mut_assert()
+                            .load_local(local_id, &first)
+                        else {
+                            return Err(VmRuntimeError::LocalVariableMissing(local_id));
+                        };
+
+                        root.borrow_mut(period).push(val).map_err(Into::into)
+                    })
+                }
+
+                load(&mut self.call_stack, &mut self.stack, local_id)?;
             }
 
             Store(local_id) => {
-                fn store<const N: usize>(
-                    stack: &mut Stack<N, Value>,
-                    frame: &mut Frame,
-                    new_value: Value,
-                    local_id: crate::call_stack::LocalId,
-                ) -> bool {
-                    frame.store_local(local_id, stack, new_value)
-                }
+                let frame = self.call_stack.current_frame_mut_assert();
 
-                let new_value = self.stack.pop()?;
+                self.stack.enter(|period, root| {
+                    let new_value = root
+                        .borrow_mut(period)
+                        .pop()
+                        .map_err(Into::<VmRuntimeError>::into)?;
 
-                if !store(
-                    &mut self.stack,
-                    self.call_stack.current_frame_mut().expect(
-                        "infallible: function `main` should have established a frame already",
-                    ),
-                    new_value,
-                    local_id,
-                ) {
-                    return Err(VmRuntimeError::LocalVariableMissing(0)); // todo
-                }
+                    let place = root.borrow_mut(period);
+
+                    let output = frame.store_local(local_id, place, new_value);
+
+                    if !output {
+                        return Err(VmRuntimeError::LocalVariableMissing(
+                            LocalId::LOCAL_ID_FN_MAIN,
+                        )); // todo
+                    }
+
+                    Ok(())
+                })?;
             }
 
             AllocLocal => {
@@ -360,18 +426,19 @@ impl Vm {
                     frame.allocate_local(stack)
                 }
 
-                if !alloc_local(
-                    &mut self.stack,
-                    self.call_stack.current_frame_mut().expect(
-                        "infallible: function `main` should have established a frame already",
-                    ),
-                ) {
-                    panic!("couldn't allocate a local variable!") // todo?
-                }
+                self.stack.enter(|period, root| {
+                    if !alloc_local(
+                        &mut root.borrow_mut(period),
+                        self.call_stack.current_frame_mut_assert(),
+                    ) {
+                        panic!("couldn't allocate a local variable!") // todo?
+                    }
+                });
             }
 
             Dup => {
-                self.stack.duplicate()?;
+                self.stack
+                    .enter(|period, root| root.borrow_mut(period).duplicate())?;
             }
 
             End => vm_continue = false,
@@ -389,31 +456,24 @@ impl Vm {
         Ok(())
     }
 
-    fn math<F>(&mut self, op: F) -> Result<(), VmRuntimeError>
+    fn math<'a, F>(op: F, lhs: Value<'a>, rhs: Value<'a>) -> Value<'a>
     where
         F: FnOnce(u32, u32) -> u32,
     {
-        let lhs = self.stack.pop()?;
-        let rhs = self.stack.pop()?;
-
-        let val = match (lhs, rhs) {
+        match (lhs, rhs) {
             (Value::Number(x), Value::Number(y)) => Value::Number(op(x, y)),
 
             _ => todo!(),
-        };
-
-        self.stack.push(val)?;
-
-        Ok(())
+        }
     }
 
-    fn call_instruction(&mut self, fn_idx: FnRef) -> Result<()> {
-        let Some(function) = self.fns.get(fn_idx) else {
-            let err = VmRuntimeError::MissingFn(fn_idx.0.into());
+    fn call_instruction(&mut self, fnref: FnRef) -> Result<()> {
+        let Some(function) = self.fns.get(fnref) else {
+            let err = VmRuntimeError::MissingFn(fnref);
             return Err(err);
         };
 
-        self.call_stack.new_frame(fn_idx, self.instructions.ip())?;
+        self.call_stack.new_frame(fnref, self.instructions.ip())?;
 
         self.instructions.jump(function.jump_ip());
         Ok(())

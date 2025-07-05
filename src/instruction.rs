@@ -39,7 +39,7 @@ impl ProgramCounter {
 #[derive(Debug)]
 pub(crate) struct Instructions {
     stream: Vec<Instr>,
-    instr_ptr: usize,
+    instr_ptr: u32,
 }
 
 impl Instructions {
@@ -51,13 +51,13 @@ impl Instructions {
     }
 
     pub(crate) fn next(&mut self) -> Option<Instr> {
-        let val = self.stream.get(self.instr_ptr).copied();
+        let val = self.stream.get(self.instr_ptr as usize).copied();
         self.instr_ptr += 1;
         val
     }
 
     pub(crate) fn jump(&mut self, new_ip: ProgramCounter) {
-        self.instr_ptr += new_ip.0 as usize
+        self.instr_ptr += new_ip.0;
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -65,6 +65,6 @@ impl Instructions {
     }
 
     pub fn ip(&self) -> ProgramCounter {
-        ProgramCounter(self.instr_ptr as u32)
+        ProgramCounter(self.instr_ptr)
     }
 }

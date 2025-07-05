@@ -1,12 +1,22 @@
+use crate::gc::{Gc, ToHeap};
 use crate::instruction::ProgramCounter;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Value {
-    Object(ObjRef),
+pub(crate) enum Value<'gc> {
+    Object(Gc<'gc, Object>),
     Number(u32),
     Nil,
     Function(FnRef),
+}
+
+impl<'gc> ToHeap<'gc> for Value<'gc> {
+    fn trace<V: crate::gc::Trace<'gc>>(&self, _val: &mut V) {
+        if let Value::Object(_obj) = self {
+            // todo
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
@@ -26,7 +36,7 @@ impl Functions {
     }
 
     pub fn insert(&mut self, f: Func) {
-        self.0.push(f)
+        self.0.push(f);
     }
 
     pub fn get(&self, fn_ref: FnRef) -> Option<&Func> {
@@ -65,12 +75,9 @@ impl Func {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ObjRef(u32);
-
-#[derive(Clone, Copy)]
-pub(crate) enum Object {
-    Todo,
+#[derive(Debug, Copy, Clone)]
+pub struct Object {
+    // todo!
 }
 
 pub(crate) struct Objects {

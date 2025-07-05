@@ -37,12 +37,12 @@ where
 
     pub fn enter<Mut, Ret>(&mut self, f: Mut) -> Ret
     where
-        Mut: for<'gc> FnOnce(&'gc MutPeriod<'gc>, &Root<'gc, R>) -> Ret,
+        Mut: for<'gc> FnOnce(&'gc MutPeriod<'gc>, &'gc Root<'gc, R>) -> Ret,
     {
         unsafe {
             let period: &'static MutPeriod<'_> = &*ptr::from_ref(self.context.to_mut_period());
-
-            f(period, &self.root)
+            let root: &'static Root<'static, R> = &*ptr::from_ref(&self.root);
+            f(period, root)
         }
     }
 

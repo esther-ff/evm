@@ -80,7 +80,7 @@ impl<'gc, T: 'gc> Gc<'gc, RefCell<T>> {
         self.try_borrow(period).unwrap()
     }
 
-    pub fn try_borrow(self, period: &'gc MutPeriod<'gc>) -> CellResult<T> {
+    pub fn try_borrow(self, period: &'gc MutPeriod<'gc>) -> CellResult<'gc, T> {
         let mutation = Gc::<'gc, RefCell<T>>::get_barrier(self, period);
 
         mutation.deref().try_borrow()
@@ -90,7 +90,7 @@ impl<'gc, T: 'gc> Gc<'gc, RefCell<T>> {
         self.try_borrow_mut(period).unwrap()
     }
 
-    pub fn try_borrow_mut(self, period: &'gc MutPeriod<'gc>) -> MutResult<T> {
+    pub fn try_borrow_mut(self, period: &'gc MutPeriod<'gc>) -> MutResult<'gc, T> {
         let mutation = Gc::<'gc, RefCell<T>>::get_barrier(self, period);
 
         mutation.deref().try_borrow_mut()

@@ -3,13 +3,12 @@ use crate::objects::{FnRef, Functions};
 use crate::{
     instruction::ProgramCounter,
     objects::Value,
-    stack::{self, Stack},
+    stack::{self, Stack, StackRef, StackRefMut},
 };
 
 const MAX_LOCAL_VARIABLES: usize = 512;
 const MAX_CALL_STACK_DEPTH: usize = size_of::<Value>() * 256;
 
-/// Identifier for a local variable
 /// inside a stack frame.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
 pub struct LocalVariable(u32);
@@ -19,11 +18,15 @@ impl LocalVariable {
         Self(addr)
     }
 
-    pub fn load<const N: usize>(self, stack: &Stack<N, Value>) -> Option<Value> {
+    pub fn load<'a, const N: usize>(self, stack: &Stack<N, Value<'a>>) -> Option<Value<'a>> {
         stack.buffer().get(self.0 as usize).copied()
     }
 
-    pub fn store<const N: usize>(self, stack: &mut Stack<N, Value>, value: Value) -> bool {
+    pub fn store<'a, const N: usize>(
+        self,
+        stack: &mut Stack<N, Value<'a>>,
+        value: Value<'a>,
+    ) -> bool {
         if let Some(old) = stack.buffer_mut().get_mut(self.0 as usize) {
             *old = value;
             return true;
@@ -35,6 +38,11 @@ impl LocalVariable {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LocalId(pub u32);
+
+impl LocalId {
+    /// Id for the `main` function.
+    pub const LOCAL_ID_FN_MAIN: Self = Self(0);
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Ord, Eq)]
 struct LocalVars {
@@ -87,26 +95,30 @@ impl Frame {
     }
 
     pub fn allocate_local<const N: usize>(&mut self, stack: &mut Stack<N, Value>) -> bool {
+        #[allow(clippy::cast_possible_truncation)]
         let local = LocalVariable::new(stack.stack_pointer() as u32);
         self.locals.push(local)
     }
 
-    pub fn load_local<const N: usize>(
+    pub fn load_local<'a, 'b, const N: usize>(
         &self,
         id: LocalId,
-        stack: &Stack<N, Value>,
-    ) -> Option<Value> {
-        self.locals.get(id).map(|var| var.load(stack)).flatten()
+        stack: &StackRef<'a, N>,
+    ) -> Option<Value<'b>>
+    where
+        'a: 'b,
+    {
+        self.locals.get(id).and_then(|var| var.load(&stack))
     }
 
-    pub fn store_local<const N: usize>(
+    pub fn store_local<'a, const N: usize>(
         &self,
         id: LocalId,
-        stack: &mut Stack<N, Value>,
-        value: Value,
+        mut stack: StackRefMut<'a, N>,
+        value: Value<'a>,
     ) -> bool {
         if let Some(local) = self.locals.get(id) {
-            return local.store(stack, value);
+            return local.store(&mut stack, value);
         }
 
         false
@@ -150,6 +162,18 @@ impl CallStack {
 
     pub fn current_frame_mut(&mut self) -> Option<&mut Frame> {
         self.frames.buffer_mut().last_mut()
+    }
+
+    pub fn current_frame_assert(&self) -> &Frame {
+        self.frames.buffer().last().unwrap_or_else(|| {
+            unreachable!("function `main` should have initialized atleast one call frame")
+        })
+    }
+
+    pub fn current_frame_mut_assert(&mut self) -> &mut Frame {
+        self.frames.buffer_mut().last_mut().unwrap_or_else(|| {
+            unreachable!("function `main` should have initialized atleast one call frame")
+        })
     }
 
     pub fn new_frame(&mut self, fnref: FnRef, ip: ProgramCounter) -> Result<(), stack::StackError> {

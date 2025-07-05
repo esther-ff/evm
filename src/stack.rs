@@ -1,9 +1,12 @@
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
 
+use crate::gc::ToHeap;
 use crate::objects::Value;
 use crate::vm::VmRuntimeError;
 
+pub type StackRef<'a, const N: usize> = core::cell::Ref<'a, Stack<N, Value<'a>>>;
+pub type StackRefMut<'a, const N: usize> = core::cell::RefMut<'a, Stack<N, Value<'a>>>;
 type Result<T, E = StackError> = core::result::Result<T, E>;
 
 pub enum StackError {
@@ -29,7 +32,7 @@ pub struct Stack<const SIZE: usize, T: Copy> {
 
 impl<const SIZE: usize, T: Debug + Copy> Debug for Stack<SIZE, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Stack: \n")?;
+        writeln!(f, "Stack: ")?;
         f.debug_list().entries(self.buffer().iter()).finish()
     }
 }
@@ -94,7 +97,7 @@ impl<const SIZE: usize, T: Copy> Stack<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize> Stack<SIZE, Value> {
+impl<const SIZE: usize> Stack<SIZE, Value<'_>> {
     /// Duplicate a value
     pub fn duplicate(&mut self) -> Result<()> {
         if self.pointer == SIZE {
@@ -103,5 +106,13 @@ impl<const SIZE: usize> Stack<SIZE, Value> {
 
         let val = unsafe { self.buf[self.pointer].assume_init() };
         self.push(val)
+    }
+}
+
+impl<'gc, const SIZE: usize, T: ToHeap<'gc> + Copy> ToHeap<'gc> for Stack<SIZE, T> {
+    fn trace<V: crate::gc::Trace<'gc>>(&self, val: &mut V) {
+        for item in self.buffer() {
+            item.trace(val);
+        }
     }
 }
