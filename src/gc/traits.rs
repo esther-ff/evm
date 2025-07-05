@@ -6,11 +6,13 @@ use super::gc::Gc;
 pub trait ToHeap<'gc> {
     const NEEDS_TO_BE_TRACED: bool = true;
 
-    fn trace<T: Trace<'gc>>(&self, _val: &mut T) {
+    fn trace<V: Trace<'gc>>(&self, val: &mut V) {
         assert!(
             !Self::NEEDS_TO_BE_TRACED,
             "the implementation of this trait is lacking a function to trace it's objects"
         );
+
+        let _ = val;
     }
 }
 

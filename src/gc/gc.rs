@@ -5,11 +5,13 @@ use super::write_barrier::Mutation;
 
 use core::borrow::Borrow;
 use core::cell::Cell;
+use core::cell::{Ref, RefMut};
 use core::convert::AsRef;
 use core::fmt::{Debug, Display};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ptr::NonNull;
+use std::cell::RefCell;
 
 /// A pointer to memory taken up by type `T`
 /// managed by the garbage collector.
@@ -67,6 +69,31 @@ impl<'gc, T: ?Sized + 'gc> Gc<'gc, T> {
         unsafe { period.barrier(ptr.get_gc_box()) };
 
         Mutation::from_ref(ptr.get_ref())
+    }
+}
+
+type MutResult<'gc, T, E = core::cell::BorrowMutError> = core::result::Result<RefMut<'gc, T>, E>;
+type CellResult<'gc, T, E = core::cell::BorrowError> = core::result::Result<Ref<'gc, T>, E>;
+
+impl<'gc, T: 'gc> Gc<'gc, RefCell<T>> {
+    pub fn borrow(self, period: &'gc MutPeriod<'gc>) -> Ref<'gc, T> {
+        self.try_borrow(period).unwrap()
+    }
+
+    pub fn try_borrow(self, period: &'gc MutPeriod<'gc>) -> CellResult<T> {
+        let mutation = Gc::<'gc, RefCell<T>>::get_barrier(self, period);
+
+        mutation.deref().try_borrow()
+    }
+
+    pub fn borrow_mut(self, period: &'gc MutPeriod<'gc>) -> RefMut<'gc, T> {
+        self.try_borrow_mut(period).unwrap()
+    }
+
+    pub fn try_borrow_mut(self, period: &'gc MutPeriod<'gc>) -> MutResult<T> {
+        let mutation = Gc::<'gc, RefCell<T>>::get_barrier(self, period);
+
+        mutation.deref().try_borrow_mut()
     }
 }
 
