@@ -27,6 +27,7 @@ impl FnRef {
     pub const MAIN_FN: FnRef = FnRef(0);
 }
 
+#[derive(Debug)]
 pub(crate) struct Functions(Vec<Func>);
 
 impl Functions {
@@ -43,6 +44,7 @@ impl Functions {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Func {
     jump_ip: ProgramCounter,
     name: Arc<str>,

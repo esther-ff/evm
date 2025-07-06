@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::RootType;
 
-use crate::bytecode::{BytecodeCompiler, BytecodeError};
+use crate::bytecode::{BytecodeError, Parser};
 use crate::call_stack::{CallStack, Frame, LocalId};
 use crate::gc::Heap;
 use crate::globals::Globals;
@@ -185,8 +185,8 @@ pub struct Vm {
 
 impl Vm {
     pub fn new(code: &[u8]) -> Result<Self> {
-        let mut parser = BytecodeCompiler::new(code);
-        let (objects, instructions, fns) = parser.read_evm_bytecode().unwrap();
+        let mut parser = Parser::new(code);
+        let (instructions, fns) = parser.compile_bytecode().unwrap();
 
         let mut vm = Self {
             stack: Heap::new_extra(|_period| Stack::new(), |_| Globals::new()),
@@ -200,7 +200,7 @@ impl Vm {
             },
 
             call_stack: CallStack::new(),
-            objects,
+            objects: Objects::new(),
         };
 
         vm.call_instruction(FnRef::MAIN_FN)?;
@@ -284,8 +284,8 @@ impl Vm {
     #[allow(clippy::too_many_lines)]
     fn interpret_one(&mut self) -> Result<bool, VmRuntimeError> {
         use Instr::{
-            Add, AllocLocal, Call, CmpObj, CmpVal, Div, Dup, End, Jump, JumpIfEq, JumpIfGr,
-            JumpIfLe, Load, Mul, Push, Return, Store, Sub,
+            Add, AllocLocal, Call, Cmp, ConstUint32, Div, Dup, End, Jump, JumpIfEq, JumpIfGr,
+            JumpIfLe, Load, Mul, Return, Store, Sub,
         };
 
         let mut vm_continue = true;
@@ -330,11 +330,11 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Push(item) => self
+            ConstUint32(item) => self
                 .stack
                 .enter_mut(|_, stack, _| stack.push(Value::Number(item)))?,
 
-            CmpVal => {
+            Cmp => {
                 // let lhs = self.stack.pop()?;
                 // let rhs = self.stack.pop()?;
 
@@ -344,10 +344,6 @@ impl Vm {
                 //     Ordering::Equal => self.cmp_flags.equal = true,
                 // }
                 todo!();
-            }
-
-            CmpObj => {
-                panic!("to be removed");
             }
 
             Jump(ip) => {

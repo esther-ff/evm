@@ -1,3 +1,4 @@
+use crate::bytecode::Buffer;
 use crate::call_stack::LocalId;
 use crate::objects::FnRef;
 use crate::vm::Operand;
@@ -8,15 +9,14 @@ pub(crate) enum Instr {
     Sub,
     Mul,
     Div,
-    Push(Operand),
+    ConstUint32(Operand),
     Call(FnRef),
     Return,
     JumpIfGr(ProgramCounter),
     JumpIfEq(ProgramCounter),
     JumpIfLe(ProgramCounter),
     Jump(ProgramCounter),
-    CmpVal,
-    CmpObj,
+    Cmp,
     Dup,
 
     Load(LocalId),
@@ -25,6 +25,52 @@ pub(crate) enum Instr {
     AllocLocal,
 
     End,
+}
+
+impl Instr {
+    pub fn from_buffer(buf: &mut Buffer<'_>) -> Option<Instr> {
+        use Instr::*;
+
+        match buf.next()? {
+            // Add
+            0 => Add,
+
+            1 => Sub,
+
+            3 => Mul,
+
+            4 => Div,
+
+            5 => ConstUint32(buf.next_u32()?),
+
+            6 => Call(buf.next_u32().map(FnRef)?),
+
+            7 => Return,
+
+            8 => Jump(buf.next_u32().map(ProgramCounter)?),
+
+            9 => JumpIfGr(buf.next_u32().map(ProgramCounter)?),
+
+            10 => JumpIfEq(buf.next_u32().map(ProgramCounter)?),
+
+            11 => JumpIfLe(buf.next_u32().map(ProgramCounter)?),
+
+            12 => Cmp,
+
+            13 => Dup,
+
+            14 => Load(buf.next_u32().map(LocalId)?),
+
+            15 => Store(buf.next_u32().map(LocalId)?),
+
+            16 => AllocLocal,
+
+            255 => End,
+
+            _ => return None,
+        }
+        .into()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

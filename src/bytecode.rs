@@ -1,28 +1,30 @@
 use super::instruction::{Instr, Instructions};
-use super::objects::{Func, Functions, Objects};
-use crate::call_stack::LocalId;
-use crate::instruction::ProgramCounter;
-
-use crate::objects::FnRef;
+use super::objects::{Func, Functions};
 use crate::vm::VmRuntimeError;
 
 use core::fmt::Display;
+use core::ops::ControlFlow;
+use std::str::Utf8Error;
 
+type EndResult = Result<(Instructions, Functions), BytecodeError>;
 type Result<T, E = BytecodeError> = core::result::Result<T, E>;
 
 const EVM_MARKER: &[u8] = b"evm :3";
-const FN_DECL: &[u8] = &[1, 1];
 
 #[non_exhaustive]
 #[derive(Debug)]
 pub(crate) enum BytecodeError {
-    Invalid,
+    InvalidHeader,
 
     FnParse { reason: &'static str, offset: usize },
 
     InvalidInstruction { offset: usize, instr: u8 },
 
     MissingOperand { offset: usize, instr: u8 },
+
+    InvalidSection,
+
+    InvalidUtf8 { bytes: Vec<u8>, inner: Utf8Error },
 }
 
 impl From<BytecodeError> for VmRuntimeError {
@@ -34,7 +36,7 @@ impl From<BytecodeError> for VmRuntimeError {
 impl Display for BytecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Invalid => write!(f, "something went wrong"),
+            Self::InvalidHeader => write!(f, "invalid header"),
             Self::FnParse { reason, offset } => write!(
                 f,
                 "error during parsing function\nreason: {reason}\nat offset {offset} in file"
@@ -47,255 +49,281 @@ impl Display for BytecodeError {
                 f,
                 "missing operands for instruction encountered at ({offset}) for instruction {instr}"
             ),
+
+            Self::InvalidSection => write!(f, "invalid section header detected by the parser"),
+
+            Self::InvalidUtf8 { bytes, inner } => write!(f, "bytes: {bytes:?}, error: {inner}"),
         }
     }
 }
 
-pub(crate) struct BytecodeCompiler<'a> {
-    src: &'a [u8],
+pub struct Buffer<'a> {
+    buf: &'a [u8],
     pos: usize,
 }
 
-impl<'a> BytecodeCompiler<'a> {
-    pub(crate) fn new(src: &'a [u8]) -> Self {
-        Self { src, pos: 0 }
+impl<'a> Buffer<'a> {
+    pub fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
     }
 
-    pub(crate) fn read_evm_bytecode(&mut self) -> Result<(Objects, Instructions, Functions)> {
-        let objs = Objects::new();
-        let mut instructions = Vec::new();
-        let mut fns = Functions::new();
+    pub fn peek(&self) -> Option<u8> {
+        self.buf.get(self.pos).copied()
+    }
 
-        if !self.validate_header() {
-            return Err(BytecodeError::Invalid);
-        } else {
-            self.pos += EVM_MARKER.len()
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub fn eof(&self) -> bool {
+        self.pos >= self.buf.len()
+    }
+
+    pub fn advance(&mut self, len: usize) {
+        self.pos += len;
+    }
+
+    pub fn check_for(&self, pat: &[u8]) -> bool {
+        let len = pat.len();
+        let Some(slice) = self.buf.get(self.pos..self.pos + len) else {
+            return false;
+        };
+
+        slice == pat
+    }
+
+    pub fn next(&mut self) -> Option<u8> {
+        let val = self.buf.get(self.pos).copied();
+        self.pos += 1;
+        val
+    }
+
+    pub fn next2(&mut self) -> Option<[u8; 2]> {
+        let val = self
+            .buf
+            .get(self.pos..self.pos + 2)
+            .map(TryInto::try_into)
+            .and_then(Result::ok);
+
+        self.pos += 2;
+        val
+    }
+
+    pub fn next_u32(&mut self) -> Option<u32> {
+        let val = self
+            .buf
+            .get(self.pos..self.pos + 4)
+            .map(TryInto::try_into)
+            .and_then(Result::ok)
+            .inspect(|x| {
+                dbg!(x);
+            })
+            .map(u32::from_ne_bytes);
+
+        self.pos += 4;
+        val
+    }
+
+    pub fn next_pair_u8_u32(&mut self) -> Option<(u8, u32)> {
+        let byte = self.next();
+        let next = self.next_u32();
+
+        byte.zip(next)
+    }
+
+    pub fn sub_buffer<'b>(&'b mut self, end: usize) -> Option<Buffer<'b>>
+    where
+        'a: 'b,
+    {
+        if self.pos + end >= self.buf.len() {
+            return None;
         }
 
-        if let Some(arr) = self.src.get(self.pos..self.pos + 2) {
-            self.pos += 2;
+        let old_pos = self.pos;
+        self.pos += end;
 
-            match arr {
-                FN_DECL => self.parse_fn_decl(&mut instructions, &mut fns)?,
+        Some(Buffer::new(&self.buf[old_pos..self.pos]))
+    }
+}
 
-                _ => todo!(),
+pub(crate) struct Parser<'a> {
+    src: Buffer<'a>,
+    instructions: Vec<Instr>,
+    functions: Functions,
+}
+
+enum Section {
+    Functions,
+    Instances,
+    Constants,
+}
+
+impl<'a> Parser<'a> {
+    pub(crate) fn new(src: &'a [u8]) -> Self {
+        Self {
+            src: Buffer { buf: src, pos: 0 },
+            instructions: Vec::new(),
+            functions: Functions::new(),
+        }
+    }
+
+    pub fn compile_bytecode(mut self) -> EndResult {
+        if self.validate_header() {
+            self.src.advance(EVM_MARKER.len());
+        } else {
+            return Err(BytecodeError::InvalidHeader);
+        }
+
+        loop {
+            if let ControlFlow::Break(result) = self.read_evm_bytecode_section() {
+                return result
+                    .map(|()| (Instructions::from_vec(self.instructions), self.functions));
             }
         }
+    }
 
-        Ok((objs, Instructions::from_vec(instructions), fns))
+    fn read_evm_bytecode_section(&mut self) -> ControlFlow<Result<()>> {
+        let Some(section) = self.determine_section() else {
+            let err = Err(BytecodeError::InvalidSection);
+            return ControlFlow::Break(err);
+        };
+
+        let ret = match section {
+            Section::Functions => {
+                Self::parse_fn_decl(&mut self.src, &mut self.instructions, &mut self.functions)
+            }
+
+            Section::Constants => todo!(),
+
+            Section::Instances => todo!(),
+        };
+
+        if ret.is_err() {
+            return ControlFlow::Break(ret);
+        } else if self.src.eof() {
+            return ControlFlow::Break(Ok(()));
+        }
+
+        ControlFlow::Continue(())
     }
 
     fn validate_header(&self) -> bool {
-        debug_assert!(self.pos == 0);
+        debug_assert!(self.src.pos() == 0);
 
-        self.src
-            .get(self.pos..6)
-            .is_some_and(|arr| arr == EVM_MARKER)
+        self.src.check_for(EVM_MARKER)
     }
 
-    fn parse_fn_decl(&mut self, instrs: &mut Vec<Instr>, fns: &mut Functions) -> Result<()> {
-        let mut fn_name_ix_end = self.pos;
+    fn determine_section(&mut self) -> Option<Section> {
+        const FN_DECL: [u8; 2] = [1, 1];
+        const CONST_DECL: [u8; 2] = [2, 2];
+        const INSTANCE_DECL: [u8; 2] = [3, 3];
 
-        for byte in &self.src[self.pos..] {
-            if *byte == b'\0' {
-                break;
-            }
+        match self.src.next2()? {
+            FN_DECL => Section::Functions,
+            CONST_DECL => Section::Constants,
+            INSTANCE_DECL => Section::Instances,
 
-            fn_name_ix_end += 1
+            _ => return None,
         }
-
-        let Some(fn_name) = core::str::from_utf8(&self.src[self.pos..fn_name_ix_end])
-            .ok()
-            .map(|x| x.to_string())
-        else {
-            return Err(BytecodeError::FnParse {
-                reason: "invalid utf-8 in function name",
-                offset: fn_name_ix_end,
-            });
-        };
-
-        self.pos = fn_name_ix_end;
-
-        let Some(_index) = self
-            .src
-            .get(self.pos..self.pos + 8)
-            .and_then(|slice| TryInto::try_into(slice).ok())
-            .map(u64::from_ne_bytes)
-        else {
-            return Err(BytecodeError::FnParse {
-                reason: "invalid index (lacking bytes)",
-                offset: self.pos + 8,
-            });
-        };
-
-        self.pos += 8;
-
-        let Some(arity) = self
-            .src
-            .get(self.pos + 1..self.pos + 3)
-            .and_then(|slice| TryInto::try_into(slice).ok())
-            .map(u16::from_ne_bytes)
-        else {
-            return Err(BytecodeError::FnParse {
-                reason: "invalid arity (lacking bytes)",
-                offset: self.pos + 2,
-            });
-        };
-
-        self.pos += 2;
-        let jump_up = self.pos + 1;
-
-        let (fn_start, mut fn_end) = (self.pos + 1, 0);
-        let fn_def = Func::new(jump_up as u32, fn_name, arity);
-        fns.insert(fn_def);
-
-        for byte in &self.src[self.pos..] {
-            self.pos += 1;
-            if *byte == 255 {
-                let Some(arr) = self.src.get(self.pos - 1..self.pos + 3) else {
-                    return Err(BytecodeError::FnParse {
-                        reason: "end of function, with not enough ending bytes",
-                        offset: self.pos,
-                    });
-                };
-
-                if arr == [255, 254, 255, 254] {
-                    fn_end = self.pos - 1;
-                    self.pos += 4;
-
-                    break;
-                }
-
-                continue;
-            }
-        }
-
-        // dbg!(self.src[fn_start]);
-
-        self.compile_bytecode(&self.src[fn_start..fn_end], instrs)
+        .into()
     }
 
-    fn compile_bytecode(&mut self, bytecode: &[u8], instrs: &mut Vec<Instr>) -> Result<()> {
-        dbg!(bytecode);
-        let mut pos = 0;
-        macro_rules! operand_op {
-            ($num:expr, $self:ident, $op:ident, $constr:ident) => {{
-                let old = pos;
-                pos += 4;
-                let Some(bytes) = $self
-                    .src
-                    .get(old..pos)
-                    .map(|x| TryInto::try_into(x).unwrap())
-                else {
-                    return Err(BytecodeError::MissingOperand {
-                        offset: pos + $self.pos,
-                        instr: $num,
-                    });
-                };
+    fn parse_fn_decl(
+        buffer: &mut Buffer<'_>,
+        instrs: &mut Vec<Instr>,
+        fns: &mut Functions,
+    ) -> Result<()> {
+        let pos = buffer.pos() + 4;
+        dbg!(&buffer.buf[buffer.pos()..]);
+        let Some((mut bytecode, ip)) = buffer.next_u32().and_then(|offset| {
+            buffer
+                .sub_buffer(dbg!(offset) as usize)
+                .zip(Some(offset - 1))
+        }) else {
+            todo!("length error");
+        };
 
-                Instr::$op($constr(u32::from_ne_bytes(bytes)))
-            }};
+        compile_fn_bytecode(&mut bytecode, instrs, pos)?;
+
+        let Some(name_buf) = buffer
+            .next_u32()
+            .and_then(|offset| buffer.sub_buffer(offset as usize))
+        else {
+            todo!("length error");
+        };
+
+        let name = core::str::from_utf8(name_buf.buf)
+            .map(ToString::to_string)
+            .map_err(|err| BytecodeError::InvalidUtf8 {
+                bytes: name_buf.buf.to_vec(),
+                inner: err,
+            })?;
+
+        let Some(arity) = buffer.next2().map(u16::from_ne_bytes) else {
+            todo!("length error");
+        };
+
+        dbg!(&buffer.buf[buffer.pos()..]);
+
+        let Some(metadata_len) = buffer.next_u32().map(|var| var as usize) else {
+            todo!("length error");
+        };
+
+        let mut _metadata = None;
+
+        if let Some(ref mut metadata_buf) = buffer.sub_buffer(metadata_len) {
+            _metadata = process_metadata(metadata_buf)?.into();
+        } else if metadata_len != 0 {
+            todo!("length error");
         }
-        while bytecode.len() > pos {
-            let val = match bytecode[pos] {
-                0 => Instr::Add,
-                1 => Instr::Sub,
-                2 => Instr::Mul,
 
-                3 => Instr::Div,
-
-                4 => {
-                    let old = pos;
-                    pos += 4;
-
-                    let Some(bytes) = self
-                        .src
-                        .get(old..pos)
-                        .map(|x| TryInto::try_into(x).unwrap())
-                    else {
-                        return Err(BytecodeError::MissingOperand {
-                            offset: pos + self.pos,
-                            instr: 4,
-                        });
-                    };
-
-                    Instr::Push(u32::from_ne_bytes(bytes))
-                }
-
-                5 => Instr::CmpVal,
-                6 => Instr::CmpObj,
-
-                7 => operand_op!(7, self, Jump, ProgramCounter),
-                8 => operand_op!(8, self, JumpIfGr, ProgramCounter),
-                9 => operand_op!(9, self, JumpIfEq, ProgramCounter),
-                10 => operand_op!(10, self, JumpIfLe, ProgramCounter),
-
-                11 => operand_op!(11, self, Call, FnRef),
-                12 => Instr::Return,
-
-                13 => Instr::Dup,
-
-                14 => operand_op!(14, self, Load, LocalId),
-                15 => operand_op!(15, self, Store, LocalId),
-                16 => Instr::AllocLocal,
-
-                255 => Instr::End,
-
-                any => {
-                    return Err(BytecodeError::InvalidInstruction {
-                        offset: pos + self.pos,
-                        instr: any,
-                    });
-                }
-            };
-
-            pos += 1;
-
-            instrs.push(val);
-        }
+        let decl = Func::new(ip, name, arity);
+        fns.insert(decl);
 
         Ok(())
     }
 }
 
+fn compile_fn_bytecode(
+    bytecode: &mut Buffer<'_>,
+    instrs: &mut Vec<Instr>,
+    original_pos: usize,
+) -> Result<()> {
+    while !bytecode.eof() {
+        let Some(instr) = Instr::from_buffer(bytecode) else {
+            return Err(BytecodeError::InvalidInstruction {
+                offset: bytecode.pos() + original_pos,
+                instr: bytecode.peek().unwrap(),
+            });
+        };
+
+        instrs.push(instr);
+    }
+
+    Ok(())
+}
+
+fn process_metadata(_buf: &mut Buffer<'_>) -> Result<()> {
+    todo!("process metadata");
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{instruction::ProgramCounter, objects::FnRef};
-
-    use super::*;
+    use crate::{bytecode::Parser, instruction::ProgramCounter, objects::FnRef};
 
     #[test]
     fn fn_decl() {
-        let mut bytecode = Vec::new();
-        bytecode.extend_from_slice(b"evm :3"); // header
-        bytecode.extend_from_slice(&[1, 1]); // fn decl marker
-        bytecode.extend_from_slice(b"main\0"); // name with nul byte
-        bytecode.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // index
-        bytecode.extend_from_slice(&[1, 0]); // arity
-        bytecode.extend_from_slice(&[255]); // end
-        bytecode.extend_from_slice(&[255, 254, 255, 254]); // end of function decl
+        let bytecode = [
+            101, 118, 109, 32, 58, 51, 1, 1, 1, 0, 0, 0, 255, 4, 0, 0, 0, 109, 97, 105, 110, 0, 0,
+            0, 0, 0, 0,
+        ];
 
         dbg!(&bytecode);
 
-        let mut parser = BytecodeCompiler::new(&bytecode);
+        let mut parser = Parser::new(&bytecode);
 
-        let (mut _objs, instrs, fns) = parser.read_evm_bytecode().unwrap();
-        dbg!(instrs);
+        let sections = parser.compile_bytecode().unwrap();
 
-        // let first_obj = objs.map(0, |x| match x {
-        //     RtObjectInner::Fn(fndef) => {
-        //         assert_eq!(fndef.name(), "main");
-        //         assert_eq!(fndef.arity(), 1);
-        //         assert_eq!(fndef.jump_ip(), 23);
-        //     }
-
-        //     _ => panic!("invalid type, not function"),
-        // });
-
-        let fndef = fns.get(FnRef(0)).unwrap();
-
-        assert_eq!(fndef.name().as_ref(), "main");
-        assert_eq!(fndef.arity(), 1);
-        assert_eq!(fndef.jump_ip(), ProgramCounter(23));
+        dbg!(sections);
     }
 }
