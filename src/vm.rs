@@ -185,7 +185,7 @@ pub struct Vm {
 
 impl Vm {
     pub fn new(code: &[u8]) -> Result<Self> {
-        let mut parser = Parser::new(code);
+        let parser = Parser::new(code);
         let (instructions, fns) = parser.compile_bytecode().unwrap();
 
         let mut vm = Self {

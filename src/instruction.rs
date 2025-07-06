@@ -3,7 +3,7 @@ use crate::call_stack::LocalId;
 use crate::objects::FnRef;
 use crate::vm::Operand;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Instr {
     Add,
     Sub,
@@ -112,5 +112,9 @@ impl Instructions {
 
     pub fn ip(&self) -> ProgramCounter {
         ProgramCounter(self.instr_ptr)
+    }
+
+    pub fn buf(&self) -> &[Instr] {
+        &self.stream
     }
 }

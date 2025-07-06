@@ -60,11 +60,17 @@ impl Display for BytecodeError {
 pub struct Buffer<'a> {
     buf: &'a [u8],
     pos: usize,
+
+    sub_buffer_pos: usize,
 }
 
 impl<'a> Buffer<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
+        Self {
+            buf,
+            pos: 0,
+            sub_buffer_pos: 0,
+        }
     }
 
     pub fn peek(&self) -> Option<u8> {
@@ -115,9 +121,6 @@ impl<'a> Buffer<'a> {
             .get(self.pos..self.pos + 4)
             .map(TryInto::try_into)
             .and_then(Result::ok)
-            .inspect(|x| {
-                dbg!(x);
-            })
             .map(u32::from_ne_bytes);
 
         self.pos += 4;
@@ -142,7 +145,15 @@ impl<'a> Buffer<'a> {
         let old_pos = self.pos;
         self.pos += end;
 
-        Some(Buffer::new(&self.buf[old_pos..self.pos]))
+        Some(Buffer {
+            buf: &self.buf[old_pos..self.pos],
+            pos: 0,
+            sub_buffer_pos: self.pos,
+        })
+    }
+
+    pub fn offset(&self) -> usize {
+        self.sub_buffer_pos
     }
 }
 
@@ -150,6 +161,8 @@ pub(crate) struct Parser<'a> {
     src: Buffer<'a>,
     instructions: Vec<Instr>,
     functions: Functions,
+
+    earlier_ip: u32,
 }
 
 enum Section {
@@ -161,9 +174,15 @@ enum Section {
 impl<'a> Parser<'a> {
     pub(crate) fn new(src: &'a [u8]) -> Self {
         Self {
-            src: Buffer { buf: src, pos: 0 },
+            src: Buffer {
+                buf: src,
+                pos: 0,
+                sub_buffer_pos: 0,
+            },
             instructions: Vec::new(),
             functions: Functions::new(),
+
+            earlier_ip: 0,
         }
     }
 
@@ -189,9 +208,12 @@ impl<'a> Parser<'a> {
         };
 
         let ret = match section {
-            Section::Functions => {
-                Self::parse_fn_decl(&mut self.src, &mut self.instructions, &mut self.functions)
-            }
+            Section::Functions => Self::parse_fn_decl(
+                &mut self.src,
+                &mut self.instructions,
+                &mut self.functions,
+                &mut self.earlier_ip,
+            ),
 
             Section::Constants => todo!(),
 
@@ -232,18 +254,18 @@ impl<'a> Parser<'a> {
         buffer: &mut Buffer<'_>,
         instrs: &mut Vec<Instr>,
         fns: &mut Functions,
+        previous_ip: &mut u32,
     ) -> Result<()> {
         let pos = buffer.pos() + 4;
-        dbg!(&buffer.buf[buffer.pos()..]);
-        let Some((mut bytecode, ip)) = buffer.next_u32().and_then(|offset| {
-            buffer
-                .sub_buffer(dbg!(offset) as usize)
-                .zip(Some(offset - 1))
-        }) else {
+
+        let Some((mut bytecode, ip)) = buffer
+            .next_u32()
+            .and_then(|offset| buffer.sub_buffer(offset as usize).zip(Some(*previous_ip)))
+        else {
             todo!("length error");
         };
 
-        compile_fn_bytecode(&mut bytecode, instrs, pos)?;
+        compile_fn_bytecode(&mut bytecode, instrs, pos, previous_ip)?;
 
         let Some(name_buf) = buffer
             .next_u32()
@@ -263,15 +285,15 @@ impl<'a> Parser<'a> {
             todo!("length error");
         };
 
-        dbg!(&buffer.buf[buffer.pos()..]);
-
         let Some(metadata_len) = buffer.next_u32().map(|var| var as usize) else {
             todo!("length error");
         };
 
         let mut _metadata = None;
 
-        if let Some(ref mut metadata_buf) = buffer.sub_buffer(metadata_len) {
+        if let Some(ref mut metadata_buf) = buffer.sub_buffer(metadata_len)
+            && !metadata_buf.buf.is_empty()
+        {
             _metadata = process_metadata(metadata_buf)?.into();
         } else if metadata_len != 0 {
             todo!("length error");
@@ -288,6 +310,7 @@ fn compile_fn_bytecode(
     bytecode: &mut Buffer<'_>,
     instrs: &mut Vec<Instr>,
     original_pos: usize,
+    previous: &mut u32,
 ) -> Result<()> {
     while !bytecode.eof() {
         let Some(instr) = Instr::from_buffer(bytecode) else {
@@ -297,8 +320,12 @@ fn compile_fn_bytecode(
             });
         };
 
+        *previous += 1;
+
         instrs.push(instr);
     }
+
+    *previous += 1;
 
     Ok(())
 }
@@ -309,21 +336,86 @@ fn process_metadata(_buf: &mut Buffer<'_>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{bytecode::Parser, instruction::ProgramCounter, objects::FnRef};
+    use crate::{
+        bytecode::{Buffer, Parser},
+        instruction::Instr,
+        objects::FnRef,
+    };
+
+    fn create_fn_bytecode(dest: &mut Vec<u8>, name: &str, instructions: &[u8], arity: u16) {
+        // assumes the header is there
+        dest.extend_from_slice(&[1, 1]);
+
+        #[allow(clippy::cast_possible_truncation)]
+        dest.extend_from_slice(&u32::to_ne_bytes(instructions.len() as u32));
+        dest.extend_from_slice(instructions);
+
+        #[allow(clippy::cast_possible_truncation)]
+        dest.extend_from_slice(&u32::to_ne_bytes(name.len() as u32));
+        dest.extend_from_slice(name.as_bytes());
+        dest.extend_from_slice(&u16::to_ne_bytes(arity));
+        dest.extend_from_slice(&[0, 0, 0, 0]); // no metadata
+    }
+
+    fn gen_instructions(bytes: &[u8]) -> Vec<Instr> {
+        let mut vec = Vec::new();
+        let mut buf = Buffer::new(bytes);
+
+        while !buf.eof() {
+            let Some(instr) = Instr::from_buffer(&mut buf) else {
+                panic!("invalid instruction in test")
+            };
+
+            vec.push(instr);
+        }
+
+        vec
+    }
 
     #[test]
-    fn fn_decl() {
-        let bytecode = [
-            101, 118, 109, 32, 58, 51, 1, 1, 1, 0, 0, 0, 255, 4, 0, 0, 0, 109, 97, 105, 110, 0, 0,
-            0, 0, 0, 0,
+    fn fn_decls() {
+        let mut bc = vec![101, 118, 109, 32, 58, 51];
+        #[rustfmt::skip]
+        let instructions = &[
+           5, 0, 0, 0, 1,
+           5, 0, 1, 1, 0,
+           0,
+           5, 1, 1, 1, 1,
+           12,
+           11, 0, 0, 0, 0,
+           7,
         ];
 
-        dbg!(&bytecode);
+        create_fn_bytecode(&mut bc, "vie", instructions, 16);
+        create_fn_bytecode(&mut bc, "mort", instructions, 12);
 
-        let mut parser = Parser::new(&bytecode);
+        let parser = Parser::new(&bc);
+        let (instr, fns) = parser.compile_bytecode().unwrap();
 
-        let sections = parser.compile_bytecode().unwrap();
+        let first_fn = fns.get(FnRef(0)).unwrap();
+        let second_fn = fns.get(FnRef(1)).unwrap();
+        let cmp = gen_instructions(instructions);
 
-        dbg!(sections);
+        // first instruction set
+        assert_eq!(
+            cmp.as_slice(),
+            &instr.buf()[..second_fn.jump_ip().0 as usize - 1],
+            "instructions were not equal"
+        );
+
+        // second instruction set
+        assert_eq!(
+            cmp.as_slice(),
+            &instr.buf()[second_fn.jump_ip().0 as usize - 1..],
+            "instructions were not equal"
+        );
+
+        // names
+        assert_eq!(first_fn.name().as_ref(), "vie", "name wasn't equal");
+        assert_eq!(second_fn.name().as_ref(), "mort", "name wasn't equal");
+
+        // arity
+        assert_eq!(first_fn.arity(), 16, "arity wasn't equal");
+        assert_eq!(second_fn.arity(), 12, "arity wasn't equal");
     }
 }
