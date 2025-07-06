@@ -3,7 +3,7 @@ use crate::objects::{FnRef, Functions};
 use crate::{
     instruction::ProgramCounter,
     objects::Value,
-    stack::{self, Stack, StackRef, StackRefMut},
+    stack::{self, Stack},
 };
 
 const MAX_LOCAL_VARIABLES: usize = 512;

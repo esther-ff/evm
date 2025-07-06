@@ -5,6 +5,7 @@ use crate::RootType;
 use crate::bytecode::{BytecodeCompiler, BytecodeError};
 use crate::call_stack::{CallStack, Frame, LocalId};
 use crate::gc::Heap;
+use crate::globals::Globals;
 use crate::instruction::{Instr, Instructions};
 use crate::objects::{FnRef, Functions, Objects, Value};
 use crate::stack::Stack;
@@ -14,7 +15,8 @@ const MAX_STACK_SIZE: usize = 64;
 
 pub type Operand = u32;
 pub type Result<T, E = VmRuntimeError> = core::result::Result<T, E>;
-type RootStack = Heap<RootType![Gc, Stack<MAX_STACK_SIZE, Value<'__gc>>]>;
+type RootStack =
+    Heap<RootType![Gc, Stack<MAX_STACK_SIZE, Value<'__gc>>], RootType![Gc, Globals<'__gc>]>;
 
 pub enum VmRuntimeError {
     StackTooLow,
@@ -171,9 +173,6 @@ pub struct Vm {
     /// Flags
     cmp_flags: VmFlags,
 
-    /// Global variables
-    variables: Variables,
-
     /// Functions
     fns: Functions,
 
@@ -190,7 +189,7 @@ impl Vm {
         let (objects, instructions, fns) = parser.read_evm_bytecode().unwrap();
 
         let mut vm = Self {
-            stack: Heap::new(|_period| Stack::new()),
+            stack: Heap::new_extra(|_period| Stack::new(), |_| Globals::new()),
             instructions,
             fns,
 
@@ -200,7 +199,6 @@ impl Vm {
                 lesser: false,
             },
 
-            variables: Variables::new(vec![Variable::test_variable()]),
             call_stack: CallStack::new(),
             objects,
         };
@@ -233,7 +231,7 @@ impl Vm {
     {
         let (stack_ptr, free) = self
             .stack
-            .enter(|_, stack| (stack.stack_pointer(), stack.free()));
+            .enter(|_, stack, _| (stack.stack_pointer(), stack.free()));
 
         match opcode.into() {
             None => {
@@ -261,7 +259,7 @@ impl Vm {
 
         let mut pointer = String::from("[\n");
 
-        self.stack.enter(|_, stack| {
+        self.stack.enter(|_, stack, _| {
             for (ix, val) in stack.buffer().iter().enumerate() {
                 use std::fmt::Write;
                 write!(&mut pointer, "{val:>6?}").unwrap();
@@ -282,6 +280,7 @@ impl Vm {
             println!("stack after instruction: {pointer}");
         }
     }
+
     #[allow(clippy::too_many_lines)]
     fn interpret_one(&mut self) -> Result<bool, VmRuntimeError> {
         use Instr::{
@@ -295,7 +294,7 @@ impl Vm {
         };
 
         match op {
-            Add => self.stack.enter_mut(|_period, stack| {
+            Add => self.stack.enter_mut(|_, stack, _| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -304,7 +303,7 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Sub => self.stack.enter_mut(|_period, stack| {
+            Sub => self.stack.enter_mut(|_, stack, _| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -313,7 +312,7 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Mul => self.stack.enter_mut(|_period, stack| {
+            Mul => self.stack.enter_mut(|_, stack, _| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -322,7 +321,7 @@ impl Vm {
                 stack.push(val)
             })?,
 
-            Div => self.stack.enter_mut(|_period, stack| {
+            Div => self.stack.enter_mut(|_, stack, _| {
                 let lhs = stack.pop()?;
                 let rhs = stack.pop()?;
 
@@ -333,7 +332,7 @@ impl Vm {
 
             Push(item) => self
                 .stack
-                .enter_mut(|_, stack| stack.push(Value::Number(item)))?,
+                .enter_mut(|_, stack, _| stack.push(Value::Number(item)))?,
 
             CmpVal => {
                 // let lhs = self.stack.pop()?;
@@ -387,7 +386,7 @@ impl Vm {
                     stack: &mut RootStack,
                     local_id: LocalId,
                 ) -> Result<(), VmRuntimeError> {
-                    stack.enter_mut(|_period, stack| {
+                    stack.enter_mut(|_, stack, _| {
                         if let Some(val) = callstack
                             .current_frame_mut_assert()
                             .load_local(local_id, stack)
@@ -405,7 +404,7 @@ impl Vm {
             Store(local_id) => {
                 let frame = self.call_stack.current_frame_mut_assert();
 
-                self.stack.enter_mut(|_, stack| {
+                self.stack.enter_mut(|_, stack, _| {
                     let new_value = stack.pop().map_err(Into::<VmRuntimeError>::into)?;
 
                     let output = frame.store_local(local_id, stack, new_value);
@@ -428,7 +427,7 @@ impl Vm {
                     frame.allocate_local(stack)
                 }
 
-                self.stack.enter_mut(|_period, stack| {
+                self.stack.enter_mut(|_, stack, _| {
                     if !alloc_local(stack, self.call_stack.current_frame_mut_assert()) {
                         todo!("couldn't allocate a local variable!") // todo?
                     }
@@ -436,7 +435,7 @@ impl Vm {
             }
 
             Dup => {
-                self.stack.enter_mut(|_period, stack| stack.duplicate())?;
+                self.stack.enter_mut(|_, stack, _| stack.duplicate())?;
             }
 
             End => vm_continue = false,

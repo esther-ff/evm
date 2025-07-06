@@ -1,6 +1,5 @@
 use crate::gc::{Gc, ToHeap};
 use crate::instruction::ProgramCounter;
-use std::cell::RefCell;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
