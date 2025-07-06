@@ -31,3 +31,10 @@ pub trait Trace<'gc> {
         }
     }
 }
+
+/// Trait for any type that can be used as an additional root
+pub trait ExtraRoot<'gc>: ToHeap<'gc> {
+    fn trace<V: Trace<'gc>>(&self, t: &mut V) {
+        <Self as ToHeap<'gc>>::trace(self, t);
+    }
+}
