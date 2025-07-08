@@ -1,7 +1,4 @@
-use std::collections::HashMap;
-
 use crate::RootType;
-
 use crate::bytecode::{BytecodeError, Parser};
 use crate::call_stack::{CallStack, Frame, LocalId};
 use crate::gc::Heap;
@@ -18,6 +15,7 @@ pub type Result<T, E = VmRuntimeError> = core::result::Result<T, E>;
 type RootStack =
     Heap<RootType![Gc, Stack<MAX_STACK_SIZE, Value<'__gc>>], RootType![Gc, Globals<'__gc>]>;
 
+#[derive(Debug)]
 pub enum VmRuntimeError {
     StackTooLow,
     StackOverflow,
@@ -90,81 +88,12 @@ impl VmFlags {
     }
 }
 
-struct Variable {
-    content: Box<[u8]>,
-    var_size: usize,
-}
-
-impl Variable {
-    fn test_variable() -> Self {
-        Self {
-            content: Box::new([255, 255, 255, 255]),
-            var_size: 4,
-        }
-    }
-
-    fn new(val: &[u8]) -> Self {
-        Self {
-            content: val.to_vec().into_boxed_slice(),
-            var_size: val.len(),
-        }
-    }
-
-    fn write_to(&mut self, bytes: &[u8]) {
-        self.content.copy_from_slice(bytes);
-    }
-}
-
-struct Variables {
-    map: HashMap<u64, Variable>,
-    size: usize,
-}
-
-impl Variables {
-    fn new<A>(extra: A) -> Self
-    where
-        A: Into<Option<Vec<Variable>>>,
-    {
-        Self {
-            map: match extra.into() {
-                None => HashMap::with_capacity(64),
-                Some(vec) => vec
-                    .into_iter()
-                    .enumerate()
-                    .map(|(key, value)| (key as u64, value))
-                    .collect::<HashMap<u64, Variable>>(),
-            },
-            size: 0,
-        }
-    }
-
-    fn push(&mut self, id: u64, var: Variable) {
-        self.map.insert(id, var);
-    }
-
-    fn is_here(&self, id: u64) -> bool {
-        self.map.contains_key(&id)
-    }
-
-    fn get(&self, id: u64) -> Result<&Variable> {
-        if let Some(v) = self.map.get(&id) {
-            Ok(v)
-        } else {
-            Err(VmRuntimeError::VariableNotFound(id))
-        }
-    }
-
-    fn get_mut(&mut self, id: u64) -> Result<&mut Variable> {
-        if let Some(v) = self.map.get_mut(&id) {
-            Ok(v)
-        } else {
-            Err(VmRuntimeError::VariableNotFound(id))
-        }
-    }
-}
-
 pub struct Vm {
     /// Main VM stack
+    /// contains global variables
+    /// and the actual stack.
+    ///
+    /// This is due to GC requirements.
     stack: RootStack,
 
     /// Stream of pre-compiled instructions
@@ -186,21 +115,19 @@ pub struct Vm {
 impl Vm {
     pub fn new(code: &[u8]) -> Result<Self> {
         let parser = Parser::new(code);
-        let (instructions, fns) = parser.compile_bytecode().unwrap();
+        let (instructions, fns) = parser.compile_bytecode()?;
 
         let mut vm = Self {
-            stack: Heap::new_extra(|_period| Stack::new(), |_| Globals::new()),
-            instructions,
+            stack: Heap::new_extra(|_| Stack::new(), |_| Globals::new()),
             fns,
-
+            instructions,
+            call_stack: CallStack::new(),
+            objects: Objects::new(),
             cmp_flags: VmFlags {
                 equal: false,
                 greater: false,
                 lesser: false,
             },
-
-            call_stack: CallStack::new(),
-            objects: Objects::new(),
         };
 
         vm.call_instruction(FnRef::MAIN_FN)?;
@@ -443,7 +370,7 @@ impl Vm {
         Ok(vm_continue)
     }
 
-    fn interpret_all(&mut self) -> Result<()> {
+    pub fn interpret_all(&mut self) -> Result<()> {
         #[cfg(debug_assertions)]
         self.debug_report(None, false);
 
@@ -469,7 +396,10 @@ impl Vm {
             return Err(err);
         };
 
-        self.call_stack.new_frame(fnref, self.instructions.ip())?;
+        let sp = self.stack.enter(|_, root, _| root.stack_pointer());
+
+        self.call_stack
+            .new_frame(fnref, self.instructions.ip(), sp)?;
 
         self.instructions.jump(function.jump_ip());
         Ok(())

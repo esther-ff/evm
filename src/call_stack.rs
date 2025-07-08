@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::objects::{FnRef, Functions};
 
 use crate::{
@@ -7,14 +9,14 @@ use crate::{
 };
 
 const MAX_LOCAL_VARIABLES: usize = 512;
-const MAX_CALL_STACK_DEPTH: usize = size_of::<Value>() * 256;
+const MAX_CALL_STACK_DEPTH: usize = 125;
 
 /// inside a stack frame.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
-pub struct LocalVariable(u32);
+pub struct LocalVariable(u16);
 
 impl LocalVariable {
-    pub fn new(addr: u32) -> Self {
+    pub fn new(addr: u16) -> Self {
         Self(addr)
     }
 
@@ -37,14 +39,20 @@ impl LocalVariable {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LocalId(pub u32);
+pub struct LocalId(pub u16);
 
 impl LocalId {
     /// Id for the `main` function.
     pub const LOCAL_ID_FN_MAIN: Self = Self(0);
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Ord, Eq)]
+impl Debug for LocalVars {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.buffer().iter()).finish()
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, PartialOrd, Ord, Eq)]
 struct LocalVars {
     locals: [LocalVariable; MAX_LOCAL_VARIABLES],
     len: usize,
@@ -61,9 +69,20 @@ impl LocalVars {
         true
     }
 
-    pub fn get(&self, idx: LocalId) -> Option<LocalVariable> {
-        self.locals.get(idx.0 as usize).copied()
+    pub fn get(&self, idx: LocalId, sp: CachedStackPtr) -> Option<LocalVariable> {
+        self.locals.get(sp.0 + idx.0 as usize).copied()
     }
+
+    pub fn buffer(&self) -> &[LocalVariable] {
+        &self.locals[..self.len]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CachedStackPtr(usize);
+
+impl CachedStackPtr {
+    const ZERO: Self = Self(0);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
@@ -78,10 +97,14 @@ pub struct Frame {
     /// Instruction pointer before the `Call`
     /// instruction was executed
     previous_ip: ProgramCounter,
+
+    /// Stack pointer before the `Call`
+    /// instruction was executed
+    previous_sp: CachedStackPtr,
 }
 
 impl Frame {
-    pub fn new(function: FnRef, ip: ProgramCounter) -> Self {
+    pub fn new(function: FnRef, ip: ProgramCounter, sp: usize) -> Self {
         Self {
             locals: LocalVars {
                 locals: [LocalVariable(0); MAX_LOCAL_VARIABLES],
@@ -91,12 +114,15 @@ impl Frame {
             function,
 
             previous_ip: ip,
+
+            previous_sp: CachedStackPtr(sp),
         }
     }
 
-    pub fn allocate_local<const N: usize>(&mut self, stack: &mut Stack<N, Value>) -> bool {
+    pub fn allocate_local<'a, const N: usize>(&mut self, stack: &mut Stack<N, Value<'a>>) -> bool {
         #[allow(clippy::cast_possible_truncation)]
-        let local = LocalVariable::new(stack.stack_pointer() as u32);
+        let local = LocalVariable::new(self.locals.len as u16);
+        stack.push(Value::Nil).unwrap(); // handle this
         self.locals.push(local)
     }
 
@@ -105,7 +131,9 @@ impl Frame {
         id: LocalId,
         stack: &Stack<N, Value<'a>>,
     ) -> Option<Value<'a>> {
-        self.locals.get(id).and_then(|var| var.load(&stack))
+        self.locals
+            .get(id, self.previous_sp)
+            .and_then(|var| var.load(stack))
     }
 
     pub fn store_local<'a, const N: usize>(
@@ -114,7 +142,7 @@ impl Frame {
         stack: &mut Stack<N, Value<'a>>,
         value: Value<'a>,
     ) -> bool {
-        if let Some(local) = self.locals.get(id) {
+        if let Some(local) = self.locals.get(id, self.previous_sp) {
             return local.store(stack, value);
         }
 
@@ -173,8 +201,13 @@ impl CallStack {
         })
     }
 
-    pub fn new_frame(&mut self, fnref: FnRef, ip: ProgramCounter) -> Result<(), stack::StackError> {
-        self.frames.push(Frame::new(fnref, ip))
+    pub fn new_frame(
+        &mut self,
+        fnref: FnRef,
+        ip: ProgramCounter,
+        sp: usize,
+    ) -> Result<(), stack::StackError> {
+        self.frames.push(Frame::new(fnref, ip, sp))
     }
 
     pub fn len(&self) -> usize {

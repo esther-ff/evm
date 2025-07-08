@@ -127,6 +127,18 @@ impl<'a> Buffer<'a> {
         val
     }
 
+    pub fn next_u16(&mut self) -> Option<u16> {
+        let val = self
+            .buf
+            .get(self.pos..self.pos + 2)
+            .map(TryInto::try_into)
+            .and_then(Result::ok)
+            .map(u16::from_ne_bytes);
+
+        self.pos += 2;
+        val
+    }
+
     pub fn next_pair_u8_u32(&mut self) -> Option<(u8, u32)> {
         let byte = self.next();
         let next = self.next_u32();
@@ -334,15 +346,10 @@ fn process_metadata(_buf: &mut Buffer<'_>) -> Result<()> {
     todo!("process metadata");
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{
-        bytecode::{Buffer, Parser},
-        instruction::Instr,
-        objects::FnRef,
-    };
-
-    fn create_fn_bytecode(dest: &mut Vec<u8>, name: &str, instructions: &[u8], arity: u16) {
+pub(crate) mod testing {
+    use super::Buffer;
+    use crate::instruction::Instr;
+    pub fn create_fn_bytecode(dest: &mut Vec<u8>, name: &str, instructions: &[u8], arity: u16) {
         // assumes the header is there
         dest.extend_from_slice(&[1, 1]);
 
@@ -357,7 +364,7 @@ mod tests {
         dest.extend_from_slice(&[0, 0, 0, 0]); // no metadata
     }
 
-    fn gen_instructions(bytes: &[u8]) -> Vec<Instr> {
+    pub fn gen_instructions(bytes: &[u8]) -> Vec<Instr> {
         let mut vec = Vec::new();
         let mut buf = Buffer::new(bytes);
 
@@ -371,6 +378,17 @@ mod tests {
 
         vec
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        bytecode::{Buffer, Parser},
+        instruction::Instr,
+        objects::FnRef,
+    };
+
+    use super::testing::{create_fn_bytecode, gen_instructions};
 
     #[test]
     fn fn_decls() {

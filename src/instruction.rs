@@ -59,9 +59,9 @@ impl Instr {
 
             13 => Dup,
 
-            14 => Load(buf.next_u32().map(LocalId)?),
+            14 => Load(buf.next_u16().map(LocalId)?),
 
-            15 => Store(buf.next_u32().map(LocalId)?),
+            15 => Store(buf.next_u16().map(LocalId)?),
 
             16 => AllocLocal,
 

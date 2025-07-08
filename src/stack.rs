@@ -12,6 +12,7 @@ pub type StackRef<'a, const N: usize> = &'a Stack<N, Value<'a>>;
 pub type StackRefMut<'a, const N: usize> = &'a mut Stack<N, Value<'a>>;
 type Result<T, E = StackError> = core::result::Result<T, E>;
 
+#[derive(Debug)]
 pub enum StackError {
     StackOverflow,
     StackUnderflow,
@@ -35,7 +36,6 @@ pub struct Stack<const SIZE: usize, T: Copy> {
 
 impl<const SIZE: usize, T: Debug + Copy> Debug for Stack<SIZE, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Stack: ")?;
         f.debug_list().entries(self.buffer().iter()).finish()
     }
 }
