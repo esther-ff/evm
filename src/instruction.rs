@@ -1,26 +1,60 @@
 use crate::bytecode::Buffer;
 use crate::call_stack::LocalId;
-use crate::objects::FnRef;
-use crate::vm::Operand;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+use crate::objects::{ArrayType, FnRef, InstanceId};
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) enum Instr {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    ConstUint32(Operand),
+    IAdd,
+    ISub,
+    IMul,
+    IDiv,
+    IShl,
+    IShr,
+    IConst(u32),
+
+    LAdd,
+    LSub,
+    LMul,
+    LDiv,
+    LShl,
+    LShr,
+    LConst(u64),
+
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    FConst(f32),
+
+    DAdd,
+    DSub,
+    DMul,
+    DDiv,
+    DConst(f64),
+
     Call(FnRef),
     Return,
+
     JumpIfGr(ProgramCounter),
     JumpIfEq(ProgramCounter),
     JumpIfLe(ProgramCounter),
     Jump(ProgramCounter),
+
     Cmp,
     Dup,
 
+    New(InstanceId),     // create instance, todo
+    NewArray(ArrayType), // create array of type (specified)
+
+    Invoke,     // invoke method on instance
+    NativeCall, // invoke native function somehow?
+
+    Pop,
+
     Load(LocalId),
     Store(LocalId),
+
+    Throw,
+    Catch,
 
     AllocLocal,
 
@@ -32,38 +66,66 @@ impl Instr {
         use Instr::*;
 
         match buf.next()? {
-            // Add
-            0 => Add,
+            // u32
+            0 => IAdd,
+            1 => ISub,
+            3 => IMul,
+            4 => IDiv,
+            5 => IShl,
+            6 => IShr,
+            7 => IConst(buf.next_u32()?),
 
-            1 => Sub,
+            // u64
+            8 => LAdd,
+            9 => LSub,
+            10 => LMul,
+            11 => LDiv,
+            12 => LShl,
+            13 => LShr,
+            14 => LConst(buf.next_u64()?),
 
-            3 => Mul,
+            // f32
+            15 => FAdd,
+            16 => FSub,
+            17 => FMul,
+            18 => FDiv,
+            19 => FConst(buf.next_f32()?),
 
-            4 => Div,
+            // f64
+            20 => DAdd,
+            21 => DSub,
+            22 => DMul,
+            23 => DDiv,
+            24 => DConst(buf.next_f64()?),
 
-            5 => ConstUint32(buf.next_u32()?),
+            25 => Call(buf.next_u32().map(FnRef)?),
+            26 => Return,
 
-            6 => Call(buf.next_u32().map(FnRef)?),
+            27 => Jump(buf.next_u32().map(ProgramCounter)?),
+            28 => JumpIfGr(buf.next_u32().map(ProgramCounter)?),
+            29 => JumpIfEq(buf.next_u32().map(ProgramCounter)?),
+            30 => JumpIfLe(buf.next_u32().map(ProgramCounter)?),
 
-            7 => Return,
+            31 => Cmp,
 
-            8 => Jump(buf.next_u32().map(ProgramCounter)?),
+            32 => Dup,
 
-            9 => JumpIfGr(buf.next_u32().map(ProgramCounter)?),
+            33 => New(buf.next_u16().map(InstanceId)?), // create instance, todo
 
-            10 => JumpIfEq(buf.next_u32().map(ProgramCounter)?),
+            34 => NewArray(ArrayType::Ref), // create array of type (specified)
 
-            11 => JumpIfLe(buf.next_u32().map(ProgramCounter)?),
+            35 => Invoke,     // invoke method on instance
+            36 => NativeCall, // invoke native function somehow?
 
-            12 => Cmp,
+            37 => Pop,
 
-            13 => Dup,
+            38 => Throw,
+            39 => Catch,
 
-            14 => Load(buf.next_u16().map(LocalId)?),
+            40 => Load(buf.next_u16().map(LocalId)?),
+            41 => Store(buf.next_u16().map(LocalId)?),
 
-            15 => Store(buf.next_u16().map(LocalId)?),
-
-            16 => AllocLocal,
+            42 => AllocLocal,
 
             255 => End,
 

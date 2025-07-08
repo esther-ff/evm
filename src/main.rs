@@ -9,6 +9,7 @@ mod instruction;
 mod objects;
 mod stack;
 mod vm;
+mod vm_math;
 
 fn main() -> vm::Result<()> {
     let mut bytecode: Vec<u8> = vec![101, 118, 109, 32, 58, 51];

@@ -6,10 +6,35 @@ use crate::globals::Globals;
 use crate::instruction::{Instr, Instructions};
 use crate::objects::{FnRef, Functions, Objects, Value};
 use crate::stack::Stack;
+use crate::vm_math::{MathError, f32_math, f64_math, u32_math, u64_math};
 
 const LOCAL_VARS_PER_FRAME: usize = 255;
-const MAX_STACK_SIZE: usize = 64;
+pub const MAX_STACK_SIZE: usize = 64;
 
+/// `$op_type`: primitive type to use for this
+/// `$op_function`: function for the operation in the stdlib
+/// `$math_error_expr`: closure returning an error
+/// `$push_function`: function to push the value onto the stack
+/// `$math_function`: function to do the math using the stack
+/// `$stack`: identifier of the stack
+macro_rules! vm_math {
+    ($op_function:expr, $math_error_expr:expr, $push_function:ident, $math_function:ident, $stack:expr, $error_check:expr) => {
+        match $stack.enter_mut(|_, stack, _| {
+            let output = $math_function(stack, $op_function, $math_error_expr).map_err(|x| x)?;
+            stack.$push_function(output).map_err(Into::into)
+        }) {
+            Ok(_) => return Ok(false),
+
+            Err(err) => {
+                if ($error_check)(err) {
+                    todo!("handle overflows")
+                }
+
+                todo!();
+            }
+        }
+    };
+}
 pub type Operand = u32;
 pub type Result<T, E = VmRuntimeError> = core::result::Result<T, E>;
 type RootStack =
@@ -26,12 +51,14 @@ pub enum VmRuntimeError {
 
     MissingFn(FnRef),
     Bytecode(BytecodeError),
+
+    Math(MathError),
 }
 
 impl core::fmt::Display for VmRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use VmRuntimeError::{
-            Bytecode, LocalVariableMissing, MissingFn, StackOverflow, StackTooLow,
+            Bytecode, LocalVariableMissing, Math, MissingFn, StackOverflow, StackTooLow,
             TooMuchLocalVariables, VariableNotFound,
         };
 
@@ -58,6 +85,8 @@ impl core::fmt::Display for VmRuntimeError {
             ),
 
             Bytecode(err) => err.fmt(f),
+
+            Math(err) => err.fmt(f),
         }
     }
 }
@@ -210,10 +239,8 @@ impl Vm {
 
     #[allow(clippy::too_many_lines)]
     fn interpret_one(&mut self) -> Result<bool, VmRuntimeError> {
-        use Instr::{
-            Add, AllocLocal, Call, Cmp, ConstUint32, Div, Dup, End, Jump, JumpIfEq, JumpIfGr,
-            JumpIfLe, Load, Mul, Return, Store, Sub,
-        };
+        #[allow(clippy::enum_glob_use)]
+        use Instr::*;
 
         let mut vm_continue = true;
         let Some(op) = self.instructions.next() else {
@@ -221,55 +248,225 @@ impl Vm {
         };
 
         match op {
-            Add => self.stack.enter_mut(|_, stack, _| {
-                let lhs = stack.pop()?;
-                let rhs = stack.pop()?;
+            IAdd => {
+                vm_math!(
+                    u32::checked_add,
+                    || MathError::Overflow,
+                    push_u32,
+                    u32_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
+            ISub => {
+                vm_math!(
+                    u32::checked_sub,
+                    || MathError::Underflow,
+                    push_u32,
+                    u32_math,
+                    self.stack,
+                    |ret: MathError| ret.is_underflow()
+                );
+            }
+            IMul => {
+                vm_math!(
+                    u32::checked_mul,
+                    || MathError::Overflow,
+                    push_u32,
+                    u32_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
+            IDiv => {
+                vm_math!(
+                    u32::checked_div_euclid,
+                    || MathError::DivisionByZero,
+                    push_u32,
+                    u32_math,
+                    self.stack,
+                    |ret: MathError| ret.is_div_by_zero()
+                );
+            }
+            IShl => {
+                vm_math!(
+                    u32::checked_shl,
+                    || MathError::Overflow,
+                    push_u32,
+                    u32_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
 
-                let val = Vm::math(|x, y| x + y, lhs, rhs);
+            IShr => {
+                vm_math!(
+                    u32::checked_shr,
+                    || MathError::DivisionByZero,
+                    push_u32,
+                    u32_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
 
-                stack.push(val)
-            })?,
+            LAdd => {
+                vm_math!(
+                    u64::checked_add,
+                    || MathError::Overflow,
+                    push_u64,
+                    u64_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
 
-            Sub => self.stack.enter_mut(|_, stack, _| {
-                let lhs = stack.pop()?;
-                let rhs = stack.pop()?;
+            LSub => {
+                vm_math!(
+                    u64::checked_sub,
+                    || MathError::Underflow,
+                    push_u64,
+                    u64_math,
+                    self.stack,
+                    |ret: MathError| ret.is_underflow()
+                );
+            }
 
-                let val = Vm::math(|x, y| x + y, lhs, rhs);
+            LMul => {
+                vm_math!(
+                    u64::checked_mul,
+                    || MathError::Overflow,
+                    push_u64,
+                    u64_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
 
-                stack.push(val)
-            })?,
+            LDiv => {
+                vm_math!(
+                    u64::checked_div_euclid,
+                    || MathError::DivisionByZero,
+                    push_u64,
+                    u64_math,
+                    self.stack,
+                    |ret: MathError| ret.is_div_by_zero()
+                );
+            }
 
-            Mul => self.stack.enter_mut(|_, stack, _| {
-                let lhs = stack.pop()?;
-                let rhs = stack.pop()?;
+            LShl => {
+                vm_math!(
+                    |lhs, rhs| u64::checked_shl(lhs, rhs as u32),
+                    || MathError::Overflow,
+                    push_u64,
+                    u64_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
 
-                let val = Vm::math(|x, y| x * y, lhs, rhs);
+            LShr => {
+                vm_math!(
+                    |lhs, rhs| u64::checked_shr(lhs, rhs as u32),
+                    || MathError::DivisionByZero,
+                    push_u64,
+                    u64_math,
+                    self.stack,
+                    |ret: MathError| ret.is_overflow()
+                );
+            }
 
-                stack.push(val)
-            })?,
+            FAdd => {
+                vm_math!(
+                    |x, y| Some(x + y),
+                    || MathError::Overflow,
+                    push_f32,
+                    f32_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
+            FSub => {
+                vm_math!(
+                    |x, y| Some(x - y),
+                    || MathError::Underflow,
+                    push_f32,
+                    f32_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
+            FMul => {
+                vm_math!(
+                    |x, y| Some(x * y),
+                    || MathError::Overflow,
+                    push_f32,
+                    f32_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
+            FDiv => {
+                vm_math!(
+                    |x, y| Some(x / y),
+                    || MathError::DivisionByZero,
+                    push_f32,
+                    f32_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
 
-            Div => self.stack.enter_mut(|_, stack, _| {
-                let lhs = stack.pop()?;
-                let rhs = stack.pop()?;
+            DAdd => {
+                vm_math!(
+                    |x, y| Some(x + y),
+                    || unreachable!(),
+                    push_f64,
+                    f64_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
 
-                let val = Vm::math(|x, y| x / y, lhs, rhs);
+            DSub => {
+                vm_math!(
+                    |x, y| Some(x - y),
+                    || unreachable!(),
+                    push_f64,
+                    f64_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
 
-                stack.push(val)
-            })?,
+            DMul => {
+                vm_math!(
+                    |x, y| Some(x * y),
+                    || unreachable!(),
+                    push_f64,
+                    f64_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
 
-            ConstUint32(item) => self
-                .stack
-                .enter_mut(|_, stack, _| stack.push(Value::Number(item)))?,
+            DDiv => {
+                vm_math!(
+                    |x, y| Some(x / y),
+                    || unreachable!(),
+                    push_f64,
+                    f64_math,
+                    self.stack,
+                    |_: MathError| false
+                );
+            }
+
+            IConst(item) => self.stack.enter_mut(|_, stack, _| stack.push_u32(item))?,
+            LConst(item) => self.stack.enter_mut(|_, stack, _| stack.push_u64(item))?,
+            FConst(item) => self.stack.enter_mut(|_, stack, _| stack.push_f32(item))?,
+            DConst(item) => self.stack.enter_mut(|_, stack, _| stack.push_f64(item))?,
 
             Cmp => {
-                // let lhs = self.stack.pop()?;
-                // let rhs = self.stack.pop()?;
-
-                // match rhs.cmp(&lhs) {
-                //     Ordering::Less => self.cmp_flags.lesser = true,
-                //     Ordering::Greater => self.cmp_flags.greater = true,
-                //     Ordering::Equal => self.cmp_flags.equal = true,
-                // }
                 todo!();
             }
 
@@ -296,6 +493,18 @@ impl Vm {
             }
 
             Call(function) => self.call_instruction(function)?,
+
+            NativeCall => todo!("nativecall"),
+            New(instance) => todo!("instances: {instance:?}"),
+            NewArray(ty) => todo!("arrays of {ty:?}"),
+            Invoke => todo!("invoking instance methods"),
+
+            Pop => self
+                .stack
+                .enter_mut(|_, stack, _| stack.pop().map(|_| ()))?,
+
+            Throw => todo!("throws"),
+            Catch => todo!("catching"),
 
             Return => {
                 let program_counter = self.current_frame().return_address();

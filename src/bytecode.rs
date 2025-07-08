@@ -1,5 +1,7 @@
 use super::instruction::{Instr, Instructions};
 use super::objects::{Func, Functions};
+use crate::call_stack::LocalId;
+use crate::instruction::ProgramCounter;
 use crate::vm::VmRuntimeError;
 
 use core::fmt::Display;
@@ -115,6 +117,30 @@ impl<'a> Buffer<'a> {
         val
     }
 
+    pub fn next_u64(&mut self) -> Option<u64> {
+        let val = self
+            .buf
+            .get(self.pos..self.pos + 8)
+            .map(TryInto::try_into)
+            .and_then(Result::ok)
+            .map(u64::from_ne_bytes);
+
+        self.pos += 8;
+        val
+    }
+
+    pub fn next_f64(&mut self) -> Option<f64> {
+        let val = self
+            .buf
+            .get(self.pos..self.pos + 8)
+            .map(TryInto::try_into)
+            .and_then(Result::ok)
+            .map(f64::from_ne_bytes);
+
+        self.pos += 8;
+        val
+    }
+
     pub fn next_u32(&mut self) -> Option<u32> {
         let val = self
             .buf
@@ -122,6 +148,18 @@ impl<'a> Buffer<'a> {
             .map(TryInto::try_into)
             .and_then(Result::ok)
             .map(u32::from_ne_bytes);
+
+        self.pos += 4;
+        val
+    }
+
+    pub fn next_f32(&mut self) -> Option<f32> {
+        let val = self
+            .buf
+            .get(self.pos..self.pos + 4)
+            .map(TryInto::try_into)
+            .and_then(Result::ok)
+            .map(f32::from_ne_bytes);
 
         self.pos += 4;
         val
@@ -139,11 +177,12 @@ impl<'a> Buffer<'a> {
         val
     }
 
-    pub fn next_pair_u8_u32(&mut self) -> Option<(u8, u32)> {
-        let byte = self.next();
-        let next = self.next_u32();
+    pub fn next_program_counter(&mut self) -> Option<ProgramCounter> {
+        self.next_u32().map(ProgramCounter)
+    }
 
-        byte.zip(next)
+    pub fn next_local_id(&mut self) -> Option<LocalId> {
+        self.next_u16().map(LocalId)
     }
 
     pub fn sub_buffer<'b>(&'b mut self, end: usize) -> Option<Buffer<'b>>

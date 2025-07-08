@@ -12,7 +12,7 @@ pub type StackRef<'a, const N: usize> = &'a Stack<N, Value<'a>>;
 pub type StackRefMut<'a, const N: usize> = &'a mut Stack<N, Value<'a>>;
 type Result<T, E = StackError> = core::result::Result<T, E>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StackError {
     StackOverflow,
     StackUnderflow,
@@ -109,6 +109,36 @@ impl<const SIZE: usize> Stack<SIZE, Value<'_>> {
 
         let val = unsafe { self.buf[self.pointer].assume_init() };
         self.push(val)
+    }
+
+    /// Put a u32 on the stack
+    pub fn push_u32(&mut self, val: u32) -> Result<()> {
+        self.push(Value::Number(val))
+    }
+
+    /// Put a f32 on the stack
+    pub fn push_f32(&mut self, val: f32) -> Result<()> {
+        let target = val.to_bits();
+        self.push(Value::Number(target))
+    }
+    /// Put a u64 on the stack
+    pub fn push_u64(&mut self, val: u64) -> Result<()> {
+        let target = val.to_ne_bytes();
+
+        let higher: [u8; 4] = target[0..4].try_into().expect("slice is 4-wide");
+        let lower: [u8; 4] = target[4..8].try_into().expect("slice is 4-wide");
+
+        self.push_u32(u32::from_ne_bytes(lower))?;
+        self.push_u32(u32::from_ne_bytes(higher))?;
+
+        Ok(())
+    }
+
+    /// Put a f64 on the stack
+    pub fn push_f64(&mut self, val: f64) -> Result<()> {
+        let target = val.to_bits();
+
+        self.push_u64(target)
     }
 }
 

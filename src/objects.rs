@@ -6,8 +6,32 @@ use std::sync::Arc;
 pub(crate) enum Value<'gc> {
     Object(Gc<'gc, Object>),
     Number(u32),
-    Nil,
     Function(FnRef),
+
+    /// Cursed being!
+    /// Go back to your caves of zeroes
+    /// Mx. NonNull and Ms. NonZero
+    /// may send you back to your place
+    ///
+    /// To the fronts of Gandesa,
+    /// to the Inn to remind you
+    ///
+    /// with the first meal, of the shrapnel
+    /// at Jarama
+    ///
+    /// and with the second meal, of the memories
+    /// at Belchite.
+    Nil,
+}
+
+impl<'gc> Value<'gc> {
+    pub fn assert_num(self) -> Option<u32> {
+        if let Value::Number(num) = self {
+            return Some(num);
+        }
+
+        None
+    }
 }
 
 impl<'gc> ToHeap<'gc> for Value<'gc> {
@@ -100,3 +124,25 @@ impl Objects {
         self.storage.push(obj);
     }
 }
+
+#[derive(Debug)]
+pub struct Array {
+    // ... todo!
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ArrayType {
+    U32 = 0,
+    U64 = 1,
+    F32 = 2,
+    F64 = 3,
+    Ref = 4,
+}
+
+#[derive(Debug)]
+pub struct Instance {
+    // todo...
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InstanceId(pub u16);
