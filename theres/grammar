@@ -12,10 +12,11 @@ globalDecl     → "global" ( "const" )?
 
 type           → "fun" "(" type ( "," type )* ") "=>" type?
 			   | IDENT
+			   | IDENT "<" genericParams ">"
 
-			   # later
-			   | IDENT "<" IDENT (+ IDENT)?* ">"
-			
+genericParams  → typeParam ("," typeParam)*
+typeParam      → IDENT ":" typeConstraint?;
+typeConstraint → IDENT ("+" IDENT)*		
 
 statement      → block
 			   | expressionStmt

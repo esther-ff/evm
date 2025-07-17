@@ -204,7 +204,7 @@ pub struct GenericTyParam {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TyKind {
-    FnPtr { args: Vec<Ty>, ret: Option<Box<Ty>> },
+    Fn { args: Vec<Ty>, ret: Option<Box<Ty>> },
 
     Regular,
 }
