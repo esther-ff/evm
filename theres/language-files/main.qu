@@ -1,0 +1,51 @@
+fun main(arg2: type, arg1: type) => type {
+   let variable: type = (1 + 1) / 2; 
+   let variable: type = 1 + 1;
+   let hai: hai = 1 && 2;
+   let hai1: hai = 1 + 2;
+   let hai2: hai = 1 >> 2;
+
+   let lambda: any = \x => x + x;
+   
+   let noinit: noinit;
+
+   meowers();
+   meowers(1, 2, 3, 4);
+
+   let meow: meow = meowers();
+   let meow1: meow1 = meowers(noinit, noinit);
+
+   for (a, b, c) in someiter {
+      callmeeee(a, b, c);
+   };
+   
+   if meowers() {
+      let firstblock: uwu = 1;
+   } else if woofers() {
+      let secondblock: uwu = 1;
+   } else if barkers() {
+      let thirdblock: uwu = 1;
+   } else {
+      explode();
+   };
+
+   loop {
+      bomb();
+   };
+
+   while meow == meow1 {
+      meowmore();
+   };
+  
+   until meow == meow1 {
+      meowmore();
+   };
+
+   let array: array = [(1+1)/2]meowers { \x => x + x, \x => x - x, \x => x * x };
+   array.meowable();
+
+   if true {
+      meow();
+   }.array
+   .meowable();
+}

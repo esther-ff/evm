@@ -1,0 +1,92 @@
+module         → (declaration)* ;
+declaration    → funDecl | globalDecl ;
+
+funDecl        → "fun" func ;
+func           → IDENT "(" funArgs? ")" "=>" IDENT block ;
+funArgs        → selfArg? (arg) ("," arg)* ;
+selfArg        → "self" "," ;
+arg            → IDENT ":" IDENT ;
+
+globalDecl     → "global" ( "const" )? 
+  				 IDENT ":" IDENT ("=" expression)? ";" ;
+
+type           → "fun" "(" type ( "," type )* ") "=>" type?
+			   | IDENT
+
+			   # later
+			   | IDENT "<" IDENT (+ IDENT)?* ">"
+			
+
+statement      → block
+			   | expressionStmt
+			   | localVariableStmt
+			   | declaration ;
+
+
+			
+block             → "{" declaration* "}" ;
+
+localVariableStmt → ( "let" | "const" ) 
+  				 IDENT ":" IDENT ("=" expression)? ";" ;
+
+ifExpr        → "if" expression block
+				  ( "else" "if" block )?*
+				  ( "else" block )? ;
+
+whileExpr     → "while" expression block ;
+untilExpr     → "until" expression block ;
+forExpr       → "for" pat "in" expression block ;
+loopExpr      → "loop" block;
+
+lambdaExpr      "\" pat ("," pat)*? "=>" (expression | block)
+arrayExpr     → "[" expression "]" type ("{" expression ("," expression)* "}")?
+
+pat                → IDENT
+				   | "(" IDENT ("," IDENT) ")"
+				   | "_"
+								
+expressionStmt → expression ";" ;
+
+funCall        → primary "(" expression? ("," expression)? ")" ;
+fieldAccess    → primary "." expression ("." IDENT)?* ;
+
+# cascading
+
+expression     → assignment 
+               | assignment ( ( "," expression ) )* ;
+			   | whileExpr
+			   | untilExpr
+			   | forExpr
+	    	   | loopExpr
+			   | ifExpr
+			   | arrayExpr
+			   | lambdaExpr
+
+assignment     → bitwiseOr
+				("=", "+=", "-=" | "*="
+				| "%=" | "/=" | "<<=" | ">>="
+				| "&=" | "^=" | "|=")
+				bitwiseOr
+
+bitwiseOr      → bitwiseXor ("|" bitwiseXor)*;
+bitwiseXor     → bitwiseAnd ("^" bitwiseAnd)*;
+bitwiseAnd     → logicOr ("&" logicOr)*;
+logicOr        → logicAnd ("||" logicAnd)*;
+logicAnd       → equality ("&&" equality)*;
+
+equality       → comparison ( ( "!=" | "==" ) comparison )* ;
+comparison     → shifts ( ( ">" | ">=" | "<" | "<=" ) shifts )* ;
+bitShifts      → term ( ( ">>" | "<<" ) term )*;
+term           → factor ( ( "-" | "+" ) factor )* ;
+factor         → unary ( ( "/" | "*" ) unary )* ;
+unary          → ( "!" | "-" ) unary
+               | special ;
+
+special        → funCall | fieldAccess
+
+primary        → NUMBER
+               | STRING
+			   | "true"
+			   | "false" 
+               | "(" expression ")"
+			   | IDENT ;
