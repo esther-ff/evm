@@ -54,13 +54,6 @@ fieldAccess    → primary "." expression ("." IDENT)?* ;
 
 expression     → assignment 
                | assignment ( ( "," expression ) )* ;
-			   | whileExpr
-			   | untilExpr
-			   | forExpr
-	    	   | loopExpr
-			   | ifExpr
-			   | arrayExpr
-			   | lambdaExpr
 
 assignment     → bitwiseOr
 				("=", "+=", "-=" | "*="
@@ -89,4 +82,11 @@ primary        → NUMBER
 			   | "true"
 			   | "false" 
                | "(" expression ")"
-			   | IDENT ;
+			   | IDENT 
+			   | whileExpr
+			   | untilExpr
+			   | forExpr
+	    	   | loopExpr
+			   | ifExpr
+			   | arrayExpr
+			   | lambdaExpr ;

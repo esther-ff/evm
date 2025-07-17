@@ -241,14 +241,6 @@ impl Parser {
 
     fn expression(&mut self) -> Result<Expr> {
         match self.lexemes.peek_token().kind {
-            TokenKind::If => self.if_expr(),
-            TokenKind::Loop => self.loop_expr(),
-            TokenKind::For => self.for_loop(),
-            TokenKind::While => self.while_expr(),
-            TokenKind::Until => self.until_expr(),
-            TokenKind::LeftSqBracket => self.array_expr(),
-            TokenKind::Backslash => self.lambda_expr(),
-
             _ => self.assignment(),
         }
     }
@@ -426,7 +418,7 @@ impl Parser {
 
     pub fn array_expr(&mut self) -> Result<Expr> {
         let left_sq = self.expect_token(TokenKind::LeftSqBracket)?;
-        let size = self.expression().map(Box::new)?;
+        let size = self.primary().map(Box::new)?;
         self.expect_token(TokenKind::RightSqBracket)?;
         let ty = self.expect_token(TokenKind::Identifier)?;
 
@@ -809,11 +801,19 @@ impl Parser {
     }
 
     fn primary(&mut self) -> Result<Expr> {
-        let token = self.lexemes.next_token().to_err_if_eof()?;
+        let token = self.lexemes.peek_token().to_err_if_eof()?;
 
         let mut span = token.span;
 
         let expr = match token.kind {
+            TokenKind::If => return self.if_expr(),
+            TokenKind::Loop => return self.loop_expr(),
+            TokenKind::For => return self.for_loop(),
+            TokenKind::While => return self.while_expr(),
+            TokenKind::Until => return self.until_expr(),
+            TokenKind::LeftSqBracket => return self.array_expr(),
+            TokenKind::Backslash => return self.lambda_expr(),
+
             TokenKind::IntegerLiteral(num) => Some(ExprType::Constant(ConstantExpr::Int(num))),
             TokenKind::FloatLiteral(num) => Some(ExprType::Constant(ConstantExpr::Float(num))),
             TokenKind::StringLiteral(interned) => {
@@ -825,11 +825,12 @@ impl Parser {
             TokenKind::True => Some(ExprType::Constant(ConstantExpr::Bool(true))),
 
             TokenKind::LeftParen => {
+                self.lexemes.advance();
                 let expr = self.expression()?;
 
-                if self.consume_if(TokenKind::RightParen) {
-                    let prev_span = self.lexemes.previous().span;
-                    span = Span::new(span.start(), prev_span.end(), 0);
+                let token = self.lexemes.peek_token();
+                if token.kind == TokenKind::RightParen {
+                    span = Span::new(span.start(), token.span.end(), 0);
                     Some(ExprType::Group(Box::new(expr)))
                 } else {
                     return self.error_out(
@@ -853,6 +854,8 @@ impl Parser {
                 );
             }
         };
+
+        self.lexemes.advance();
 
         if let Some(expr_ty) = expr {
             return Ok(Expr::new(expr_ty, span));
