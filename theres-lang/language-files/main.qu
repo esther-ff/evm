@@ -1,38 +1,40 @@
 fun main(arg2: type, arg1: type) => type {
-   let variable: meow = 1;
-   let meowers: noinit;
-   let var: lambda = \x => meow;
-   let var1: lambda = \x => { \x => \x => 1; };
+   # let variable: meow = 1;
+   # let meowers: noinit;
+   # let var: lambda = \x => meow;
+   # let var1: lambda = \x => { \x => \x => 1; };
 
-   if meowers() {
-      let firstblock: uwu = 1;
-   } else if woofers() {
-      let secondblock: uwu = 1;
-   } else if barkers() {
-      let thirdblock: uwu = 1;
-   } else {
-      explode();
-   };
+   # if meowers() {
+   #    let firstblock: uwu = 1;
+   # } else if woofers() {
+   #    let secondblock: uwu = 1;
+   # } else if barkers() {
+   #    let thirdblock: uwu = 1;
+   # } else {
+   #    explode();
+   # };
 
 
-   loop {
-      bomb();
-   };
+   # loop {
+   #    bomb();
+   # };
 
-   while meow == meow1 {
-      meowmore();
-   };
+   # while meow == meow1 {
+   #    meowmore();
+   # };
   
 
-   until meow == meow1 {
-      meowmore();
-   };
+   # until meow == meow1 {
+   #    meowmore();
+   # };
    
-   let array: array = [\x => x()]meowers { \x => x + x, \x => x - x, \x => x * x };
-   array.meowable();
+   # let array: array = [\x => x()]meowers { \x => x + x, \x => x - x, \x => x * x };
+   # array.meowable();
 
-   if true {
-      meow();
-   }.array
-   .meowable();
+   # if true {
+   #    meow();
+   # }.array
+   # .meowable();
+
+   (\x => x + 1)().meow();
 }

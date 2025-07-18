@@ -48,8 +48,6 @@ pat                → IDENT
 								
 expressionStmt → expression ";" ;
 
-funCall        → primary "(" expression? ("," expression)? ")" ;
-fieldAccess    → primary "." expression ("." IDENT)?* ;
 
 # cascading
 
@@ -74,9 +72,11 @@ bitShifts      → term ( ( ">>" | "<<" ) term )*;
 term           → factor ( ( "-" | "+" ) factor )* ;
 factor         → unary ( ( "/" | "*" ) unary )* ;
 unary          → ( "!" | "-" ) unary
-               | special ;
+               | fieldAccess ;
 
-special        → funCall | fieldAccess
+fieldAccess    → funCall "." expression ("." IDENT)?* ;
+
+funCall        → primary "(" expression? ("," expression)? ")" ;
 
 primary        → NUMBER
                | STRING
@@ -90,4 +90,5 @@ primary        → NUMBER
 	    	   | loopExpr
 			   | ifExpr
 			   | arrayExpr
-			   | lambdaExpr ;
+			   | lambdaExpr
+			   | funCall ;

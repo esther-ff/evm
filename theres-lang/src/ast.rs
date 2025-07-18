@@ -163,7 +163,7 @@ pub enum ExprType {
 
     FieldAccess {
         source: Box<Expr>,
-        field: Vec<Expr>, // maybe chained
+        field: Box<Expr>,
     },
 
     ArrayDecl {

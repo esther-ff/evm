@@ -735,69 +735,78 @@ impl Parser {
             return Ok(Expr::new(expr_ty, span));
         };
 
-        self.special()
+        self.field_access()
     }
 
-    fn special(&mut self) -> Result<Expr> {
-        let lhs = self.primary()?;
+    // fn special(&mut self) -> Result<Expr> {
+    //     let lhs = self.primary()?;
 
-        match self.lexemes.peek_token().kind {
-            TokenKind::LeftParen => self.fun_call(lhs),
-            TokenKind::Dot => self.field_access(lhs),
+    //     match self.lexemes.peek_token().kind {
+    //         TokenKind::LeftParen => self.fun_call(lhs),
+    //         TokenKind::Dot => self.field_access(lhs),
 
-            _ => Ok(lhs),
-        }
-    }
+    //         _ => Ok(lhs),
+    //     }
+    // }
 
-    fn field_access(&mut self, lvalue: Expr) -> Result<Expr> {
-        self.expect_token(TokenKind::Dot)?;
+    fn field_access(&mut self) -> Result<Expr> {
+        let lvalue = self.fun_call()?;
 
-        let first = self.expression()?;
-        let span_start = lvalue.span.start();
+        if self.consume_if(TokenKind::Dot) {
+            let span_start = lvalue.span.start();
+            let expr = self.fun_call()?;
 
-        let mut span_end = first.span.end();
-        let mut fields = vec![first];
+            let mut span_end = expr.span.end();
+            let mut exprty = ExprType::FieldAccess {
+                source: Box::new(lvalue),
+                field: Box::new(expr),
+            };
 
-        while self.consume_if(TokenKind::Dot) {
-            let field = self.expression()?;
-            span_end = field.span.end();
-            fields.push(field)
-        }
+            while self.consume_if(TokenKind::Dot) {
+                let field = self.fun_call().map(Box::new)?;
+                span_end = field.span.end();
 
-        let exprty = ExprType::FieldAccess {
-            source: Box::new(lvalue),
-            field: fields,
+                let span = Span::new(span_start, span_end, 0);
+                let old_expr = Expr::new(exprty, span);
+
+                exprty = ExprType::FieldAccess {
+                    source: Box::new(old_expr),
+                    field,
+                }
+            }
+
+            return Ok(Expr::new(exprty, Span::new(span_start, span_end, 0)));
         };
 
-        Ok(Expr::new(exprty, Span::new(span_start, span_end, 0)))
+        Ok(lvalue)
     }
 
-    fn fun_call(&mut self, callee: Expr) -> Result<Expr> {
-        if !self.consume_if(TokenKind::LeftParen) {
-            return Ok(callee);
+    fn fun_call(&mut self) -> Result<Expr> {
+        let callee = self.primary()?;
+
+        if self.consume_if(TokenKind::LeftParen) {
+            let mut args = vec![];
+
+            if self.lexemes.peek_token().kind != TokenKind::RightParen {
+                args.push(self.expression()?);
+                while self.consume_if(TokenKind::Comma) {
+                    args.push(self.expression()?);
+                }
+            }
+
+            let end_paren = self.expect_token(TokenKind::RightParen)?;
+            let span = Span::new(callee.span.start(), end_paren.span.end(), 0);
+
+            return Ok(Expr::new(
+                ExprType::FunCall {
+                    callee: Box::new(callee),
+                    args,
+                },
+                span,
+            ));
         }
 
-        let mut args = Vec::new();
-
-        if self.lexemes.peek_token().to_err_if_eof()?.kind != TokenKind::RightParen {
-            args.push(self.expression()?);
-        }
-
-        while self.consume_if(TokenKind::Comma) {
-            args.push(self.expression()?)
-        }
-
-        let paren = self.expect_token(TokenKind::RightParen)?;
-        let end = paren.span.end();
-        let span = Span::new(callee.span.start(), end, 0);
-
-        Ok(Expr::new(
-            ExprType::FunCall {
-                callee: Box::new(callee),
-                args,
-            },
-            span,
-        ))
+        Ok(callee)
     }
 
     fn primary(&mut self) -> Result<Expr> {
