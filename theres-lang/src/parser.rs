@@ -1,6 +1,6 @@
 use crate::arena::TypedArena;
 use crate::ast::*;
-use crate::lexer::{Lexer, Span, Token, TokenKind};
+use crate::lexer::{Lexemes, Span, Token, TokenKind};
 
 type Result<T, E = ParseError> = core::result::Result<T, E>;
 
@@ -24,18 +24,19 @@ impl ParseError {
     }
 }
 
-pub struct Parser {
-    lexemes: Lexer,
-    errors: Vec<ParseError>,
+pub struct Parser<'a> {
+    lexemes: Lexemes,
+
+    errors: &'a mut Vec<ParseError>,
     arena: TypedArena<AstDef, AstId>,
     decls: Vec<AstDef>,
 }
 
-impl Parser {
-    pub fn new(lexemes: Lexer) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(lexemes: Lexemes, errors: &'a mut Vec<ParseError>) -> Self {
         Self {
             lexemes,
-            errors: Vec::new(),
+            errors,
             arena: TypedArena::new(),
 
             decls: Vec::new(),
@@ -54,15 +55,15 @@ impl Parser {
         &self.decls
     }
 
-    pub fn parse(&mut self) {
-        // while !self.lexemes.is_empty() {
-        match self.declaration() {
-            Err(err) => self.errors.push(err),
-            Ok(decl) => self.decls.push(AstDef::new(decl)),
+    pub fn parse(mut self) -> Vec<AstDef> {
+        while !self.lexemes.is_empty() {
+            match self.declaration() {
+                Err(err) => self.errors.push(err),
+                Ok(decl) => self.decls.push(AstDef::new(decl)),
+            }
         }
 
-        dbg!(self.lexemes.is_empty());
-        // }
+        self.decls
     }
 
     fn declaration(&mut self) -> Result<DefKind> {
@@ -97,7 +98,7 @@ impl Parser {
         let ret_type = self.expect_token(TokenKind::Identifier)?;
         let block = self.block()?;
 
-        let span = Span::new(start_span, block.span.end(), 0);
+        let span = self.new_span(start_span, block.span.end(), 0);
 
         Ok(DefKind::function(name, fun_args, block, ret_type, span))
     }
@@ -219,8 +220,6 @@ impl Parser {
             _ => Stmt::Expr(self.expression()?),
         };
 
-        dbg!(self.lexemes.peek_token());
-
         let _ = self.expect_token(TokenKind::Semicolon)?;
 
         Ok(stmt)
@@ -236,7 +235,7 @@ impl Parser {
 
         let span_end = self.expect_token(TokenKind::RightCurlyBracket)?.span.end();
 
-        Ok(Block::new(stmts, Span::new(span_start, span_end, 0)))
+        Ok(Block::new(stmts, self.new_span(span_start, span_end, 0)))
     }
 
     fn expression(&mut self) -> Result<Expr> {
@@ -263,7 +262,7 @@ impl Parser {
                     else_ifs,
                     otherwise,
                 },
-                Span::new(begin.span.start(), end, 0),
+                self.new_span(begin.span.start(), end, 0),
             ));
         };
 
@@ -277,7 +276,7 @@ impl Parser {
                     else_ifs,
                     otherwise,
                 },
-                Span::new(begin.span.start(), end, 0),
+                self.new_span(begin.span.start(), end, 0),
             ));
         }
 
@@ -306,14 +305,14 @@ impl Parser {
                 else_ifs,
                 otherwise,
             },
-            Span::new(begin.span.start(), end, 0),
+            self.new_span(begin.span.start(), end, 0),
         ))
     }
 
     pub fn loop_expr(&mut self) -> Result<Expr> {
         let loop_ident = self.expect_token(TokenKind::Loop)?;
         let body = self.block()?;
-        let span = Span::new(loop_ident.span.start(), body.span.end(), 0);
+        let span = self.new_span(loop_ident.span.start(), body.span.end(), 0);
 
         Ok(Expr::new(ExprType::Loop { body }, span))
     }
@@ -327,7 +326,7 @@ impl Parser {
         let iterable = self.expression().map(Box::new)?;
 
         let body = self.block()?;
-        let span = Span::new(for_ident.span.start(), body.span.end(), 0);
+        let span = self.new_span(for_ident.span.start(), body.span.end(), 0);
 
         Ok(Expr::new(
             ExprType::For {
@@ -368,7 +367,7 @@ impl Parser {
         }
 
         let right_paren = self.expect_token(TokenKind::RightParen)?;
-        let span = Span::new(token.span.start(), right_paren.span.end(), 0);
+        let span = self.new_span(token.span.start(), right_paren.span.end(), 0);
 
         Ok(Pat::new(PatType::Tuple { pats }, span))
     }
@@ -378,7 +377,7 @@ impl Parser {
         let cond = self.expression().map(Box::new)?;
 
         let body = self.block()?;
-        let span = Span::new(while_ident.span.start(), body.span.end(), 0);
+        let span = self.new_span(while_ident.span.start(), body.span.end(), 0);
 
         Ok(Expr::new(ExprType::While { cond, body }, span))
     }
@@ -387,7 +386,7 @@ impl Parser {
         let until_ident = self.expect_token(TokenKind::Until)?;
         let cond = self.expression().map(Box::new)?;
         let body = self.block()?;
-        let span = Span::new(until_ident.span.start(), body.span.end(), 0);
+        let span = self.new_span(until_ident.span.start(), body.span.end(), 0);
 
         Ok(Expr::new(ExprType::Until { cond, body }, span))
     }
@@ -409,7 +408,8 @@ impl Parser {
             LambdaBody::Expr(self.expression().map(Box::new)?)
         };
 
-        let mut span = Span::new(slash.span.start(), body.span().end(), 0);
+        let span = self.new_span(slash.span.start(), body.span().end(), 0);
+
         Ok(Expr {
             ty: ExprType::Lambda { args, body },
             span,
@@ -445,7 +445,7 @@ impl Parser {
                 ty,
                 initialize: inits,
             },
-            Span::new(span_start, span_end, 0),
+            self.new_span(span_start, span_end, 0),
         ))
     }
 
@@ -473,7 +473,7 @@ impl Parser {
         self.lexemes.advance();
 
         let rvalue = self.assignment()?;
-        let span = Span::new(lvalue.span.start(), rvalue.span.end(), 0);
+        let span = self.new_span(lvalue.span.start(), rvalue.span.end(), 0);
 
         let expr_ty = ExprType::Assign {
             lvalue: Box::new(lvalue),
@@ -490,7 +490,7 @@ impl Parser {
 
         while self.consume_if(TokenKind::BitOr) {
             let rhs = self.bitwise_xor()?;
-            let span = Span::new(start, rhs.span.end(), 0);
+            let span = self.new_span(start, rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -509,7 +509,7 @@ impl Parser {
 
         while self.consume_if(TokenKind::Xor) {
             let rhs = self.bitwise_and()?;
-            let span = Span::new(start, rhs.span.end(), 0);
+            let span = self.new_span(start, rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -528,7 +528,7 @@ impl Parser {
 
         while self.consume_if(TokenKind::BitAnd) {
             let rhs = self.logic_or()?;
-            let span = Span::new(start, rhs.span.end(), 0);
+            let span = self.new_span(start, rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -547,7 +547,7 @@ impl Parser {
 
         while self.consume_if(TokenKind::LogicalOr) {
             let rhs = self.logic_and()?;
-            let span = Span::new(start, rhs.span.end(), 0);
+            let span = self.new_span(start, rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -566,7 +566,7 @@ impl Parser {
 
         while self.consume_if(TokenKind::LogicalAnd) {
             let rhs = self.equality()?;
-            let span = Span::new(start, rhs.span.end(), 0);
+            let span = self.new_span(start, rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -591,7 +591,7 @@ impl Parser {
             };
 
             let rhs = self.comparison()?;
-            let span = Span::new(lhs.span.start(), rhs.span.end(), 0);
+            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -622,7 +622,7 @@ impl Parser {
             };
 
             let rhs = self.bit_shifts()?;
-            let span = Span::new(lhs.span.start(), rhs.span.end(), 0);
+            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -647,7 +647,7 @@ impl Parser {
             };
 
             let rhs = self.term().map(Box::new)?;
-            let span = Span::new(lhs.span.start(), rhs.span.end(), 0);
+            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
 
             lhs = Expr::new(
                 ExprType::BinaryExpr {
@@ -675,7 +675,7 @@ impl Parser {
             };
 
             let rhs = self.factor()?;
-            let span = Span::new(lhs.span.start(), rhs.span.end(), 0);
+            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -700,7 +700,7 @@ impl Parser {
             };
 
             let rhs = self.unary()?;
-            let span = Span::new(lhs.span.start(), rhs.span.end(), 0);
+            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -726,7 +726,7 @@ impl Parser {
             };
 
             let primary = self.unary()?;
-            let span = Span::new(tok.span.start(), primary.span.end(), 0);
+            let span = self.new_span(tok.span.start(), primary.span.end(), 0);
             let expr_ty = ExprType::UnaryExpr {
                 op,
                 target: Box::new(primary),
@@ -766,7 +766,7 @@ impl Parser {
                 let field = self.fun_call().map(Box::new)?;
                 span_end = field.span.end();
 
-                let span = Span::new(span_start, span_end, 0);
+                let span = self.new_span(span_start, span_end, 0);
                 let old_expr = Expr::new(exprty, span);
 
                 exprty = ExprType::FieldAccess {
@@ -775,7 +775,7 @@ impl Parser {
                 }
             }
 
-            return Ok(Expr::new(exprty, Span::new(span_start, span_end, 0)));
+            return Ok(Expr::new(exprty, self.new_span(span_start, span_end, 0)));
         };
 
         Ok(lvalue)
@@ -795,7 +795,7 @@ impl Parser {
             }
 
             let end_paren = self.expect_token(TokenKind::RightParen)?;
-            let span = Span::new(callee.span.start(), end_paren.span.end(), 0);
+            let span = self.new_span(callee.span.start(), end_paren.span.end(), 0);
 
             return Ok(Expr::new(
                 ExprType::FunCall {
@@ -839,7 +839,7 @@ impl Parser {
 
                 let token = self.lexemes.peek_token();
                 if token.kind == TokenKind::RightParen {
-                    span = Span::new(span.start(), token.span.end(), 0);
+                    span = self.new_span(span.start(), token.span.end(), 0);
                     Some(ExprType::Group(Box::new(expr)))
                 } else {
                     return self.error_out(
@@ -891,6 +891,10 @@ impl Parser {
         }
 
         false
+    }
+
+    fn new_span(&self, start: usize, end: usize, line: u32) -> Span {
+        Span::new(start, end, line, self.lexemes.source_id)
     }
 
     // except eof

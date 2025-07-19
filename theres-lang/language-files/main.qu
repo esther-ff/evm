@@ -38,3 +38,5 @@ fun main(arg2: type, arg1: type) => type {
 
    (\x => x + 1)().meow();
 }
+
+fun testBroken(

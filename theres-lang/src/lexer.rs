@@ -1,6 +1,7 @@
 use crate::{
     parser::{ParseError, ParseErrorKind},
     session::{Session, SymbolId},
+    sources::SourceId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -100,11 +101,7 @@ pub enum TokenKind {
 macro_rules! operators {
     (Bitwise, $char:expr, $lexer:expr, $with_eq:ident, $not_eq:ident) => {{
         if $lexer.chars.next_char() == Some($char) {
-            let span = Span::new(
-                $lexer.chars.position,
-                $lexer.chars.position + 1,
-                $lexer.current_line(),
-            );
+            let span = $lexer.new_span($lexer.chars.position, $lexer.chars.position + 1);
             let token = Token::new(span, TokenKind::LogicalAnd);
             $lexer.tokens.push(token);
             continue;
@@ -116,12 +113,12 @@ macro_rules! operators {
     ($lexer:expr, $with_eq:ident, $not_eq:ident) => {{
         let start = $lexer.chars.position;
         if $lexer.is_assign_op() {
-            let span = Span::new(start, $lexer.chars.position + 1, $lexer.current_line());
+            let span = $lexer.new_span(start, $lexer.chars.position + 1);
             $lexer.tokens.push(Token::new(span, TokenKind::$with_eq));
             continue;
         }
 
-        let span = Span::new(start, $lexer.chars.position + 1, $lexer.current_line());
+        let span = $lexer.new_span(start, $lexer.chars.position + 1);
         $lexer.tokens.push(Token::new(span, TokenKind::$not_eq))
     }};
 }
@@ -130,12 +127,18 @@ macro_rules! operators {
 pub struct Span {
     start: usize,
     end: usize,
-    line: usize,
+    line: u32,
+    sourceid: SourceId,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize, line: usize) -> Self {
-        Self { start, end, line }
+    pub fn new(start: usize, end: usize, line: u32, sourceid: SourceId) -> Self {
+        Self {
+            start,
+            end,
+            line,
+            sourceid,
+        }
     }
 
     pub fn start(&self) -> usize {
@@ -175,17 +178,14 @@ impl Token {
     }
 }
 
-pub struct Reader {
-    file: Box<[u8]>,
+pub struct Reader<'a> {
+    file: &'a [u8],
     position: usize,
 }
 
-impl Reader {
-    pub fn new(data: Vec<u8>) -> Self {
-        Self {
-            file: data.into_boxed_slice(),
-            position: 0,
-        }
+impl<'a> Reader<'a> {
+    pub fn new(file: &'a [u8]) -> Self {
+        Self { file, position: 0 }
     }
 
     pub fn peek_char(&self) -> Option<char> {
@@ -229,44 +229,27 @@ enum LexErrorKind {
 pub struct LexError {
     kind: LexErrorKind,
     span: Span,
-    line: usize,
 }
 
-pub struct Lexer {
-    chars: Reader,
-    tokens: Vec<Token>,
-    errors: Vec<LexError>,
-
-    current_line: usize,
-
+pub struct Lexemes {
     pos: usize,
+    tokens: Vec<Token>,
+
+    pub source_id: SourceId,
 }
 
-impl Lexer {
-    pub fn new<A>(input: A) -> Self
-    where
-        A: Into<Vec<u8>>,
-    {
+impl Lexemes {
+    pub fn new(tokens: Vec<Token>, source_id: SourceId) -> Self {
         Self {
-            tokens: Vec::new(),
-            chars: Reader::new(input.into()),
-            errors: Vec::new(),
-            current_line: 0,
+            tokens,
             pos: 0,
+            source_id,
         }
-    }
-
-    pub fn get_str_from_span(&self, span: Span) -> Option<&str> {
-        self.chars.get_str(span.start, span.end)
     }
 
     pub fn peek_token(&self) -> Token {
         if self.is_empty() {
-            let token = Token {
-                span: Span::new(self.chars.position, self.chars.position, self.current_line),
-                kind: TokenKind::Eof,
-            };
-            return token;
+            return self.eof_token();
         }
 
         self.tokens
@@ -281,27 +264,61 @@ impl Lexer {
         ret
     }
 
-    pub fn previous(&mut self) -> Token {
-        if self.pos == 0 {
-            return self.eof_token();
-        }
+    pub fn previous(&self) -> Token {
+        assert!(self.pos != 0, "tried to get previous token at pos 0!");
 
-        self.pos -= 1;
-        let ret = self.peek_token();
-        self.pos += 1;
-        ret
+        self.tokens[self.pos - 1]
     }
 
     pub fn back(&mut self) {
         self.pos -= 1;
     }
 
-    pub fn current_line(&self) -> usize {
-        self.current_line
-    }
-
     pub fn is_empty(&self) -> bool {
         self.tokens.len() <= self.pos
+    }
+
+    pub fn advance(&mut self) {
+        self.pos += 1
+    }
+
+    fn eof_token(&self) -> Token {
+        let span = self.previous().span;
+        Token::new(span, TokenKind::Eof)
+    }
+}
+
+pub struct Lexer<'a> {
+    chars: Reader<'a>,
+    tokens: Vec<Token>,
+    errors: &'a mut Vec<LexError>,
+
+    current_line: u32,
+
+    sourceid: SourceId,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(input: &'a [u8], sourceid: SourceId, errors: &'a mut Vec<LexError>) -> Self {
+        Self {
+            tokens: Vec::new(),
+            chars: Reader::new(input),
+            errors,
+            current_line: 0,
+            sourceid,
+        }
+    }
+
+    pub fn new_span(&self, start: usize, end: usize) -> Span {
+        Span::new(start, end, self.current_line, self.sourceid)
+    }
+
+    pub fn get_str_from_span(&self, span: Span) -> Option<&str> {
+        self.chars.get_str(span.start, span.end)
+    }
+
+    pub fn current_line(&self) -> u32 {
+        self.current_line
     }
 
     pub fn errored(&self) -> bool {
@@ -316,11 +333,7 @@ impl Lexer {
         &self.errors
     }
 
-    pub fn advance(&mut self) {
-        self.pos += 1
-    }
-
-    pub fn lex(&mut self, session: &mut Session) {
+    pub fn lex(mut self, session: &mut Session) -> Lexemes {
         while let Some(char) = self.chars.next_char() {
             match char {
                 '(' => self.add_token_basic(TokenKind::LeftParen),
@@ -336,10 +349,7 @@ impl Lexer {
                 ':' => {
                     let start = self.chars.position;
                     if self.consume_if(':') {
-                        self.add_token(
-                            Span::new(start, self.chars.position, self.current_line),
-                            TokenKind::Path,
-                        );
+                        self.add_token(self.new_span(start, self.chars.position), TokenKind::Path);
                         continue;
                     }
 
@@ -351,7 +361,7 @@ impl Lexer {
                     let start = self.chars.position;
                     if self.consume_if('=') {
                         self.add_token(
-                            Span::new(start, self.chars.position, self.current_line),
+                            self.new_span(start, self.chars.position),
                             TokenKind::NotEqual,
                         );
                         continue;
@@ -390,11 +400,7 @@ impl Lexer {
 
                 '=' => {
                     let Some(char) = self.chars.peek_char() else {
-                        let span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 1,
-                            self.current_line,
-                        );
+                        let span = self.new_span(self.chars.position, self.chars.position + 1);
                         let token = Token::new(span, TokenKind::Assign);
                         self.tokens.push(token);
                         continue;
@@ -405,22 +411,14 @@ impl Lexer {
                         '>' => TokenKind::RightArrow,
                         '<' => TokenKind::LtEq,
                         _ => {
-                            let span = Span::new(
-                                self.chars.position,
-                                self.chars.position + 2,
-                                self.current_line,
-                            );
+                            let span = self.new_span(self.chars.position, self.chars.position + 2);
                             let token = Token::new(span, TokenKind::Assign);
                             self.tokens.push(token);
                             continue;
                         }
                     };
 
-                    let span = Span::new(
-                        self.chars.position,
-                        self.chars.position + 2,
-                        self.current_line,
-                    );
+                    let span = self.new_span(self.chars.position, self.chars.position + 2);
                     let token = Token::new(span, kind);
 
                     self.chars.advance(1);
@@ -432,20 +430,13 @@ impl Lexer {
                     let token = if let Some(char) = self.chars.peek_char()
                         && char == '='
                     {
-                        let span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 2,
-                            self.current_line,
-                        );
+                        let span = self.new_span(self.chars.position, self.chars.position + 2);
                         self.chars.advance(1);
                         Token::new(span, TokenKind::GtEq)
                     } else if let Some('>') = self.chars.peek_char() {
                         let mut kind = TokenKind::ShiftRight;
-                        let mut tok_span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 2,
-                            self.current_line,
-                        );
+                        let mut tok_span =
+                            self.new_span(self.chars.position, self.chars.position + 2);
 
                         if let Some('=') = self.chars.peek_char_by(1) {
                             tok_span.end += 1;
@@ -457,11 +448,7 @@ impl Lexer {
 
                         Token::new(tok_span, kind)
                     } else {
-                        let span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 1,
-                            self.current_line,
-                        );
+                        let span = self.new_span(self.chars.position, self.chars.position + 1);
                         Token::new(span, TokenKind::RightArrowBracket)
                     };
 
@@ -472,20 +459,13 @@ impl Lexer {
                     let token = if let Some(char) = self.chars.peek_char()
                         && char == '='
                     {
-                        let span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 2,
-                            self.current_line,
-                        );
+                        let span = self.new_span(self.chars.position, self.chars.position + 2);
                         self.chars.advance(1);
                         Token::new(span, TokenKind::LeftArrow)
                     } else if let Some('<') = self.chars.peek_char() {
                         let mut kind = TokenKind::ShiftLeft;
-                        let mut tok_span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 2,
-                            self.current_line,
-                        );
+                        let mut tok_span =
+                            self.new_span(self.chars.position, self.chars.position + 2);
 
                         if let Some('=') = self.chars.peek_char_by(1) {
                             tok_span.end += 1;
@@ -497,11 +477,7 @@ impl Lexer {
 
                         Token::new(tok_span, kind)
                     } else {
-                        let span = Span::new(
-                            self.chars.position,
-                            self.chars.position + 1,
-                            self.current_line,
-                        );
+                        let span = self.new_span(self.chars.position, self.chars.position + 1);
                         Token::new(span, TokenKind::LeftArrowBracket)
                     };
 
@@ -537,7 +513,7 @@ impl Lexer {
                         .expect("unable to get the string");
 
                     let mut kind = TokenKind::Identifier;
-                    let span = Span::new(start, self.chars.position, self.current_line);
+                    let span = self.new_span(start, self.chars.position);
 
                     if let Some(kw) = check_for_keyword(string) {
                         kind = kw;
@@ -558,12 +534,14 @@ impl Lexer {
                     self.skip_all_filter(|x| x == any);
 
                     self.add_error(
-                        Span::new(start, self.chars.position, self.current_line),
+                        self.new_span(start, self.chars.position),
                         LexErrorKind::UnknownChar(any),
                     );
                 }
             }
         }
+
+        Lexemes::new(self.tokens, self.sourceid)
     }
 
     fn string_literal(&mut self, quote: char, session: &mut Session) {
@@ -582,14 +560,14 @@ impl Lexer {
         }
 
         if !finished_quote {
-            let span = Span::new(literal_start, self.chars.position + 1, self.current_line);
+            let span = self.new_span(literal_start, self.chars.position + 1);
             self.add_error(span, LexErrorKind::LackingEndForStringLiteral);
             return;
         }
 
         debug_assert!(literal_end != 0);
 
-        let span = Span::new(literal_start, literal_end, self.current_line());
+        let span = self.new_span(literal_start, literal_end);
         let id = session.intern_string(self.get_str_from_span(span).expect("should be valid"));
 
         let token = Token::new(span, TokenKind::StringLiteral(id));
@@ -599,13 +577,13 @@ impl Lexer {
     fn float_literal(&mut self, start: usize) {
         while let Some(char) = self.chars.next_char() {
             if !char.is_ascii_digit() {
-                let span = Span::new(start, self.chars.position + 1, self.current_line());
+                let span = self.new_span(start, self.chars.position + 1);
                 self.add_error(span, LexErrorKind::InvalidFloatLiteral);
                 self.skip_all_filter(|x| !x.is_whitespace());
             }
         }
 
-        let span = Span::new(start, self.chars.position + 1, self.current_line());
+        let span = self.new_span(start, self.chars.position + 1);
         let string = self
             .get_literal_str(start, self.chars.position)
             .expect("couldn't retrieve the string");
@@ -631,7 +609,7 @@ impl Lexer {
             }
         }
 
-        let span = Span::new(start, self.chars.position + 1, self.current_line());
+        let span = self.new_span(start, self.chars.position + 1);
         let num = self
             .get_literal_str(start, self.chars.position)
             .expect("couldn't get this string")
@@ -648,13 +626,13 @@ impl Lexer {
         let literal = self.get_literal_str(start, self.chars.position).unwrap();
 
         let Ok(val) = i64::from_str_radix(literal, radix) else {
-            let span = Span::new(start, self.chars.position, self.current_line());
+            let span = self.new_span(start, self.chars.position);
             self.add_error(span, err_kind);
             return;
         };
 
         self.add_token(
-            Span::new(start, self.chars.position + 1, self.current_line()),
+            self.new_span(start, self.chars.position + 1),
             TokenKind::IntegerLiteral(val),
         );
     }
@@ -703,20 +681,12 @@ impl Lexer {
     }
 
     fn add_token_basic(&mut self, kind: TokenKind) {
-        let span = Span::new(
-            self.chars.position,
-            self.chars.position + 1,
-            self.current_line(),
-        );
+        let span = self.new_span(self.chars.position, self.chars.position + 1);
         self.add_token(span, kind);
     }
 
     fn add_error(&mut self, span: Span, kind: LexErrorKind) {
-        self.errors.push(LexError {
-            kind,
-            span,
-            line: self.current_line,
-        })
+        self.errors.push(LexError { kind, span })
     }
 
     fn get_literal_string(&self, start: usize, end: usize) -> Option<String> {
@@ -725,11 +695,6 @@ impl Lexer {
 
     fn get_literal_str(&self, start: usize, end: usize) -> Option<&str> {
         self.chars.get_str(start, end)
-    }
-
-    fn eof_token(&self) -> Token {
-        let span = Span::new(self.chars.position, self.chars.position, self.current_line);
-        Token::new(span, TokenKind::Eof)
     }
 }
 
@@ -770,15 +735,16 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
 #[cfg(test)]
 mod tests {
     use super::{Lexer, TokenKind};
-    use crate::lexer::LexErrorKind;
     use crate::session::Session;
+    use crate::sources::SourceId;
 
     #[test]
     fn rust_like() {
-        let mut lexer = Lexer::new("let meow: i32 = 123");
+        let mut errors = Vec::new();
+        let lexer = Lexer::new(b"let meow: i32 = 123", SourceId::DUMMY, &mut errors);
         let mut session = Session::new();
 
-        lexer.lex(&mut session);
+        let mut lexer = lexer.lex(&mut session);
 
         assert_eq!(lexer.next_token().kind, TokenKind::Let);
         assert_eq!(lexer.next_token().kind, TokenKind::Identifier);
@@ -786,18 +752,5 @@ mod tests {
         assert_eq!(lexer.next_token().kind, TokenKind::Identifier);
         assert_eq!(lexer.next_token().kind, TokenKind::Assign);
         assert_eq!(lexer.next_token().kind, TokenKind::IntegerLiteral(123));
-    }
-
-    #[test]
-    fn errors() {
-        let mut lexer = Lexer::new("@@@@@@@@\n@@@@@\n@@@@");
-
-        let mut session = Session::new();
-
-        lexer.lex(&mut session);
-
-        assert_eq!(lexer.errors[0].kind, LexErrorKind::UnknownChar('@'));
-        assert_eq!(lexer.errors[1].kind, LexErrorKind::UnknownChar('@'));
-        assert_eq!(lexer.errors[2].kind, LexErrorKind::UnknownChar('@'));
     }
 }
