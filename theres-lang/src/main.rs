@@ -1,6 +1,8 @@
+#![warn(clippy::all)]
 mod arena;
 mod ast;
 mod driver;
+mod errors;
 mod lexer;
 mod parser;
 mod session;
@@ -14,7 +16,7 @@ use std::{
 use crate::{driver::Compiler, sources::FileManager};
 
 fn main() -> io::Result<()> {
-    println!("welcome to the theres evm complier!");
+    println!("welcome to the theres evm compiler!");
     println!("puppygirl :3");
 
     let mut args = std::env::args().skip(1);

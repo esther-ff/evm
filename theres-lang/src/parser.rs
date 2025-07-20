@@ -48,7 +48,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn errors(&self) -> &[ParseError] {
-        &self.errors
+        self.errors
     }
 
     pub fn decls(&self) -> &[AstDef] {
@@ -86,20 +86,23 @@ impl<'a> Parser<'a> {
         Ok(decl)
     }
 
+    pub fn ty(&mut self) -> Result<Ty> {
+        todo!()
+    }
+
     fn function_declaration(&mut self) -> Result<DefKind> {
         let start_span = self.expect_token(TokenKind::Function)?.span.start();
-        let name = self.expect_token(TokenKind::Identifier)?;
+        let name = self.expect_ident_as_name()?;
         self.expect_token(TokenKind::LeftParen)?;
         let fun_args = self.fun_args()?;
 
         self.expect_token(TokenKind::RightParen)?;
         self.expect_token(TokenKind::RightArrow)?;
 
-        let ret_type = self.expect_token(TokenKind::Identifier)?;
+        let ret_type = self.ty()?;
         let block = self.block()?;
 
         let span = self.new_span(start_span, block.span.end(), 0);
-
         Ok(DefKind::function(name, fun_args, block, ret_type, span))
     }
 
@@ -120,9 +123,9 @@ impl<'a> Parser<'a> {
     }
 
     fn arg(&mut self) -> Result<Arg> {
-        let name = self.expect_token(TokenKind::Identifier)?;
+        let name = self.expect_ident_as_name()?;
         self.expect_token(TokenKind::Colon)?;
-        let ty = self.expect_token(TokenKind::Identifier)?;
+        let ty = self.ty()?;
 
         Ok(Arg::new(name, ty))
     }
@@ -169,11 +172,11 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let name = self.expect_token(TokenKind::Identifier)?;
+        let name = self.expect_ident_as_name()?;
 
         self.expect_token(TokenKind::Colon)?;
 
-        let ty = self.expect_token(TokenKind::Identifier)?;
+        let ty = self.ty()?;
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
 
         let initializer: Option<Expr> = if tok.kind == TokenKind::Semicolon {
@@ -190,11 +193,11 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenKind::Global)?;
 
         let constant = self.lexemes.peek_token().to_err_if_eof()?.kind == TokenKind::Const;
-        let name = self.expect_token(TokenKind::Identifier)?;
+        let name = self.expect_ident_as_name()?;
 
         self.expect_token(TokenKind::Colon)?;
 
-        let ty = self.expect_token(TokenKind::Identifier)?;
+        let ty = self.ty()?;
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
 
         self.expect_token(TokenKind::Assign)?;
@@ -239,9 +242,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> Result<Expr> {
-        match self.lexemes.peek_token().kind {
-            _ => self.assignment(),
-        }
+        self.assignment()
     }
 
     pub fn if_expr(&mut self) -> Result<Expr> {
@@ -345,8 +346,9 @@ impl<'a> Parser<'a> {
             return Ok(Pat::new(PatType::Wild, token.span));
         }
 
-        if token.kind == TokenKind::Identifier {
-            return Ok(Pat::new(PatType::Ident { token }, token.span));
+        if let TokenKind::Identifier(id) = token.kind {
+            let name = Name::new(id, token.span);
+            return Ok(Pat::new(PatType::Ident { name }, token.span));
         }
 
         if token.kind != TokenKind::LeftParen {
@@ -420,7 +422,7 @@ impl<'a> Parser<'a> {
         let left_sq = self.expect_token(TokenKind::LeftSqBracket)?;
         let size = self.primary().map(Box::new)?;
         self.expect_token(TokenKind::RightSqBracket)?;
-        let ty = self.expect_token(TokenKind::Identifier)?;
+        let ty = self.ty()?;
 
         let span_start = left_sq.span.start();
         let mut span_end = ty.span.end();
@@ -851,7 +853,9 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            TokenKind::Identifier => Some(ExprType::Variable { name: token }),
+            TokenKind::Identifier(id) => Some(ExprType::Variable {
+                name: Name::new(id, token.span),
+            }),
 
             any => {
                 return self.error_out(
@@ -893,8 +897,32 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn new_span(&self, start: usize, end: usize, line: u32) -> Span {
-        Span::new(start, end, line, self.lexemes.source_id)
+    fn new_span(&self, start: usize, end: usize, _line: u32) -> Span {
+        Span::new(
+            start,
+            end,
+            self.lexemes.peek_token().span.line,
+            self.lexemes.source_id,
+        )
+    }
+
+    fn expect_ident_as_name(&mut self) -> Result<Name, ParseError> {
+        let tok = self.lexemes.next_token();
+        if tok.is_eof() {
+            return tok.to_err_if_eof().map(|_| unreachable!());
+        }
+
+        if let TokenKind::Identifier(id) = tok.kind {
+            Ok(Name::new(id, tok.span))
+        } else {
+            let str: &'static str = Box::leak(format!("{:#?}", tok.kind).into_boxed_str());
+            let kind = ParseErrorKind::Expected {
+                what: str,
+                got: tok.kind,
+            };
+
+            self.error_out(kind, tok.span)
+        }
     }
 
     // except eof

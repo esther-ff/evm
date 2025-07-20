@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use crate::arena::Id;
 use crate::lexer::Span;
 use crate::session::SymbolId;
-use crate::{arena::Id, lexer::Token};
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum BinOp {
     Add,
@@ -95,7 +95,7 @@ impl Pat {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum PatType {
-    Ident { token: Token },
+    Ident { name: Name },
     Tuple { pats: Vec<Pat> },
     Wild,
 }
@@ -131,7 +131,7 @@ pub enum ExprType {
     },
 
     Variable {
-        name: Token,
+        name: Name,
     },
 
     For {
@@ -167,7 +167,7 @@ pub enum ExprType {
     },
 
     ArrayDecl {
-        ty: Token,
+        ty: Ty,
         size: Box<Expr>,
         initialize: Vec<Expr>,
     },
@@ -198,7 +198,7 @@ pub struct Constraint {
 }
 
 pub struct GenericTyParam {
-    ident: Token,
+    ident: Name,
     constraint: Constraint,
 }
 
@@ -211,8 +211,8 @@ pub enum TyKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Ty {
-    kind: TyKind,
-    span: Span,
+    pub kind: TyKind,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -229,9 +229,9 @@ impl Block {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct FnDecl {
-    name: Token,
+    name: Name,
     args: FnArgs,
-    ret_type: Token,
+    ret_type: Ty,
     block: Block,
     span: Span,
 }
@@ -244,19 +244,18 @@ pub struct FnArgs {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Arg {
-    ident: Token,
-    ty: Token,
+    ident: Name,
+    ty: Ty,
 }
 
 impl Arg {
-    pub fn new(ident: Token, ty: Token) -> Self {
+    pub fn new(ident: Name, ty: Ty) -> Self {
         Self { ident, ty }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VarMode {
-    Global,
     Let,
     Const,
 }
@@ -264,13 +263,13 @@ pub enum VarMode {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct VariableStmt {
     mode: VarMode,
-    name: Token,
+    name: Name,
     initializer: Option<Expr>,
-    ty: Token,
+    ty: Ty,
 }
 
 impl VariableStmt {
-    pub fn new(mode: VarMode, name: Token, initializer: Option<Expr>, ty: Token) -> Self {
+    pub fn new(mode: VarMode, name: Name, initializer: Option<Expr>, ty: Ty) -> Self {
         Self {
             mode,
             name,
@@ -282,9 +281,9 @@ impl VariableStmt {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct GlobalDecl {
-    name: Token,
+    name: Name,
     initializer: Option<Expr>,
-    ty: Token,
+    ty: Ty,
     constant: bool,
 }
 
@@ -324,7 +323,7 @@ pub enum DefKind {
 }
 
 impl DefKind {
-    pub fn function(name: Token, args: FnArgs, block: Block, ret_type: Token, span: Span) -> Self {
+    pub fn function(name: Name, args: FnArgs, block: Block, ret_type: Ty, span: Span) -> Self {
         Self::Function(FnDecl {
             span,
             name,
@@ -334,7 +333,7 @@ impl DefKind {
         })
     }
 
-    pub fn global(name: Token, initializer: Option<Expr>, ty: Token, constant: bool) -> Self {
+    pub fn global(name: Name, initializer: Option<Expr>, ty: Ty, constant: bool) -> Self {
         Self::Global(GlobalDecl {
             name,
             initializer,
@@ -356,5 +355,17 @@ pub struct AstDef {
 impl AstDef {
     pub fn new(kind: DefKind) -> Self {
         Self { kind }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Name {
+    pub interned: SymbolId,
+    pub span: Span,
+}
+
+impl Name {
+    pub fn new(interned: SymbolId, span: Span) -> Self {
+        Self { span, interned }
     }
 }

@@ -89,10 +89,8 @@ impl SourceFile {
     }
 
     pub fn get_lines_from_to(&self, from: usize, to: usize) -> Option<Vec<&str>> {
-        dbg!(&self.lines);
         let slice = self.lines.get(from + 1..to + 1)?;
 
-        dbg!(slice);
         slice
             .iter()
             .map(|span| {

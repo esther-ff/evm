@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem::transmute};
 
 use crate::arena::Arena;
 
@@ -7,55 +7,61 @@ pub struct SymbolId {
     private: u32,
 }
 
+pub struct Interner {
+    map: HashMap<&'static str, SymbolId>,
+    storage: Vec<&'static str>,
+}
+
+impl Interner {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            storage: Vec::new(),
+        }
+    }
+
+    pub fn intern(&mut self, str: &str, arena: &Arena) -> SymbolId {
+        if let Some(present) = self.map.get(str) {
+            return *present;
+        };
+
+        // Safety:
+        //
+        // The interner will live shorter than the entire session
+        let new_str: &'static str = unsafe { transmute(arena.alloc_string(str)) };
+        let id = SymbolId {
+            private: self.storage.len() as u32,
+        };
+
+        self.map.insert(new_str, id);
+        self.storage.push(new_str);
+
+        id
+    }
+}
+
 pub struct Session {
     /// Arena for anything
     /// that doesn't impl `Drop`
     arena: Arena,
 
-    /// Stores SymbolId to ptr relations
-    symbols: HashMap<SymbolId, *const str>,
-
-    /// Next id
-    symbol_id_counter: u32,
+    /// Interner
+    interner: Interner,
 }
 
 impl Session {
     pub fn new() -> Self {
         Self {
             arena: Arena::new(),
-            symbols: HashMap::new(),
-            symbol_id_counter: 0,
+            interner: Interner::new(),
         }
     }
 
     pub fn intern_string(&mut self, str: &str) -> SymbolId {
-        let id = self.new_symbol_id();
-        let reff = self.arena.alloc_string(str);
-
-        let _ = self.symbols.insert(id, reff as *const str);
-
-        id
+        self.interner.intern(str, &self.arena)
     }
 
     pub fn get_string(&self, id: SymbolId) -> &str {
-        let ptr = self
-            .symbols
-            .get(&id)
-            .expect("symbol ids only originate from the session");
-
-        // SAFETY: This pointer is stored in a hashmap
-        // only managed by this `Session`, it was created following
-        // a string being interned, therefore it is a valid pointer
-        // that has it's lifetime bound to the session's lifetime.
-        unsafe { &(**ptr) }
-    }
-
-    fn new_symbol_id(&mut self) -> SymbolId {
-        let old = SymbolId {
-            private: self.symbol_id_counter,
-        };
-        self.symbol_id_counter += 1;
-
-        old
+        self.interner.storage[id.private as usize]
     }
 }

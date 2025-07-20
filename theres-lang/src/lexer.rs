@@ -18,7 +18,7 @@ pub enum TokenKind {
     LeftCurlyBracket,
     RightCurlyBracket,
 
-    Identifier,
+    Identifier(SymbolId),
 
     LeftArrow,
     RightArrow,
@@ -125,10 +125,10 @@ macro_rules! operators {
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Span {
-    start: usize,
-    end: usize,
-    line: u32,
-    sourceid: SourceId,
+    pub start: usize,
+    pub end: usize,
+    pub line: u32,
+    pub sourceid: SourceId,
 }
 
 impl Span {
@@ -216,9 +216,8 @@ impl<'a> Reader<'a> {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-enum LexErrorKind {
+pub enum LexErrorKind {
     InvalidFloatLiteral,
-    InvalidIntegerLiteral,
     InvalidHexLiteral,
     InvalidOctalLiteral,
     LackingEndForStringLiteral,
@@ -226,9 +225,10 @@ enum LexErrorKind {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct LexError {
-    kind: LexErrorKind,
-    span: Span,
+    pub kind: LexErrorKind,
+    pub span: Span,
 }
 
 pub struct Lexemes {
@@ -315,22 +315,6 @@ impl<'a> Lexer<'a> {
 
     pub fn get_str_from_span(&self, span: Span) -> Option<&str> {
         self.chars.get_str(span.start, span.end)
-    }
-
-    pub fn current_line(&self) -> u32 {
-        self.current_line
-    }
-
-    pub fn errored(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
-    pub fn tokens(&self) -> &[Token] {
-        &self.tokens
-    }
-
-    pub fn errors(&self) -> &[LexError] {
-        &self.errors
     }
 
     pub fn lex(mut self, session: &mut Session) -> Lexemes {
@@ -509,15 +493,19 @@ impl<'a> Lexer<'a> {
                     self.skip_all_filter(|x| x.is_alphanumeric() || x == '_');
 
                     let string = self
-                        .get_literal_str(start, self.chars.position)
-                        .expect("unable to get the string");
+                        .chars
+                        .get_str(start, self.chars.position)
+                        .expect("string should be present");
 
-                    let mut kind = TokenKind::Identifier;
                     let span = self.new_span(start, self.chars.position);
 
-                    if let Some(kw) = check_for_keyword(string) {
-                        kind = kw;
-                    }
+                    let kind = if let Some(kw) = check_for_keyword(string) {
+                        kw
+                    } else {
+                        let id = session.intern_string(string);
+
+                        TokenKind::Identifier(id)
+                    };
 
                     let token = Token::new(span, kind);
                     self.tokens.push(token)
@@ -689,10 +677,6 @@ impl<'a> Lexer<'a> {
         self.errors.push(LexError { kind, span })
     }
 
-    fn get_literal_string(&self, start: usize, end: usize) -> Option<String> {
-        self.chars.get_str(start, end).map(ToString::to_string)
-    }
-
     fn get_literal_str(&self, start: usize, end: usize) -> Option<&str> {
         self.chars.get_str(start, end)
     }
@@ -747,9 +731,9 @@ mod tests {
         let mut lexer = lexer.lex(&mut session);
 
         assert_eq!(lexer.next_token().kind, TokenKind::Let);
-        assert_eq!(lexer.next_token().kind, TokenKind::Identifier);
+        assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(..)));
         assert_eq!(lexer.next_token().kind, TokenKind::Colon);
-        assert_eq!(lexer.next_token().kind, TokenKind::Identifier);
+        assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(..)));
         assert_eq!(lexer.next_token().kind, TokenKind::Assign);
         assert_eq!(lexer.next_token().kind, TokenKind::IntegerLiteral(123));
     }

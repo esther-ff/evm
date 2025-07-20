@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::{io, path::Path};
 
 use crate::{
+    errors::Errors,
     lexer::{LexError, Lexer},
     parser::{ParseError, Parser},
     session::Session,
-    sources::{FileManager, Sources},
+    sources::{FileManager, SourceFile, Sources},
 };
 
 pub struct Compiler<T: FileManager> {
@@ -44,16 +45,30 @@ impl<T: FileManager> Compiler<T> {
 
         if !self.lex_errors.is_empty() {
             self.failed = true;
-            todo!("emit errors");
         }
 
         let decls = Parser::new(lexemes, &mut self.parse_errors).parse();
 
         if !self.parse_errors.is_empty() {
             self.failed = true;
-            todo!("emit errors");
         }
 
-        dbg!(decls);
+        self.emit_errors(&src).unwrap();
+
+        if !self.failed {
+            dbg!(decls);
+        }
+    }
+
+    pub fn emit_errors(&mut self, src: &SourceFile) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        let mut errs = Errors::new(&self.lex_errors, &mut stdout);
+
+        errs.print_all(src)?;
+        let mut errs = Errors::new(&self.parse_errors, &mut stdout);
+
+        errs.print_all(src)?;
+
+        Ok(())
     }
 }
