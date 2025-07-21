@@ -11,10 +11,14 @@ globalDecl     → "global" ( "const" )?
   				 IDENT ":" IDENT ("=" expression)? ";" ;
 
 type           → "fun" "(" type ( "," type )* ") "=>" type?
+			   | "[" type "]"
 			   | IDENT
 			   | IDENT "<" genericParams ">"
+			;
 
 genericParams  → typeParam ("," typeParam)*
+			   | type ("," type)*
+
 typeParam      → IDENT ":" typeConstraint?;
 typeConstraint → IDENT ("+" IDENT)*		
 

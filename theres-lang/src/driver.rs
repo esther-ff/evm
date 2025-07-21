@@ -53,6 +53,8 @@ impl<T: FileManager> Compiler<T> {
             self.failed = true;
         }
 
+        dbg!(&self.parse_errors);
+
         self.emit_errors(&src).unwrap();
 
         if !self.failed {

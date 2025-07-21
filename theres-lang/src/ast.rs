@@ -3,6 +3,7 @@
 use crate::arena::Id;
 use crate::lexer::Span;
 use crate::session::SymbolId;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum BinOp {
     Add,
@@ -204,9 +205,16 @@ pub struct GenericTyParam {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TyKind {
+    /// Function/lambda type
+    /// like `fun(...) -> ...`
     Fn { args: Vec<Ty>, ret: Option<Box<Ty>> },
 
-    Regular,
+    /// Array
+    /// like [u64]
+    Array(Box<Ty>),
+
+    /// Regular type like `u32`
+    Regular(SymbolId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

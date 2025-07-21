@@ -144,11 +144,12 @@ where
         dbg!(indent);
         dbg!(origin);
         writeln!(self.writer, "error during {}:", err.phase())?;
-        for (ix, line) in lines
-            .iter()
-            .enumerate()
-            .map(|(ix, line)| (ix + (origin - T::amount_of_extra_lines()), line))
-        {
+        for (ix, line) in lines.iter().enumerate().map(|(ix, line)| {
+            (
+                ix + (origin.saturating_sub(T::amount_of_extra_lines())),
+                line,
+            )
+        }) {
             let msg = if ix == origin {
                 let msg = Message {
                     msg: err.message(),

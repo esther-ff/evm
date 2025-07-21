@@ -1,3 +1,5 @@
+use std::panic::Location;
+
 use crate::{
     parser::{ParseError, ParseErrorKind},
     session::{Session, SymbolId},
@@ -234,6 +236,7 @@ pub struct LexError {
 pub struct Lexemes {
     pos: usize,
     tokens: Vec<Token>,
+    last_token: Option<Token>,
 
     pub source_id: SourceId,
 }
@@ -241,6 +244,7 @@ pub struct Lexemes {
 impl Lexemes {
     pub fn new(tokens: Vec<Token>, source_id: SourceId) -> Self {
         Self {
+            last_token: None,
             tokens,
             pos: 0,
             source_id,
@@ -261,11 +265,15 @@ impl Lexemes {
     pub fn next_token(&mut self) -> Token {
         let ret = self.peek_token();
         self.pos += 1;
+        self.last_token.replace(ret);
         ret
     }
 
     pub fn previous(&self) -> Token {
         assert!(self.pos != 0, "tried to get previous token at pos 0!");
+        if self.tokens.len() <= self.pos {
+            return self.eof_token();
+        }
 
         self.tokens[self.pos - 1]
     }
@@ -283,7 +291,7 @@ impl Lexemes {
     }
 
     fn eof_token(&self) -> Token {
-        let span = self.previous().span;
+        let span = self.last_token.unwrap().span;
         Token::new(span, TokenKind::Eof)
     }
 }
