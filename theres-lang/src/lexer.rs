@@ -1,5 +1,3 @@
-use std::panic::Location;
-
 use crate::{
     parser::{ParseError, ParseErrorKind},
     session::{Session, SymbolId},
@@ -523,7 +521,7 @@ impl<'a> Lexer<'a> {
 
                 '\\' => self.add_token_basic(TokenKind::Backslash),
 
-                ' ' => {}
+                ' ' | '\t' => {}
 
                 any => {
                     let start = self.chars.position - 1;

@@ -78,7 +78,7 @@ factor         → unary ( ( "/" | "*" ) unary )* ;
 unary          → ( "!" | "-" ) unary
                | fieldAccess ;
 
-fieldAccess    → funCall "." expression ("." IDENT)?* ;
+fieldAccess    → funCall "." IDENT ;
 
 funCall        → primary "(" expression? ("," expression)? ")" ;
 

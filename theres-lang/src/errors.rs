@@ -9,7 +9,7 @@ use crate::{
 pub trait TheresError {
     /// Phase of compilation the error was found in
     /// like "lexing" or "parsing"
-    fn phase(&self) -> &'static str;
+    fn phase() -> &'static str;
 
     /// Span of the error
     fn span(&self) -> Span;
@@ -27,7 +27,7 @@ pub trait TheresError {
 }
 
 impl TheresError for ParseError {
-    fn phase(&self) -> &'static str {
+    fn phase() -> &'static str {
         "parsing"
     }
 
@@ -36,13 +36,25 @@ impl TheresError for ParseError {
     }
 
     fn message(&self) -> Cow<'static, str> {
-        "error occured, todo! this message!".into()
+        match self.kind {
+            crate::parser::ParseErrorKind::Expected { what, got } => {
+                format!("expected {what} but got: {got:?}").into()
+            }
+
+            crate::parser::ParseErrorKind::ExpectedUnknown { what } => format!("got {what}").into(),
+
+            crate::parser::ParseErrorKind::EndOfFile => "unexpected end-of-file".into(),
+
+            crate::parser::ParseErrorKind::WrongUnaryOp { offender } => {
+                format!("can't execute {offender:?} as unary operator").into()
+            }
+        }
     }
 }
 
 impl TheresError for LexError {
-    fn phase(&self) -> &'static str {
-        "parsing"
+    fn phase() -> &'static str {
+        "lexing"
     }
 
     fn span(&self) -> Span {
@@ -50,6 +62,7 @@ impl TheresError for LexError {
     }
 
     fn message(&self) -> Cow<'static, str> {
+        dbg!(self);
         "error occured, todo! this message!".into()
     }
 }
@@ -106,17 +119,12 @@ impl<'a> ErrorLine<'a> {
 
 pub struct Errors<'e, T, O> {
     errs: &'e [T],
-    longest_line_num: usize,
     writer: &'e mut O,
 }
 
 impl<'e, T, O> Errors<'e, T, O> {
     pub fn new(errs: &'e [T], writer: &'e mut O) -> Self {
-        Self {
-            longest_line_num: 0,
-            writer,
-            errs,
-        }
+        Self { writer, errs }
     }
 }
 
@@ -143,7 +151,7 @@ where
 
         dbg!(indent);
         dbg!(origin);
-        writeln!(self.writer, "error during {}:", err.phase())?;
+        writeln!(self.writer, "error during {}:", T::phase())?;
         for (ix, line) in lines.iter().enumerate().map(|(ix, line)| {
             (
                 ix + (origin.saturating_sub(T::amount_of_extra_lines())),
