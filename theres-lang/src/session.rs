@@ -7,6 +7,10 @@ pub struct SymbolId {
     private: u32,
 }
 
+impl SymbolId {
+    pub const DUMMY: Self = Self { private: u32::MAX };
+}
+
 pub struct Interner {
     map: HashMap<&'static str, SymbolId>,
     storage: Vec<&'static str>,

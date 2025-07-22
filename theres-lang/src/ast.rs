@@ -215,6 +215,10 @@ pub enum TyKind {
 
     /// Regular type like `u32`
     Regular(SymbolId),
+
+    /// `self` argument
+    /// in methods
+    MethodSelf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -236,17 +240,33 @@ impl Block {
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct FnDecl {
+pub struct FnSig {
     name: Name,
     args: FnArgs,
     ret_type: Ty,
+    pub span: Span,
+}
+
+impl FnSig {
+    pub fn new(name: Name, span: Span, ret_type: Ty, args: Vec<Arg>) -> Self {
+        FnSig {
+            name,
+            ret_type,
+            args: FnArgs { args },
+            span,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct FnDecl {
+    sig: FnSig,
     block: Block,
     span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct FnArgs {
-    pub has_self: bool,
     pub args: Vec<Arg>,
 }
 
@@ -326,19 +346,14 @@ impl Id for AstId {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum DefKind {
     Function(FnDecl),
-    Global(GlobalDecl), // todo
-                        // Expr(Expr),
+    Global(GlobalDecl),
+    Instance(Instance),
+    Interface(Interface),
 }
 
 impl DefKind {
-    pub fn function(name: Name, args: FnArgs, block: Block, ret_type: Ty, span: Span) -> Self {
-        Self::Function(FnDecl {
-            span,
-            name,
-            args,
-            block,
-            ret_type,
-        })
+    pub fn function(block: Block, span: Span, sig: FnSig) -> Self {
+        Self::Function(FnDecl { span, block, sig })
     }
 
     pub fn global(name: Name, initializer: Option<Expr>, ty: Ty, constant: bool) -> Self {
@@ -350,9 +365,12 @@ impl DefKind {
         })
     }
 
-    // pub fn expr(expr: Expr) -> Self {
-    //     Self::Expr(expr)
-    // }
+    pub fn instance(name: Name, span: Span, fields: Vec<Field>, methods: Vec<FnDecl>) -> Self {
+        Self::Instance(Instance::new(name, span, fields, methods))
+    }
+    pub fn interface(name: Name, span: Span, methods: Vec<InterfaceMethod>) -> Self {
+        Self::Interface(Interface::new(span, name, methods))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -375,5 +393,66 @@ pub struct Name {
 impl Name {
     pub fn new(interned: SymbolId, span: Span) -> Self {
         Self { span, interned }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Field {
+    constant: bool,
+    name: Name,
+    ty: Ty,
+    span: Span,
+}
+
+impl Field {
+    pub fn new(constant: bool, name: Name, ty: Ty, span: Span) -> Self {
+        Self {
+            constant,
+            name,
+            ty,
+            span,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct Instance {
+    name: Name,
+    span: Span,
+    fields: Vec<Field>,
+    methods: Vec<FnDecl>,
+}
+
+impl Instance {
+    pub fn new(name: Name, span: Span, fields: Vec<Field>, methods: Vec<FnDecl>) -> Self {
+        Self {
+            name,
+            span,
+            fields,
+            methods,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub enum InterfaceMethod {
+    Provided(FnDecl),
+    Signature(FnSig),
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct Interface {
+    span: Span,
+    name: Name,
+    methods: Vec<InterfaceMethod>,
+}
+
+impl Interface {
+    pub fn new(span: Span, name: Name, methods: Vec<InterfaceMethod>) -> Self {
+        Self {
+            span,
+            name,
+            methods,
+        }
     }
 }
