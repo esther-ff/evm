@@ -131,6 +131,12 @@ pub enum ExprType {
         args: Vec<Expr>,
     },
 
+    MethodCall {
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
+        name: Name,
+    },
+
     Variable {
         name: Name,
     },
@@ -176,6 +182,10 @@ pub enum ExprType {
     Lambda {
         args: Vec<Pat>,
         body: LambdaBody,
+    },
+
+    Return {
+        ret: Option<Box<Expr>>,
     },
 }
 
@@ -260,9 +270,9 @@ impl FnSig {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct FnDecl {
-    sig: FnSig,
-    block: Block,
-    span: Span,
+    pub sig: FnSig,
+    pub block: Block,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -349,6 +359,7 @@ pub enum DefKind {
     Global(GlobalDecl),
     Instance(Instance),
     Interface(Interface),
+    Apply(Apply),
 }
 
 impl DefKind {
@@ -365,11 +376,11 @@ impl DefKind {
         })
     }
 
-    pub fn instance(name: Name, span: Span, fields: Vec<Field>, methods: Vec<FnDecl>) -> Self {
+    pub fn instance(name: Name, span: Span, fields: Vec<Field>, methods: Option<Block>) -> Self {
         Self::Instance(Instance::new(name, span, fields, methods))
     }
-    pub fn interface(name: Name, span: Span, methods: Vec<InterfaceMethod>) -> Self {
-        Self::Interface(Interface::new(span, name, methods))
+    pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
+        Self::Interface(Interface::new(span, name, entries))
     }
 }
 
@@ -420,39 +431,72 @@ pub struct Instance {
     name: Name,
     span: Span,
     fields: Vec<Field>,
-    methods: Vec<FnDecl>,
+    assoc: Option<Block>,
 }
 
 impl Instance {
-    pub fn new(name: Name, span: Span, fields: Vec<Field>, methods: Vec<FnDecl>) -> Self {
+    pub fn new(name: Name, span: Span, fields: Vec<Field>, assoc: Option<Block>) -> Self {
         Self {
             name,
             span,
             fields,
-            methods,
+            assoc,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum InterfaceMethod {
-    Provided(FnDecl),
-    Signature(FnSig),
+pub struct AnonConst {
+    expr: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct AssocConst {
+    value: AnonConst,
+    span: Span,
+    ty: Ty,
+    name: Name,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Interface {
     span: Span,
     name: Name,
-    methods: Vec<InterfaceMethod>,
+    entries: Vec<InterfaceEntry>,
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub enum InterfaceEntry {
+    ProvidedFn(FnDecl),
+    TemplateFn(FnSig),
+    Const(VariableStmt),
 }
 
 impl Interface {
-    pub fn new(span: Span, name: Name, methods: Vec<InterfaceMethod>) -> Self {
+    pub fn new(span: Span, name: Name, entries: Vec<InterfaceEntry>) -> Self {
         Self {
             span,
             name,
-            methods,
+            entries,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub struct Apply {
+    interface: Name,
+    receiver: Ty,
+    span: Span,
+    items: Vec<InterfaceEntry>,
+}
+
+impl Apply {
+    pub fn new(interface: Name, receiver: Ty, span: Span, items: Vec<InterfaceEntry>) -> Self {
+        Self {
+            interface,
+            receiver,
+            span,
+            items,
         }
     }
 }

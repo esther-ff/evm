@@ -1,3 +1,5 @@
+use std::panic::Location;
+
 use crate::ast::*;
 use crate::lexer::{Lexemes, Span, Token, TokenKind};
 use crate::session::SymbolId;
@@ -10,6 +12,7 @@ pub enum ParseErrorKind {
     Expected { what: &'static str, got: TokenKind },
     ExpectedUnknown { what: &'static str },
     WrongUnaryOp { offender: Token },
+    FunctionWithoutBody,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -22,6 +25,11 @@ impl ParseError {
     pub fn new(token_span: Span, kind: ParseErrorKind) -> Self {
         Self { token_span, kind }
     }
+}
+
+pub enum FunctionPart {
+    Signature(FnSig),
+    Full(FnDecl),
 }
 
 pub struct Parser<'a> {
@@ -70,13 +78,17 @@ impl<'a> Parser<'a> {
         let decl = match tok.kind {
             TokenKind::Function => self.function_declaration()?,
             TokenKind::Global => self.global_variable_decl()?,
+            TokenKind::Instance => self.instance_decl()?,
+            TokenKind::Interface => self.interface_decl()?,
+            TokenKind::Apply => self.apply_interface()?,
             TokenKind::Eof => return tok.to_err_if_eof().map(|_| unreachable!()),
 
             any => {
                 let err = ParseErrorKind::Expected {
-                    what: "`fun` or `global`",
+                    what: "`fun`, `global`, `instance`, `inteface` or `apply`",
                     got: any,
                 };
+
                 return self.error_out(err, tok.span);
             }
         };
@@ -174,11 +186,33 @@ impl<'a> Parser<'a> {
     }
 
     fn function_declaration(&mut self) -> Result<DefKind> {
-        let sig = self.function_signature()?;
-        let block = self.block()?;
+        match self.function()? {
+            FunctionPart::Full(decl) => Ok(DefKind::Function(decl)),
 
-        let span = self.new_span(sig.span.end(), block.span.end(), 0);
-        Ok(DefKind::function(block, span, sig))
+            FunctionPart::Signature(sig) => {
+                self.error_out(ParseErrorKind::FunctionWithoutBody, sig.span)
+            }
+        }
+    }
+
+    fn function(&mut self) -> Result<FunctionPart> {
+        let sig = self.function_signature()?;
+
+        let maybe_block = if self.lexemes.peek_token().kind == TokenKind::LeftCurlyBracket {
+            Some(self.block()?)
+        } else {
+            None
+        };
+
+        match maybe_block {
+            Some(block) => {
+                let span = self.new_span(sig.span.end(), block.span.end(), 0);
+                let fndecl = FnDecl { block, sig, span };
+                Ok(FunctionPart::Full(fndecl))
+            }
+
+            None => Ok(FunctionPart::Signature(sig)),
+        }
     }
 
     fn fun_args(&mut self) -> Result<Vec<Arg>> {
@@ -222,21 +256,154 @@ impl<'a> Parser<'a> {
 
             if second_tok.kind == TokenKind::Comma {
                 self.lexemes.advance();
-                let arg = Arg::new(
-                    Name::new(SymbolId::DUMMY, tok.span),
-                    Ty {
-                        kind: TyKind::MethodSelf,
-                        span: tok.span,
-                    },
-                );
-
-                return Some(arg);
             }
 
-            self.lexemes.back();
+            let arg = Arg::new(
+                Name::new(SymbolId::DUMMY, tok.span),
+                Ty {
+                    kind: TyKind::MethodSelf,
+                    span: tok.span,
+                },
+            );
+
+            return Some(arg);
         }
 
         None
+    }
+
+    fn fn_call_args(&mut self) -> Result<Vec<Expr>> {
+        if self.lexemes.peek_token().kind == TokenKind::RightParen {
+            return Ok(Vec::new());
+        }
+
+        let mut args = vec![self.expression()?];
+
+        while self.consume_if(TokenKind::Comma) {
+            args.push(self.expression()?);
+        }
+
+        Ok(args)
+    }
+
+    fn instance_decl(&mut self) -> Result<DefKind> {
+        let keyword = self.expect_token(TokenKind::Instance)?;
+        let name = self.expect_ident_as_name()?;
+
+        self.expect_token(TokenKind::LeftCurlyBracket)?;
+
+        let fields = self.instance_fields()?;
+
+        let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
+        let assoc = if self.consume_if(TokenKind::With) {
+            Some(self.block()?)
+        } else {
+            None
+        };
+
+        let span_end = assoc.as_ref().map_or(rcurly.span.end(), |x| x.span.end());
+        let span = self.new_span(keyword.span.start(), span_end, 0);
+        Ok(DefKind::instance(name, span, fields, assoc))
+    }
+
+    fn instance_fields(&mut self) -> Result<Vec<Field>> {
+        fn one_field(me: &mut Parser<'_>) -> Result<Field> {
+            let span_start = me.lexemes.peek_token().span.start();
+            let is_const = me.consume_if(TokenKind::Const);
+            let field_name = me.expect_ident_as_name()?;
+
+            me.expect_token(TokenKind::Colon)?;
+
+            let ty = me.ty()?;
+            let field_span = me.new_span(span_start, ty.span.end(), 0);
+
+            Ok(Field::new(is_const, field_name, ty, field_span))
+        }
+
+        let peeked = self.lexemes.peek_token();
+        if peeked.kind == TokenKind::RightCurlyBracket {
+            return Ok(Vec::new());
+        }
+
+        let mut fields = vec![one_field(self)?];
+        while self.consume_if(TokenKind::Comma) {
+            if self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
+                fields.push(one_field(self)?)
+            }
+        }
+
+        Ok(fields)
+    }
+
+    pub fn interface_decl(&mut self) -> Result<DefKind> {
+        let kw = self.expect_token(TokenKind::Interface)?;
+        let name = self.expect_ident_as_name()?;
+        self.expect_token(TokenKind::LeftCurlyBracket)?;
+        let mut entries = Vec::new();
+        while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
+            entries.push(self.interface_entry()?);
+        }
+
+        let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
+
+        Ok(DefKind::interface(
+            name,
+            self.new_span(kw.span.start(), rcurly.span.end(), 0),
+            entries,
+        ))
+    }
+
+    fn interface_entry(&mut self) -> Result<InterfaceEntry> {
+        let ret = match self.lexemes.peek_token().kind {
+            TokenKind::Let | TokenKind::Const => {
+                self.local_variable_stmt().map(InterfaceEntry::Const)?
+            }
+
+            TokenKind::Function => match self.function()? {
+                FunctionPart::Signature(sig) => InterfaceEntry::TemplateFn(sig),
+                FunctionPart::Full(fndecl) => InterfaceEntry::ProvidedFn(fndecl),
+            },
+
+            TokenKind::Eof => {
+                return self.error_out(ParseErrorKind::EndOfFile, self.lexemes.peek_token().span);
+            }
+
+            any => {
+                let err = ParseErrorKind::Expected {
+                    what: "a function signature, body or associated constant",
+                    got: any,
+                };
+
+                return self.error_out(err, self.lexemes.peek_token().span);
+            }
+        };
+
+        Ok(ret)
+    }
+
+    fn apply_interface(&mut self) -> Result<DefKind> {
+        let apply = self.expect_token(TokenKind::Apply)?;
+        let interface_name = self.expect_ident_as_name()?;
+
+        self.expect_token(TokenKind::For)?;
+
+        let receiver = self.ty()?;
+        let mut entries = Vec::new();
+
+        self.expect_token(TokenKind::LeftCurlyBracket)?;
+        while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
+            entries.push(self.interface_entry()?);
+        }
+
+        let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
+
+        dbg!(self.lexemes.peek_token());
+        Ok(DefKind::Apply(Apply::new(
+            interface_name,
+            receiver,
+            self.new_span(apply.span.start(), rcurly.span.end(), 0),
+            entries,
+        )))
     }
 
     fn local_variable_stmt(&mut self) -> Result<VariableStmt> {
@@ -300,7 +467,6 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) -> Result<Stmt> {
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
 
-        println!("token in stmt: {tok:#?}");
         let stmt = match tok.kind {
             TokenKind::LeftCurlyBracket => Stmt::Block(self.block()?),
             TokenKind::Let | TokenKind::Const => Stmt::LocalVar(self.local_variable_stmt()?),
@@ -320,12 +486,10 @@ impl<'a> Parser<'a> {
 
         let mut stmts = Vec::new();
         while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
-            println!("meow");
-            stmts.push(dbg!(self.statement())?);
+            stmts.push(self.statement()?);
         }
 
         let span_end = self.expect_token(TokenKind::RightCurlyBracket)?.span.end();
-        dbg!(span_end);
         Ok(Block::new(stmts, self.new_span(span_start, span_end, 0)))
     }
 
@@ -827,52 +991,37 @@ impl<'a> Parser<'a> {
             return Ok(Expr::new(expr_ty, span));
         };
 
-        self.method_call()
+        self.field_access_or_method_call()
     }
 
-    fn method_call(&mut self) -> Result<Expr> {
-        let receiver = self.field_access()?;
+    fn field_access_or_method_call(&mut self) -> Result<Expr> {
+        let mut lvalue = self.fun_call()?;
 
-        if self.consume_if(TokenKind::LeftParen) {
-            let mut args = Vec::new();
-
-            if self.lexemes.peek_token().kind != TokenKind::RightParen {
-                args.push(self.expression()?);
-                while self.consume_if(TokenKind::Comma) {
-                    args.push(self.expression()?);
-                }
-            }
-
-            let end_paren = self.expect_token(TokenKind::RightParen)?;
-            let span = self.new_span(receiver.span.start(), end_paren.span.end(), 0);
-
-            return Ok(Expr::new(
-                ExprType::FunCall {
-                    callee: Box::new(receiver),
-                    args,
-                },
-                span,
-            ));
-        }
-
-        Ok(receiver)
-    }
-
-    fn field_access(&mut self) -> Result<Expr> {
-        let lvalue = self.fun_call()?;
-
-        if self.consume_if(TokenKind::Dot) {
+        while self.consume_if(TokenKind::Dot) {
             let span_start = lvalue.span.start();
             let field = self.expect_ident_as_name()?;
+            let mut span_end = field.span.end();
 
-            let span_end = field.span.end();
-            let exprty = ExprType::FieldAccess {
-                source: Box::new(lvalue),
-                field,
+            let exprty = if self.consume_if(TokenKind::LeftParen) {
+                // we are in a method call
+                let args = self.fn_call_args()?;
+                let rparen = self.expect_token(TokenKind::RightParen)?;
+                span_end = rparen.span.end();
+
+                ExprType::MethodCall {
+                    args,
+                    name: field,
+                    receiver: Box::new(lvalue),
+                }
+            } else {
+                ExprType::FieldAccess {
+                    source: Box::new(lvalue),
+                    field,
+                }
             };
 
-            return Ok(Expr::new(exprty, self.new_span(span_start, span_end, 0)));
-        };
+            lvalue = Expr::new(exprty, self.new_span(span_start, span_end, 0));
+        }
 
         Ok(lvalue)
     }
@@ -908,10 +1057,29 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> Result<Expr> {
         let token = self.lexemes.peek_token().to_err_if_eof()?;
 
-        dbg!(token);
         let mut span = token.span;
 
         let expr = match token.kind {
+            TokenKind::Return => {
+                self.lexemes.advance();
+                // might be bad
+                let ret = if matches!(
+                    self.lexemes.peek_token().kind,
+                    TokenKind::Semicolon | TokenKind::RightParen | TokenKind::RightSqBracket
+                ) {
+                    None
+                } else {
+                    Some(self.expression()?)
+                }
+                .map(Box::new);
+
+                let end = ret.as_ref().map_or(span.end(), |tok| tok.span.end());
+
+                return Ok(Expr::new(
+                    ExprType::Return { ret },
+                    self.new_span(span.start(), end, 0),
+                ));
+            }
             TokenKind::If => return self.if_expr(),
             TokenKind::Loop => return self.loop_expr(),
             TokenKind::For => return self.for_loop(),
@@ -1032,7 +1200,6 @@ impl<'a> Parser<'a> {
 
     // except eof
     fn expect_token(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
-        dbg!("in expect token");
         let tok = self.expect_any_token()?;
 
         if tok.kind != kind {
@@ -1043,26 +1210,25 @@ impl<'a> Parser<'a> {
                 got: tok.kind,
             };
 
-            dbg!(&kind);
-
-            println!("entered error path");
             return self.error_out(kind, tok.span);
         }
-
-        println!("returned from expect_token");
 
         Ok(tok)
     }
 
+    #[track_caller]
     fn error_out<T>(&mut self, kind: ParseErrorKind, span: Span) -> Result<T, ParseError> {
         let err = ParseError::new(span, kind);
 
+        println!("erroring it out! at {}", Location::caller());
         loop {
-            if self.lexemes.previous().kind == TokenKind::Semicolon || self.lexemes.is_empty() {
+            let next = self.lexemes.peek_token();
+
+            if next.kind == TokenKind::Semicolon {
+                self.lexemes.advance();
                 break;
             }
 
-            let next = self.lexemes.next_token();
             if matches!(
                 next.kind,
                 TokenKind::Let
@@ -1075,9 +1241,12 @@ impl<'a> Parser<'a> {
                     | TokenKind::Loop
                     | TokenKind::Return
                     | TokenKind::If
+                    | TokenKind::Eof
             ) {
                 break;
             }
+
+            self.lexemes.advance();
         }
 
         Err(err)

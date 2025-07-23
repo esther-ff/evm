@@ -1,20 +1,29 @@
 module         → (declaration)* ;
 declaration    → funDecl | globalDecl ;
 
-funDecl        → "fun" func ;
-func           → IDENT "(" funArgs? ")" "=>" IDENT block ;
+funSig         → "fun IDENT "(" funArgs? ")" "=>" IDENT;
+funcDecl       → funSig block ;
 funArgs        → selfArg? (arg) ("," arg)* ;
+callArgs       → "(" expression? ("," expression)? ")" ;
 selfArg        → "self" "," ;
-arg            → IDENT ":" IDENT ;
+arg            → IDENT ":" type ;
 
 globalDecl     → "global" ( "const" )? 
   				 IDENT ":" IDENT ("=" expression)? ";" ;
+
+instanceDecl   → "instance" IDENT "{" ( instanceField )* "}" ( "with" block )? ;
+instanceField  → "const"? IDENT ":" type ";" ;
+
+interfaceDecl  → "interface" IDENT "{" interfaceField* "}" ;
+interfaceField → fnSig | funcDecl | localVariableStmt ;
+
+applyDecl      → "apply" IDENT "for" IDENT "with" "{" ( interfaceField )* "}" ; 
 
 type           → "fun" "(" type ( "," type )* ") "=>" type?
 			   | "[" type "]"
 			   | IDENT
 			   | IDENT "<" genericParams ">"
-			;
+			   ;
 
 genericParams  → typeParam ("," typeParam)*
 			   | type ("," type)*
@@ -29,10 +38,10 @@ statement      → block
 
 
 			
-block             → "{" declaration* "}" ;
+block         → "{" declaration* "}" ;
 
-localVariableStmt → ( "let" | "const" ) 
-  				 IDENT ":" IDENT ("=" expression)? ";" ;
+localVariableStmt
+              → ( "let" | "const" ) IDENT ":" IDENT ("=" expression)? ";" ;
 
 ifExpr        → "if" expression block
 				  ( "else" "if" block )?*
@@ -43,17 +52,18 @@ untilExpr     → "until" expression block ;
 forExpr       → "for" pat "in" expression block ;
 loopExpr      → "loop" block;
 
-lambdaExpr      "\" pat ("," pat)*? "=>" (expression | block)
+lambdaExpr    → "\" pat ("," pat)*? "=>" (expression | block)
 arrayExpr     → "[" expression "]" type ("{" expression ("," expression)* "}")?
 
-pat                → IDENT
-				   | "(" IDENT ("," IDENT) ")"
-				   | "_"
+returnExpr    → "return" expression? ;
+
+makeExpr      → "make" IDENT callArgs ;
+
+pat           → IDENT
+		      | "(" IDENT ("," IDENT) ")"
+		      | "_"
 								
 expressionStmt → expression ";" ;
-
-
-# cascading
 
 expression     → assignment 
                | assignment ( ( "," expression ) )* ;
@@ -78,7 +88,8 @@ factor         → unary ( ( "/" | "*" ) unary )* ;
 unary          → ( "!" | "-" ) unary
                | fieldAccess ;
 
-fieldAccess    → funCall "." IDENT ;
+fieldAccess    → methodCall "." IDENT ;
+methodCall     → funCall "." IDENT + "(" expression? ("," expression)? ")"; 
 
 funCall        → primary "(" expression? ("," expression)? ")" ;
 
@@ -95,4 +106,6 @@ primary        → NUMBER
 			   | ifExpr
 			   | arrayExpr
 			   | lambdaExpr
-			   | funCall ;
+			   | funCall 
+			   | makeExpr 
+			   | returnExpr ;

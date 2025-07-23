@@ -94,6 +94,9 @@ pub enum TokenKind {
     Return,
     SelfArg,
     In,
+    With,
+    Interface,
+    Apply,
 
     Eof,
 }
@@ -690,8 +693,9 @@ impl<'a> Lexer<'a> {
 
 fn check_for_keyword(ident: &str) -> Option<TokenKind> {
     use TokenKind::{
-        Const, Default, Else, False, For, Function, Global, If, Import, In, Inline, Instance, Let,
-        Loop, Match, Native, Return, SelfArg, Then, True, Until, While,
+        Apply, Const, Default, Else, False, For, Function, Global, If, Import, In, Inline,
+        Instance, Interface, Let, Loop, Match, Native, Return, SelfArg, Then, True, Until, While,
+        With,
     };
     match ident {
         "let" => Let,
@@ -716,6 +720,9 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
         "return" => Return,
         "self" => SelfArg,
         "in" => In,
+        "apply" => Apply,
+        "interface" => Interface,
+        "with" => With,
 
         _ => return None,
     }

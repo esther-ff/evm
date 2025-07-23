@@ -2,7 +2,7 @@ use std::{borrow::Cow, cmp, io};
 
 use crate::{
     lexer::{LexError, Span},
-    parser::ParseError,
+    parser::{ParseError, ParseErrorKind},
     sources::SourceFile,
 };
 
@@ -37,16 +37,20 @@ impl TheresError for ParseError {
 
     fn message(&self) -> Cow<'static, str> {
         match self.kind {
-            crate::parser::ParseErrorKind::Expected { what, got } => {
+            ParseErrorKind::Expected { what, got } => {
                 format!("expected {what} but got: {got:?}").into()
             }
 
-            crate::parser::ParseErrorKind::ExpectedUnknown { what } => format!("got {what}").into(),
+            ParseErrorKind::ExpectedUnknown { what } => format!("got {what}").into(),
 
-            crate::parser::ParseErrorKind::EndOfFile => "unexpected end-of-file".into(),
+            ParseErrorKind::EndOfFile => "unexpected end-of-file".into(),
 
-            crate::parser::ParseErrorKind::WrongUnaryOp { offender } => {
+            ParseErrorKind::WrongUnaryOp { offender } => {
                 format!("can't execute {offender:?} as unary operator").into()
+            }
+
+            ParseErrorKind::FunctionWithoutBody => {
+                "this function is supposed to have a body".into()
             }
         }
     }
