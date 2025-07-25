@@ -3,6 +3,7 @@
 use crate::arena::Id;
 use crate::lexer::Span;
 use crate::session::SymbolId;
+use core::ops::ControlFlow;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum BinOp {
@@ -193,10 +194,7 @@ pub enum ExprType {
         ctor_args: Vec<Expr>,
     },
 
-    Path {
-        // better soon
-        path: Vec<Name>,
-    },
+    Path(Path),
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -354,7 +352,7 @@ impl VariableStmt {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct GlobalDecl {
     name: Name,
-    initializer: Option<Expr>,
+    initializer: Expr,
     ty: Ty,
     constant: bool,
 }
@@ -401,7 +399,7 @@ impl DefKind {
         Self::Function(FnDecl { span, block, sig })
     }
 
-    pub fn global(name: Name, initializer: Option<Expr>, ty: Ty, constant: bool) -> Self {
+    pub fn global(name: Name, initializer: Expr, ty: Ty, constant: bool) -> Self {
         Self::Global(GlobalDecl {
             name,
             initializer,
@@ -549,13 +547,455 @@ impl Apply {
     }
 }
 
-pub trait VisitorResult {}
+pub trait VisitorResult {
+    type Return;
 
-impl VisitorResult for () {}
-impl<C, B> VisitorResult for std::ops::ControlFlow<C, B> {}
+    fn normal() -> Self;
+
+    fn into_flow(self) -> ControlFlow<Self::Return>;
+
+    fn into_branch(p: Self::Return) -> Self;
+}
+
+impl VisitorResult for () {
+    type Return = ();
+
+    fn into_flow(self) -> ControlFlow<Self::Return> {
+        ControlFlow::Continue(())
+    }
+
+    fn normal() -> Self {}
+
+    fn into_branch(_: Self::Return) -> Self {}
+}
+
+impl<T> VisitorResult for std::ops::ControlFlow<T> {
+    type Return = T;
+
+    fn into_flow(self) -> ControlFlow<Self::Return> {
+        self
+    }
+
+    fn into_branch(p: Self::Return) -> Self {
+        Self::Break(p)
+    }
+
+    fn normal() -> Self {
+        ControlFlow::Continue(())
+    }
+}
+
+macro_rules! try_visit {
+    ($($e:expr),*) => {
+        $(
+            match $e.into_flow() {
+                ::core::ops::ControlFlow::Continue(()) => (),
+
+                ::core::ops::ControlFlow::Break(p) => return $crate::ast::VisitorResult::into_branch(p)
+
+            }
+
+       )*
+    };
+}
+
+macro_rules! maybe_visit {
+    (v: $v:expr, m: $m: ident, $($e:expr),*) => {$(
+       {
+        if let Some(thing) = $e {
+            try_visit!($v.$m(thing));
+
+            Self::Result::normal()
+        } else {
+            Self::Result::normal()
+        }
+    }
+    )*};
+}
+
+macro_rules! visit_iter {
+    (v: $v:expr, m: $m:ident, $($i:expr),*) => {
+        $(
+            {
+                for __entry in $i {
+                    try_visit!($v.$m(__entry))
+                }
+
+                Self::Result::normal()
+            }
+        )*
+    };
+}
 
 pub trait Visitor<'a> {
     type Result: VisitorResult;
 
-    fn visit_ast_def(&mut self, val: &'a AstDef);
+    fn visit_ast_def(&mut self, val: &'a AstDef) -> Self::Result {
+        let AstDef { kind } = val;
+
+        self.visit_def(kind)
+    }
+
+    fn visit_def(&mut self, val: &'a DefKind) -> Self::Result {
+        match val {
+            DefKind::Function(f) => self.visit_fn_decl(f),
+            DefKind::Global(g) => self.visit_global(g),
+            DefKind::Instance(i) => self.visit_instance(i),
+            DefKind::Apply(a) => self.visit_apply_decl(a),
+            DefKind::Interface(ia) => self.visit_interface(ia),
+        }
+    }
+
+    fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
+        let Instance {
+            name,
+            span: _,
+            fields,
+            assoc,
+            generics,
+        } = val;
+
+        try_visit!(self.visit_name(name), self.visit_generics(generics));
+
+        for field in fields {
+            try_visit!(self.visit_field(field))
+        }
+
+        assoc
+            .as_ref()
+            .map(|x| self.visit_block(x))
+            .unwrap_or_else(Self::Result::normal)
+    }
+
+    fn visit_field(&mut self, val: &'a Field) -> Self::Result {
+        let Field {
+            constant: _,
+            name,
+            ty,
+            span: _,
+        } = val;
+
+        try_visit!(self.visit_ty(ty));
+
+        self.visit_name(name)
+    }
+
+    fn visit_interface(&mut self, val: &'a Interface) -> Self::Result {
+        let Interface {
+            span: _,
+            name,
+            entries,
+        } = val;
+
+        visit_iter!(v: self, m: visit_interface_entry, entries);
+        self.visit_name(name)
+    }
+
+    fn visit_interface_entry(&mut self, val: &'a InterfaceEntry) -> Self::Result {
+        match val {
+            InterfaceEntry::ProvidedFn(f) => self.visit_fn_decl(f),
+            InterfaceEntry::TemplateFn(s) => self.visit_fn_sig(s),
+            InterfaceEntry::Const(c) => self.visit_var_stmt(c),
+        }
+    }
+
+    fn visit_var_stmt(&mut self, val: &'a VariableStmt) -> Self::Result {
+        let VariableStmt {
+            mode: _,
+            name,
+            initializer,
+            ty,
+        } = val;
+
+        try_visit!(self.visit_name(name), self.visit_ty(ty));
+
+        maybe_visit!(v: self, m: visit_expr, initializer)
+    }
+
+    fn visit_ty(&mut self, val: &'a Ty) -> Self::Result {
+        let Ty { kind, span: _ } = val;
+
+        match kind {
+            TyKind::Fn { args, ret } => {
+                try_visit!(visit_iter!(v: self, m: visit_ty, args));
+
+                maybe_visit!(v: self, m: visit_ty, ret)
+            }
+
+            TyKind::Array(ty) => self.visit_ty(ty),
+
+            TyKind::Params { base, generics } => {
+                try_visit!(self.visit_name(base));
+
+                visit_iter!(v: self, m: visit_ty, generics)
+            }
+
+            TyKind::MethodSelf | TyKind::Regular(..) => Self::Result::normal(),
+        }
+    }
+
+    fn visit_assoc_const(&mut self, val: &'a AssocConst) -> Self::Result {
+        let AssocConst {
+            value,
+            span: _,
+            ty,
+            name,
+        } = val;
+
+        try_visit!(
+            self.visit_anon_const(value),
+            self.visit_ty(ty),
+            self.visit_name(name)
+        );
+
+        Self::Result::normal()
+    }
+
+    fn visit_anon_const(&mut self, val: &'a AnonConst) -> Self::Result {
+        let AnonConst { expr } = val;
+        self.visit_expr(expr)
+    }
+
+    fn visit_apply_decl(&mut self, val: &'a Apply) -> Self::Result {
+        let Apply {
+            interface,
+            receiver,
+            span: _,
+            items,
+        } = val;
+
+        try_visit!(self.visit_name(interface), self.visit_ty(receiver));
+
+        visit_iter!(v: self, m: visit_interface_entry, items)
+    }
+
+    fn visit_pat(&mut self, val: &'a Pat) -> Self::Result {
+        let Pat { span: _, ty } = val;
+
+        match ty {
+            PatType::Ident { name } => self.visit_name(name),
+            PatType::Tuple { pats } => visit_iter!(v: self, m: visit_pat, pats),
+
+            PatType::Wild => Self::Result::normal(),
+        }
+    }
+
+    fn visit_expr(&mut self, val: &'a Expr) -> Self::Result {
+        let Expr { ty, span: _ } = val;
+
+        match ty {
+            ExprType::BinaryExpr { lhs, rhs, op: _ } => {
+                try_visit!(self.visit_expr(lhs), self.visit_expr(rhs));
+
+                Self::Result::normal()
+            }
+
+            ExprType::UnaryExpr { op: _, target } => self.visit_expr(&target),
+
+            ExprType::Constant(..) => Self::Result::normal(),
+
+            ExprType::Group(e) => self.visit_expr(e),
+
+            ExprType::CommaGroup(exprs) => visit_iter!(v: self, m: visit_expr, exprs),
+
+            ExprType::Assign {
+                lvalue,
+                rvalue,
+                mode: _,
+            } => {
+                try_visit!(self.visit_expr(lvalue));
+                self.visit_expr(rvalue)
+            }
+
+            ExprType::FunCall { callee, args } => {
+                try_visit!(self.visit_expr(callee));
+                visit_iter!(v: self, m: visit_expr, args)
+            }
+
+            ExprType::MethodCall {
+                receiver,
+                args,
+                name,
+            } => {
+                try_visit!(self.visit_expr(receiver));
+                visit_iter!(v: self, m: visit_expr, args);
+                self.visit_name(name)
+            }
+
+            ExprType::Variable { name } => self.visit_name(name),
+
+            ExprType::While { cond, body } => {
+                try_visit!(self.visit_expr(cond));
+                self.visit_block(body)
+            }
+
+            ExprType::Until { cond, body } => {
+                try_visit!(self.visit_expr(cond));
+                self.visit_block(body)
+            }
+
+            ExprType::For {
+                iterable,
+                pat,
+                body,
+            } => {
+                try_visit!(self.visit_expr(iterable), self.visit_pat(pat));
+                self.visit_block(body)
+            }
+
+            ExprType::Loop { body } => self.visit_block(body),
+
+            ExprType::If {
+                cond,
+                if_block,
+                else_ifs,
+                otherwise,
+            } => {
+                try_visit!(self.visit_expr(cond), self.visit_block(if_block));
+
+                for ElseIf { cond, body } in else_ifs {
+                    self.visit_expr(cond);
+                    self.visit_block(body);
+                }
+
+                maybe_visit!(v: self, m: visit_block, otherwise)
+            }
+
+            ExprType::ArrayDecl {
+                ty,
+                size,
+                initialize,
+            } => {
+                try_visit!(self.visit_ty(ty), self.visit_expr(size));
+                visit_iter!(v: self, m: visit_expr, initialize)
+            }
+
+            ExprType::FieldAccess { source, field } => {
+                try_visit!(self.visit_expr(source));
+                self.visit_name(field)
+            }
+
+            ExprType::Path(path) => self.visit_path(path),
+
+            ExprType::Lambda { args, body } => {
+                visit_iter!(v: self, m: visit_pat, args);
+
+                match body {
+                    LambdaBody::Block(b) => self.visit_block(b),
+                    LambdaBody::Expr(e) => self.visit_expr(e),
+                }
+            }
+
+            ExprType::Return { ret } => maybe_visit!(v: self, m: visit_expr, ret),
+
+            ExprType::Make { created, ctor_args } => {
+                try_visit!(self.visit_ty(created));
+                visit_iter!(v: self, m: visit_expr, ctor_args)
+            }
+        }
+    }
+
+    fn visit_generics(&mut self, val: &'a Generics) -> Self::Result {
+        let Generics { params, span: _ } = val;
+        visit_iter!(v: self, m: visit_generic_param, params)
+    }
+
+    fn visit_generic_param(&mut self, val: &'a GenericParam) -> Self::Result {
+        let GenericParam { ident, bounds } = val;
+
+        try_visit!(self.visit_name(ident));
+
+        visit_iter!(v: self, m: visit_bound, bounds)
+    }
+
+    fn visit_bound(&mut self, val: &'a Bound) -> Self::Result {
+        let Bound { span: _, interface } = val;
+
+        self.visit_path(interface)
+    }
+
+    fn visit_path(&mut self, val: &'a Path) -> Self::Result {
+        let Path { path, span: _ } = val;
+
+        visit_iter!(v: self, m: visit_path_seg, path)
+    }
+
+    fn visit_path_seg(&mut self, val: &'a PathSeg) -> Self::Result {
+        let PathSeg { name, span: _ } = val;
+
+        self.visit_name(name)
+    }
+
+    fn visit_fn_decl(&mut self, val: &'a FnDecl) -> Self::Result {
+        let FnDecl {
+            sig,
+            block,
+            span: _,
+        } = val;
+
+        try_visit!(self.visit_fn_sig(sig));
+        self.visit_block(block)
+    }
+
+    fn visit_fn_sig(&mut self, val: &'a FnSig) -> Self::Result {
+        let FnSig {
+            name,
+            args,
+            ret_type,
+            span: _,
+        } = val;
+
+        try_visit!(self.visit_name(name), self.visit_fn_args(args));
+
+        self.visit_ty(ret_type)
+    }
+
+    fn visit_fn_args(&mut self, val: &'a FnArgs) -> Self::Result {
+        let FnArgs { args } = val;
+
+        visit_iter!(v: self, m: visit_arg, args)
+    }
+
+    fn visit_arg(&mut self, val: &'a Arg) -> Self::Result {
+        let Arg { ident, ty } = val;
+
+        try_visit!(self.visit_name(ident));
+        self.visit_ty(ty)
+    }
+
+    fn visit_block(&mut self, val: &'a Block) -> Self::Result {
+        let Block { stmts, span: _ } = val;
+
+        visit_iter!(v: self, m: visit_stmt, stmts)
+    }
+
+    fn visit_stmt(&mut self, val: &'a Stmt) -> Self::Result {
+        match val {
+            Stmt::Block(b) => self.visit_block(b),
+            Stmt::Expr(e) => self.visit_expr(e),
+            Stmt::LocalVar(v) => self.visit_var_stmt(v),
+            Stmt::Definition(d) => self.visit_ast_def(d),
+        }
+    }
+
+    fn visit_global(&mut self, val: &'a GlobalDecl) -> Self::Result {
+        let GlobalDecl {
+            name,
+            initializer,
+            ty,
+            constant: _,
+        } = val;
+
+        try_visit!(
+            self.visit_name(name),
+            self.visit_expr(initializer),
+            self.visit_ty(ty)
+        );
+
+        Self::Result::normal()
+    }
+
+    fn visit_name(&mut self, _: &'a Name) -> Self::Result {
+        Self::Result::normal()
+    }
 }
