@@ -135,6 +135,13 @@ pub struct Span {
 }
 
 impl Span {
+    pub const DUMMY: Self = Self {
+        start: usize::MAX,
+        end: usize::MAX,
+        line: u32::MAX,
+        sourceid: SourceId::DUMMY,
+    };
+
     pub fn new(start: usize, end: usize, line: u32, sourceid: SourceId) -> Self {
         Self {
             start,

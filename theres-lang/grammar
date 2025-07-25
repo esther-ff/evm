@@ -11,7 +11,7 @@ arg            → IDENT ":" type ;
 globalDecl     → "global" ( "const" )? 
   				 IDENT ":" IDENT ("=" expression)? ";" ;
 
-instanceDecl   → "instance" IDENT "{" ( instanceField )* "}" ( "with" block )? ;
+instanceDecl   → "instance" IDENT genericParams "{" ( instanceField )* "}" ( "with" block )? ;
 instanceField  → "const"? IDENT ":" type ";" ;
 
 interfaceDecl  → "interface" IDENT "{" interfaceField* "}" ;
@@ -22,14 +22,13 @@ applyDecl      → "apply" IDENT "for" IDENT "with" "{" ( interfaceField )* "}" 
 type           → "fun" "(" type ( "," type )* ") "=>" type?
 			   | "[" type "]"
 			   | IDENT
-			   | IDENT "<" genericParams ">"
+			   | IDENT "<" type ("," type)* ">"
 			   ;
 
-genericParams  → typeParam ("," typeParam)*
-			   | type ("," type)*
+genericParams  → IDENT (":" path ("+" path)*)
 
-typeParam      → IDENT ":" typeConstraint?;
-typeConstraint → IDENT ("+" IDENT)*		
+
+path           → IDENT ("::" IDENT)* ;
 
 statement      → block
 			   | expressionStmt
@@ -56,8 +55,9 @@ lambdaExpr    → "\" pat ("," pat)*? "=>" (expression | block)
 arrayExpr     → "[" expression "]" type ("{" expression ("," expression)* "}")?
 
 returnExpr    → "return" expression? ;
+pathExpr      → "::" IDENT ("::" IDENT)* ;
 
-makeExpr      → "make" IDENT callArgs ;
+makeExpr      → "make" type callArgs ;
 
 pat           → IDENT
 		      | "(" IDENT ("," IDENT) ")"
@@ -108,4 +108,6 @@ primary        → NUMBER
 			   | lambdaExpr
 			   | funCall 
 			   | makeExpr 
-			   | returnExpr ;
+			   | returnExpr 
+			   | makeExpr
+			   | pathExpr ;

@@ -116,7 +116,23 @@ impl<'a> Parser<'a> {
                 };
 
                 self.lexemes.advance();
-                todo!("parsing generics in types")
+
+                let mut ty_params = vec![self.ty()?];
+                while self.consume_if(TokenKind::Comma) {
+                    ty_params.push(self.ty()?)
+                }
+
+                let span_end = ty_params.last().as_ref().unwrap().span.end();
+
+                self.expect_token(TokenKind::RightArrowBracket)?;
+
+                Ok(Ty {
+                    kind: TyKind::Params {
+                        base: Name::new(ident, tok.span),
+                        generics: ty_params,
+                    },
+                    span: self.new_span(tok.span.start(), span_end, 0),
+                })
             }
 
             any => {
@@ -131,6 +147,83 @@ impl<'a> Parser<'a> {
                 self.error_out(err, span)
             }
         }
+    }
+
+    fn path(&mut self) -> Result<Path> {
+        let mut segments = vec![self.path_segment()?];
+
+        while self.consume_if(TokenKind::Path) {
+            segments.push(self.path_segment()?);
+        }
+
+        let span = self.new_span(segments[0].span.start, segments.last().unwrap().span.end, 0);
+
+        Ok(Path {
+            path: segments,
+            span,
+        })
+    }
+
+    fn path_segment(&mut self) -> Result<PathSeg> {
+        let name = self.expect_ident_as_name()?;
+
+        Ok(PathSeg {
+            name,
+            span: name.span,
+        })
+    }
+
+    // prob refactor lmao
+    fn generic_params(&mut self) -> Result<Generics> {
+        fn inner(me: &mut Parser) -> Result<GenericParam> {
+            let name = me.expect_ident_as_name()?;
+            let mut bounds = Vec::new();
+            if me.consume_if(TokenKind::Colon) {
+                let intrf = me.path()?;
+
+                bounds.push(Bound {
+                    span: intrf.span,
+                    interface: intrf,
+                });
+
+                while me.consume_if(TokenKind::Plus) {
+                    let intrf = me.path()?;
+
+                    bounds.push(Bound {
+                        span: intrf.span,
+                        interface: intrf,
+                    });
+                }
+            }
+
+            Ok(GenericParam {
+                ident: name,
+                bounds,
+            })
+        }
+
+        if !self.consume_if(TokenKind::LeftSqBracket) {
+            return Ok(Generics {
+                params: Vec::new(),
+                span: Span::DUMMY,
+            });
+        };
+
+        let mut params = vec![inner(self)?];
+        let start = params[0].ident.span.start();
+        let mut end = start;
+        while self.consume_if(TokenKind::Comma) {
+            let p = inner(self)?;
+            end = p.ident.span.end();
+            params.push(p);
+        }
+
+        self.expect_token(TokenKind::RightArrowBracket)?;
+
+        Ok(Generics {
+            span: self.new_span(start, end, 0),
+            params,
+        })
     }
 
     pub fn parse_function_type(&mut self) -> Result<Ty> {
@@ -295,6 +388,7 @@ impl<'a> Parser<'a> {
         let fields = self.instance_fields()?;
 
         let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
+        let generics = self.generic_params()?;
         let assoc = if self.consume_if(TokenKind::With) {
             Some(self.block()?)
         } else {
@@ -303,7 +397,7 @@ impl<'a> Parser<'a> {
 
         let span_end = assoc.as_ref().map_or(rcurly.span.end(), |x| x.span.end());
         let span = self.new_span(keyword.span.start(), span_end, 0);
-        Ok(DefKind::instance(name, span, fields, assoc))
+        Ok(DefKind::instance(name, span, fields, assoc, generics))
     }
 
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
@@ -397,7 +491,6 @@ impl<'a> Parser<'a> {
 
         let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
 
-        dbg!(self.lexemes.peek_token());
         Ok(DefKind::Apply(Apply::new(
             interface_name,
             receiver,

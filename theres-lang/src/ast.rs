@@ -187,6 +187,16 @@ pub enum ExprType {
     Return {
         ret: Option<Box<Expr>>,
     },
+
+    Make {
+        created: Ty,
+        ctor_args: Vec<Expr>,
+    },
+
+    Path {
+        // better soon
+        path: Vec<Name>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -204,13 +214,34 @@ impl LambdaBody {
     }
 }
 
-pub struct Constraint {
-    // todo
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct Path {
+    pub path: Vec<PathSeg>,
+    pub span: Span,
 }
 
-pub struct GenericTyParam {
-    ident: Name,
-    constraint: Constraint,
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct PathSeg {
+    pub name: Name,
+    pub span: Span,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct Bound {
+    pub span: Span,
+    pub interface: Path,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct GenericParam {
+    pub ident: Name,
+    pub bounds: Vec<Bound>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct Generics {
+    pub params: Vec<GenericParam>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -225,6 +256,9 @@ pub enum TyKind {
 
     /// Regular type like `u32`
     Regular(SymbolId),
+
+    /// With generics
+    Params { base: Name, generics: Vec<Ty> },
 
     /// `self` argument
     /// in methods
@@ -376,8 +410,14 @@ impl DefKind {
         })
     }
 
-    pub fn instance(name: Name, span: Span, fields: Vec<Field>, methods: Option<Block>) -> Self {
-        Self::Instance(Instance::new(name, span, fields, methods))
+    pub fn instance(
+        name: Name,
+        span: Span,
+        fields: Vec<Field>,
+        methods: Option<Block>,
+        gens: Generics,
+    ) -> Self {
+        Self::Instance(Instance::new(name, span, fields, methods, gens))
     }
     pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
         Self::Interface(Interface::new(span, name, entries))
@@ -432,15 +472,23 @@ pub struct Instance {
     span: Span,
     fields: Vec<Field>,
     assoc: Option<Block>,
+    generics: Generics,
 }
 
 impl Instance {
-    pub fn new(name: Name, span: Span, fields: Vec<Field>, assoc: Option<Block>) -> Self {
+    pub fn new(
+        name: Name,
+        span: Span,
+        fields: Vec<Field>,
+        assoc: Option<Block>,
+        generics: Generics,
+    ) -> Self {
         Self {
             name,
             span,
             fields,
             assoc,
+            generics,
         }
     }
 }
@@ -499,4 +547,15 @@ impl Apply {
             items,
         }
     }
+}
+
+pub trait VisitorResult {}
+
+impl VisitorResult for () {}
+impl<C, B> VisitorResult for std::ops::ControlFlow<C, B> {}
+
+pub trait Visitor<'a> {
+    type Result: VisitorResult;
+
+    fn visit_ast_def(&mut self, val: &'a AstDef);
 }

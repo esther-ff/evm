@@ -3,6 +3,7 @@ mod arena;
 mod ast;
 mod driver;
 mod errors;
+mod hir;
 mod lexer;
 mod parser;
 mod session;
