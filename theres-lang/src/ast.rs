@@ -1,9 +1,17 @@
-#![allow(dead_code)]
-
-use crate::arena::Id;
 use crate::lexer::Span;
 use crate::session::SymbolId;
 use core::ops::ControlFlow;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AstId {
+    private: u32,
+}
+
+impl AstId {
+    pub fn new(n: u32) -> Self {
+        Self { private: n }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum BinOp {
@@ -63,11 +71,12 @@ pub enum AssignMode {
 pub struct Expr {
     pub ty: ExprType,
     pub span: Span,
+    pub id: AstId,
 }
 
 impl Expr {
-    pub fn new(ty: ExprType, span: Span) -> Self {
-        Self { ty, span }
+    pub fn new(ty: ExprType, span: Span, id: AstId) -> Self {
+        Self { ty, span, id }
     }
 }
 
@@ -216,30 +225,35 @@ impl LambdaBody {
 pub struct Path {
     pub path: Vec<PathSeg>,
     pub span: Span,
+    pub id: AstId,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct PathSeg {
     pub name: Name,
     pub span: Span,
+    pub id: AstId,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Bound {
     pub span: Span,
     pub interface: Path,
+    pub id: AstId,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct GenericParam {
     pub ident: Name,
     pub bounds: Vec<Bound>,
+    pub id: AstId,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Generics {
     pub params: Vec<GenericParam>,
     pub span: Span,
+    pub id: AstId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -267,35 +281,39 @@ pub enum TyKind {
 pub struct Ty {
     pub kind: TyKind,
     pub span: Span,
+    pub id: AstId,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub span: Span,
+    pub id: AstId,
 }
 
 impl Block {
-    pub fn new(stmts: Vec<Stmt>, span: Span) -> Self {
-        Self { stmts, span }
+    pub fn new(stmts: Vec<Stmt>, span: Span, id: AstId) -> Self {
+        Self { stmts, span, id }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct FnSig {
-    name: Name,
-    args: FnArgs,
-    ret_type: Ty,
+    pub name: Name,
+    pub args: FnArgs,
+    pub ret_type: Ty,
     pub span: Span,
+    pub id: AstId,
 }
 
 impl FnSig {
-    pub fn new(name: Name, span: Span, ret_type: Ty, args: Vec<Arg>) -> Self {
+    pub fn new(name: Name, span: Span, ret_type: Ty, args: Vec<Arg>, id: AstId) -> Self {
         FnSig {
             name,
             ret_type,
             args: FnArgs { args },
             span,
+            id,
         }
     }
 }
@@ -305,6 +323,7 @@ pub struct FnDecl {
     pub sig: FnSig,
     pub block: Block,
     pub span: Span,
+    pub id: AstId,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -314,13 +333,15 @@ pub struct FnArgs {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Arg {
-    ident: Name,
-    ty: Ty,
+    pub ident: Name,
+    pub ty: Ty,
+
+    pub id: AstId,
 }
 
 impl Arg {
-    pub fn new(ident: Name, ty: Ty) -> Self {
-        Self { ident, ty }
+    pub fn new(ident: Name, ty: Ty, id: AstId) -> Self {
+        Self { ident, ty, id }
     }
 }
 
@@ -332,19 +353,21 @@ pub enum VarMode {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct VariableStmt {
-    mode: VarMode,
-    name: Name,
-    initializer: Option<Expr>,
-    ty: Ty,
+    pub mode: VarMode,
+    pub name: Name,
+    pub initializer: Option<Expr>,
+    pub ty: Ty,
+    pub id: AstId,
 }
 
 impl VariableStmt {
-    pub fn new(mode: VarMode, name: Name, initializer: Option<Expr>, ty: Ty) -> Self {
+    pub fn new(mode: VarMode, name: Name, initializer: Option<Expr>, ty: Ty, id: AstId) -> Self {
         Self {
             mode,
             name,
             initializer,
             ty,
+            id,
         }
     }
 }
@@ -355,102 +378,42 @@ pub struct GlobalDecl {
     initializer: Expr,
     ty: Ty,
     constant: bool,
+
+    pub id: AstId,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum Stmt {
+pub enum StmtKind {
     Block(Block),
     Expr(Expr),
     LocalVar(VariableStmt),
-    Definition(AstDef),
+    Thing(Thing),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AstId {
-    chunk: usize,
-    vec: usize,
-}
-
-impl Id for AstId {
-    fn new(chunk: usize, vec: usize) -> Self {
-        Self { chunk, vec }
-    }
-
-    fn get_inside_chunk_index(&self) -> usize {
-        self.vec
-    }
-
-    fn get_arena_chunk_index(&self) -> usize {
-        self.chunk
+impl StmtKind {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Block(b) => b.span,
+            Self::Expr(x) => x.span,
+            Self::LocalVar(l) => l.name.span,
+            Self::Thing(t) => t.kind.span(),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum DefKind {
-    Function(FnDecl),
-    Global(GlobalDecl),
-    Instance(Instance),
-    Interface(Interface),
-    Apply(Apply),
-}
-
-impl DefKind {
-    pub fn function(block: Block, span: Span, sig: FnSig) -> Self {
-        Self::Function(FnDecl { span, block, sig })
-    }
-
-    pub fn global(name: Name, initializer: Expr, ty: Ty, constant: bool) -> Self {
-        Self::Global(GlobalDecl {
-            name,
-            initializer,
-            ty,
-            constant,
-        })
-    }
-
-    pub fn instance(
-        name: Name,
-        span: Span,
-        fields: Vec<Field>,
-        methods: Option<Block>,
-        gens: Generics,
-    ) -> Self {
-        Self::Instance(Instance::new(name, span, fields, methods, gens))
-    }
-    pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
-        Self::Interface(Interface::new(span, name, entries))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct AstDef {
-    kind: DefKind,
-}
-
-impl AstDef {
-    pub fn new(kind: DefKind) -> Self {
-        Self { kind }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Name {
-    pub interned: SymbolId,
+pub struct Stmt {
+    pub kind: StmtKind,
     pub span: Span,
-}
-
-impl Name {
-    pub fn new(interned: SymbolId, span: Span) -> Self {
-        Self { span, interned }
-    }
+    pub id: AstId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Field {
-    constant: bool,
-    name: Name,
-    ty: Ty,
-    span: Span,
+    pub constant: bool,
+    pub name: Name,
+    pub ty: Ty,
+    pub span: Span,
 }
 
 impl Field {
@@ -466,11 +429,11 @@ impl Field {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Instance {
-    name: Name,
-    span: Span,
-    fields: Vec<Field>,
-    assoc: Option<Block>,
-    generics: Generics,
+    pub name: Name,
+    pub span: Span,
+    pub fields: Vec<Field>,
+    pub assoc: Option<Block>,
+    pub generics: Generics,
 }
 
 impl Instance {
@@ -544,6 +507,84 @@ impl Apply {
             span,
             items,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct Thing {
+    pub id: AstId,
+    pub kind: ThingKind,
+}
+
+impl Thing {
+    pub fn new(kind: ThingKind, id: AstId) -> Self {
+        Self { kind, id }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub enum ThingKind {
+    Function(FnDecl),
+    Global(GlobalDecl),
+    Instance(Instance),
+    Interface(Interface),
+    Apply(Apply),
+}
+
+impl ThingKind {
+    pub fn function(block: Block, span: Span, sig: FnSig, id: AstId) -> Self {
+        Self::Function(FnDecl {
+            span,
+            block,
+            sig,
+            id,
+        })
+    }
+
+    pub fn global(name: Name, initializer: Expr, ty: Ty, constant: bool, id: AstId) -> Self {
+        Self::Global(GlobalDecl {
+            name,
+            initializer,
+            ty,
+            constant,
+            id,
+        })
+    }
+
+    pub fn instance(
+        name: Name,
+        span: Span,
+        fields: Vec<Field>,
+        methods: Option<Block>,
+        gens: Generics,
+    ) -> Self {
+        Self::Instance(Instance::new(name, span, fields, methods, gens))
+    }
+
+    pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
+        Self::Interface(Interface::new(span, name, entries))
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Function(f) => f.span,
+            Self::Global(g) => g.name.span,
+            Self::Instance(i) => i.span,
+            Self::Interface(it) => it.span,
+            Self::Apply(a) => a.span,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Name {
+    pub interned: SymbolId,
+    pub span: Span,
+}
+
+impl Name {
+    pub fn new(interned: SymbolId, span: Span) -> Self {
+        Self { span, interned }
     }
 }
 
@@ -630,19 +671,19 @@ macro_rules! visit_iter {
 pub trait Visitor<'a> {
     type Result: VisitorResult;
 
-    fn visit_ast_def(&mut self, val: &'a AstDef) -> Self::Result {
-        let AstDef { kind } = val;
+    fn visit_thing(&mut self, val: &'a Thing) -> Self::Result {
+        let Thing { kind, id: _ } = val;
 
         self.visit_def(kind)
     }
 
-    fn visit_def(&mut self, val: &'a DefKind) -> Self::Result {
+    fn visit_def(&mut self, val: &'a ThingKind) -> Self::Result {
         match val {
-            DefKind::Function(f) => self.visit_fn_decl(f),
-            DefKind::Global(g) => self.visit_global(g),
-            DefKind::Instance(i) => self.visit_instance(i),
-            DefKind::Apply(a) => self.visit_apply_decl(a),
-            DefKind::Interface(ia) => self.visit_interface(ia),
+            ThingKind::Function(f) => self.visit_fn_decl(f),
+            ThingKind::Global(g) => self.visit_global(g),
+            ThingKind::Instance(i) => self.visit_instance(i),
+            ThingKind::Apply(a) => self.visit_apply_decl(a),
+            ThingKind::Interface(ia) => self.visit_interface(ia),
         }
     }
 
@@ -705,6 +746,7 @@ pub trait Visitor<'a> {
             name,
             initializer,
             ty,
+            id: _,
         } = val;
 
         try_visit!(self.visit_name(name), self.visit_ty(ty));
@@ -713,7 +755,11 @@ pub trait Visitor<'a> {
     }
 
     fn visit_ty(&mut self, val: &'a Ty) -> Self::Result {
-        let Ty { kind, span: _ } = val;
+        let Ty {
+            kind,
+            span: _,
+            id: _,
+        } = val;
 
         match kind {
             TyKind::Fn { args, ret } => {
@@ -781,7 +827,7 @@ pub trait Visitor<'a> {
     }
 
     fn visit_expr(&mut self, val: &'a Expr) -> Self::Result {
-        let Expr { ty, span: _ } = val;
+        let Expr { ty, span: _, id: _ } = val;
 
         match ty {
             ExprType::BinaryExpr { lhs, rhs, op: _ } => {
@@ -896,12 +942,20 @@ pub trait Visitor<'a> {
     }
 
     fn visit_generics(&mut self, val: &'a Generics) -> Self::Result {
-        let Generics { params, span: _ } = val;
+        let Generics {
+            params,
+            span: _,
+            id: _,
+        } = val;
         visit_iter!(v: self, m: visit_generic_param, params)
     }
 
     fn visit_generic_param(&mut self, val: &'a GenericParam) -> Self::Result {
-        let GenericParam { ident, bounds } = val;
+        let GenericParam {
+            ident,
+            bounds,
+            id: _,
+        } = val;
 
         try_visit!(self.visit_name(ident));
 
@@ -909,19 +963,31 @@ pub trait Visitor<'a> {
     }
 
     fn visit_bound(&mut self, val: &'a Bound) -> Self::Result {
-        let Bound { span: _, interface } = val;
+        let Bound {
+            span: _,
+            interface,
+            id: _,
+        } = val;
 
         self.visit_path(interface)
     }
 
     fn visit_path(&mut self, val: &'a Path) -> Self::Result {
-        let Path { path, span: _ } = val;
+        let Path {
+            path,
+            span: _,
+            id: _,
+        } = val;
 
         visit_iter!(v: self, m: visit_path_seg, path)
     }
 
     fn visit_path_seg(&mut self, val: &'a PathSeg) -> Self::Result {
-        let PathSeg { name, span: _ } = val;
+        let PathSeg {
+            name,
+            span: _,
+            id: _,
+        } = val;
 
         self.visit_name(name)
     }
@@ -931,6 +997,7 @@ pub trait Visitor<'a> {
             sig,
             block,
             span: _,
+            id: _,
         } = val;
 
         try_visit!(self.visit_fn_sig(sig));
@@ -943,6 +1010,7 @@ pub trait Visitor<'a> {
             args,
             ret_type,
             span: _,
+            id: _,
         } = val;
 
         try_visit!(self.visit_name(name), self.visit_fn_args(args));
@@ -957,24 +1025,33 @@ pub trait Visitor<'a> {
     }
 
     fn visit_arg(&mut self, val: &'a Arg) -> Self::Result {
-        let Arg { ident, ty } = val;
+        let Arg { ident, ty, id: _ } = val;
 
         try_visit!(self.visit_name(ident));
         self.visit_ty(ty)
     }
 
     fn visit_block(&mut self, val: &'a Block) -> Self::Result {
-        let Block { stmts, span: _ } = val;
+        let Block {
+            stmts,
+            span: _,
+            id: _,
+        } = val;
 
         visit_iter!(v: self, m: visit_stmt, stmts)
     }
 
     fn visit_stmt(&mut self, val: &'a Stmt) -> Self::Result {
-        match val {
-            Stmt::Block(b) => self.visit_block(b),
-            Stmt::Expr(e) => self.visit_expr(e),
-            Stmt::LocalVar(v) => self.visit_var_stmt(v),
-            Stmt::Definition(d) => self.visit_ast_def(d),
+        let Stmt {
+            kind,
+            span: _,
+            id: _,
+        } = val;
+        match kind {
+            StmtKind::Block(b) => self.visit_block(b),
+            StmtKind::Expr(e) => self.visit_expr(e),
+            StmtKind::LocalVar(v) => self.visit_var_stmt(v),
+            StmtKind::Thing(d) => self.visit_ast_def(d),
         }
     }
 
@@ -984,6 +1061,7 @@ pub trait Visitor<'a> {
             initializer,
             ty,
             constant: _,
+            id: _,
         } = val;
 
         try_visit!(

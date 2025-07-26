@@ -1,6 +1,8 @@
 #![warn(clippy::all)]
+
 mod arena;
 mod ast;
+mod ctx;
 mod driver;
 mod errors;
 mod hir;

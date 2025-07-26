@@ -36,7 +36,9 @@ pub struct Parser<'a> {
     lexemes: Lexemes,
 
     errors: &'a mut Vec<ParseError>,
-    decls: Vec<AstDef>,
+
+    id: u32,
+    decls: Vec<Thing>,
 }
 
 impl<'a> Parser<'a> {
@@ -44,6 +46,7 @@ impl<'a> Parser<'a> {
         Self {
             lexemes,
             errors,
+            id: 0,
 
             decls: Vec::new(),
         }
@@ -57,22 +60,29 @@ impl<'a> Parser<'a> {
         self.errors
     }
 
-    pub fn decls(&self) -> &[AstDef] {
+    pub fn decls(&self) -> &[Thing] {
         &self.decls
     }
 
-    pub fn parse(mut self) -> Vec<AstDef> {
+    fn new_id(&mut self) -> AstId {
+        let id = AstId::new(self.id);
+        self.id += 1;
+        id
+    }
+
+    pub fn parse(mut self) -> Vec<Thing> {
+        let id = self.new_id();
         while !self.lexemes.is_empty() {
             match self.declaration() {
                 Err(err) => self.errors.push(err),
-                Ok(decl) => self.decls.push(AstDef::new(decl)),
+                Ok(decl) => self.decls.push(Thing::new(decl, id)),
             }
         }
 
         self.decls
     }
 
-    fn declaration(&mut self) -> Result<DefKind> {
+    fn declaration(&mut self) -> Result<ThingKind> {
         let tok = self.lexemes.peek_token();
 
         let decl = match tok.kind {
@@ -97,6 +107,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn ty(&mut self) -> Result<Ty> {
+        let id = self.new_id();
         let tok = self.lexemes.peek_token();
         match tok.kind {
             TokenKind::Function => self.parse_function_type(),
@@ -108,6 +119,7 @@ impl<'a> Parser<'a> {
                 let tok2 = self.lexemes.peek_token();
                 if tok2.kind != TokenKind::LeftArrowBracket {
                     let ty = Ty {
+                        id,
                         kind: TyKind::Regular(ident),
                         span: tok.span,
                     };
@@ -127,6 +139,7 @@ impl<'a> Parser<'a> {
                 self.expect_token(TokenKind::RightArrowBracket)?;
 
                 Ok(Ty {
+                    id,
                     kind: TyKind::Params {
                         base: Name::new(ident, tok.span),
                         generics: ty_params,
@@ -161,6 +174,7 @@ impl<'a> Parser<'a> {
         Ok(Path {
             path: segments,
             span,
+            id: self.new_id(),
         })
     }
 
@@ -170,6 +184,7 @@ impl<'a> Parser<'a> {
         Ok(PathSeg {
             name,
             span: name.span,
+            id: self.new_id(),
         })
     }
 
@@ -183,6 +198,7 @@ impl<'a> Parser<'a> {
 
                 bounds.push(Bound {
                     span: intrf.span,
+                    id: me.new_id(),
                     interface: intrf,
                 });
 
@@ -190,6 +206,7 @@ impl<'a> Parser<'a> {
                     let intrf = me.path()?;
 
                     bounds.push(Bound {
+                        id: me.new_id(),
                         span: intrf.span,
                         interface: intrf,
                     });
@@ -199,6 +216,7 @@ impl<'a> Parser<'a> {
             Ok(GenericParam {
                 ident: name,
                 bounds,
+                id: me.new_id(),
             })
         }
 
@@ -206,6 +224,7 @@ impl<'a> Parser<'a> {
             return Ok(Generics {
                 params: Vec::new(),
                 span: Span::DUMMY,
+                id: self.new_id(),
             });
         };
 
@@ -223,6 +242,7 @@ impl<'a> Parser<'a> {
         Ok(Generics {
             span: self.new_span(start, end, 0),
             params,
+            id: self.new_id(),
         })
     }
 
@@ -247,6 +267,7 @@ impl<'a> Parser<'a> {
                 ret: Some(ret),
             },
             span: self.new_span(fun_ident.span.start, end, 0),
+            id: self.new_id(),
         })
     }
 
@@ -259,6 +280,7 @@ impl<'a> Parser<'a> {
         Ok(Ty {
             kind: TyKind::Array(ty),
             span: self.new_span(left_sq.span.start(), right_sq.span.end(), 0),
+            id: self.new_id(),
         })
     }
 
@@ -275,12 +297,12 @@ impl<'a> Parser<'a> {
         let ret_type = self.ty()?;
 
         let span = self.new_span(start_span, ret_type.span.end(), 0);
-        Ok(FnSig::new(name, span, ret_type, fun_args))
+        Ok(FnSig::new(name, span, ret_type, fun_args, self.new_id()))
     }
 
-    fn function_declaration(&mut self) -> Result<DefKind> {
+    fn function_declaration(&mut self) -> Result<ThingKind> {
         match self.function()? {
-            FunctionPart::Full(decl) => Ok(DefKind::Function(decl)),
+            FunctionPart::Full(decl) => Ok(ThingKind::Function(decl)),
 
             FunctionPart::Signature(sig) => {
                 self.error_out(ParseErrorKind::FunctionWithoutBody, sig.span)
@@ -300,7 +322,13 @@ impl<'a> Parser<'a> {
         match maybe_block {
             Some(block) => {
                 let span = self.new_span(sig.span.end(), block.span.end(), 0);
-                let fndecl = FnDecl { block, sig, span };
+                let id = self.new_id();
+                let fndecl = FnDecl {
+                    block,
+                    sig,
+                    span,
+                    id,
+                };
                 Ok(FunctionPart::Full(fndecl))
             }
 
@@ -331,8 +359,8 @@ impl<'a> Parser<'a> {
 
         self.expect_token(TokenKind::Colon)?;
         let ty = self.ty()?;
-
-        Ok(Arg::new(name, ty))
+        let id = self.new_id();
+        Ok(Arg::new(name, ty, id))
     }
 
     fn fn_self_arg(&mut self) -> Option<Arg> {
@@ -354,9 +382,11 @@ impl<'a> Parser<'a> {
             let arg = Arg::new(
                 Name::new(SymbolId::DUMMY, tok.span),
                 Ty {
+                    id: self.new_id(),
                     kind: TyKind::MethodSelf,
                     span: tok.span,
                 },
+                self.new_id(),
             );
 
             return Some(arg);
@@ -379,7 +409,7 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
-    fn instance_decl(&mut self) -> Result<DefKind> {
+    fn instance_decl(&mut self) -> Result<ThingKind> {
         let keyword = self.expect_token(TokenKind::Instance)?;
         let name = self.expect_ident_as_name()?;
 
@@ -397,7 +427,7 @@ impl<'a> Parser<'a> {
 
         let span_end = assoc.as_ref().map_or(rcurly.span.end(), |x| x.span.end());
         let span = self.new_span(keyword.span.start(), span_end, 0);
-        Ok(DefKind::instance(name, span, fields, assoc, generics))
+        Ok(ThingKind::instance(name, span, fields, assoc, generics))
     }
 
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
@@ -429,7 +459,7 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
-    pub fn interface_decl(&mut self) -> Result<DefKind> {
+    pub fn interface_decl(&mut self) -> Result<ThingKind> {
         let kw = self.expect_token(TokenKind::Interface)?;
         let name = self.expect_ident_as_name()?;
         self.expect_token(TokenKind::LeftCurlyBracket)?;
@@ -440,7 +470,7 @@ impl<'a> Parser<'a> {
 
         let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
 
-        Ok(DefKind::interface(
+        Ok(ThingKind::interface(
             name,
             self.new_span(kw.span.start(), rcurly.span.end(), 0),
             entries,
@@ -475,7 +505,7 @@ impl<'a> Parser<'a> {
         Ok(ret)
     }
 
-    fn apply_interface(&mut self) -> Result<DefKind> {
+    fn apply_interface(&mut self) -> Result<ThingKind> {
         let apply = self.expect_token(TokenKind::Apply)?;
         let interface_name = self.expect_ident_as_name()?;
 
@@ -491,7 +521,7 @@ impl<'a> Parser<'a> {
 
         let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
 
-        Ok(DefKind::Apply(Apply::new(
+        Ok(ThingKind::Apply(Apply::new(
             interface_name,
             receiver,
             self.new_span(apply.span.start(), rcurly.span.end(), 0),
@@ -532,10 +562,16 @@ impl<'a> Parser<'a> {
             self.expression()?.into()
         };
 
-        Ok(VariableStmt::new(mode, name, initializer, ty))
+        Ok(VariableStmt::new(
+            mode,
+            name,
+            initializer,
+            ty,
+            self.new_id(),
+        ))
     }
 
-    fn global_variable_decl(&mut self) -> Result<DefKind> {
+    fn global_variable_decl(&mut self) -> Result<ThingKind> {
         self.expect_token(TokenKind::Global)?;
 
         let constant = self.lexemes.peek_token().to_err_if_eof()?.kind == TokenKind::Const;
@@ -544,34 +580,35 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenKind::Colon)?;
 
         let ty = self.ty()?;
-        let tok = self.lexemes.peek_token().to_err_if_eof()?;
-
         self.expect_token(TokenKind::Assign)?;
 
-        let initializer: Option<Expr> = if tok.kind == TokenKind::Semicolon {
-            None
-        } else {
-            self.expression()?.into()
-        };
+        let init = self.expression()?;
+        self.expect_token(TokenKind::Semicolon)?;
 
-        Ok(DefKind::global(name, initializer, ty, constant))
+        Ok(ThingKind::global(name, init, ty, constant, self.new_id()))
     }
 
     fn statement(&mut self) -> Result<Stmt> {
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
-
+        let id = self.new_id();
         let stmt = match tok.kind {
-            TokenKind::LeftCurlyBracket => Stmt::Block(self.block()?),
-            TokenKind::Let | TokenKind::Const => Stmt::LocalVar(self.local_variable_stmt()?),
+            TokenKind::LeftCurlyBracket => StmtKind::Block(self.block()?),
+            TokenKind::Let | TokenKind::Const => StmtKind::LocalVar(self.local_variable_stmt()?),
             TokenKind::Function | TokenKind::Global => {
-                Stmt::Definition(AstDef::new(self.declaration()?))
+                StmtKind::Thing(Thing::new(self.declaration()?, id))
             }
-            _ => Stmt::Expr(self.expression()?),
+            _ => StmtKind::Expr(self.expression()?),
         };
 
         let _ = self.expect_token(TokenKind::Semicolon)?;
 
-        Ok(stmt)
+        let span = stmt.span();
+
+        Ok(Stmt {
+            kind: stmt,
+            span,
+            id: self.new_id(),
+        })
     }
 
     fn block(&mut self) -> Result<Block> {
@@ -583,7 +620,8 @@ impl<'a> Parser<'a> {
         }
 
         let span_end = self.expect_token(TokenKind::RightCurlyBracket)?.span.end();
-        Ok(Block::new(stmts, self.new_span(span_start, span_end, 0)))
+        let span = self.new_span(span_start, span_end, 0);
+        Ok(Block::new(stmts, span, self.new_id()))
     }
 
     fn expression(&mut self) -> Result<Expr> {
@@ -610,6 +648,7 @@ impl<'a> Parser<'a> {
                     otherwise,
                 },
                 self.new_span(begin.span.start(), end, 0),
+                self.new_id(),
             ));
         };
 
@@ -624,6 +663,7 @@ impl<'a> Parser<'a> {
                     otherwise,
                 },
                 self.new_span(begin.span.start(), end, 0),
+                self.new_id(),
             ));
         }
 
@@ -653,6 +693,7 @@ impl<'a> Parser<'a> {
                 otherwise,
             },
             self.new_span(begin.span.start(), end, 0),
+            self.new_id(),
         ))
     }
 
@@ -661,7 +702,7 @@ impl<'a> Parser<'a> {
         let body = self.block()?;
         let span = self.new_span(loop_ident.span.start(), body.span.end(), 0);
 
-        Ok(Expr::new(ExprType::Loop { body }, span))
+        Ok(Expr::new(ExprType::Loop { body }, span, self.new_id()))
     }
 
     pub fn for_loop(&mut self) -> Result<Expr> {
@@ -682,6 +723,7 @@ impl<'a> Parser<'a> {
                 body,
             },
             span,
+            self.new_id(),
         ))
     }
 
@@ -727,7 +769,11 @@ impl<'a> Parser<'a> {
         let body = self.block()?;
         let span = self.new_span(while_ident.span.start(), body.span.end(), 0);
 
-        Ok(Expr::new(ExprType::While { cond, body }, span))
+        Ok(Expr::new(
+            ExprType::While { cond, body },
+            span,
+            self.new_id(),
+        ))
     }
 
     pub fn until_expr(&mut self) -> Result<Expr> {
@@ -736,7 +782,11 @@ impl<'a> Parser<'a> {
         let body = self.block()?;
         let span = self.new_span(until_ident.span.start(), body.span.end(), 0);
 
-        Ok(Expr::new(ExprType::Until { cond, body }, span))
+        Ok(Expr::new(
+            ExprType::Until { cond, body },
+            span,
+            self.new_id(),
+        ))
     }
 
     pub fn lambda_expr(&mut self) -> Result<Expr> {
@@ -760,6 +810,7 @@ impl<'a> Parser<'a> {
 
         Ok(Expr {
             ty: ExprType::Lambda { args, body },
+            id: self.new_id(),
             span,
         })
     }
@@ -794,6 +845,7 @@ impl<'a> Parser<'a> {
                 initialize: inits,
             },
             self.new_span(span_start, span_end, 0),
+            self.new_id(),
         ))
     }
 
@@ -829,7 +881,7 @@ impl<'a> Parser<'a> {
             mode,
         };
 
-        Ok(Expr::new(expr_ty, span))
+        Ok(Expr::new(expr_ty, span, self.new_id()))
     }
 
     fn bitwise_or(&mut self) -> Result<Expr> {
@@ -846,7 +898,7 @@ impl<'a> Parser<'a> {
                 op: BinOp::BitOr,
             };
 
-            lhs = Expr::new(expr_ty, span);
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -865,7 +917,7 @@ impl<'a> Parser<'a> {
                 op: BinOp::BitXor,
             };
 
-            lhs = Expr::new(expr_ty, span);
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -884,7 +936,7 @@ impl<'a> Parser<'a> {
                 op: BinOp::BitAnd,
             };
 
-            lhs = Expr::new(expr_ty, span);
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -903,7 +955,7 @@ impl<'a> Parser<'a> {
                 op: BinOp::LogicalOr,
             };
 
-            lhs = Expr::new(expr_ty, span);
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -922,7 +974,7 @@ impl<'a> Parser<'a> {
                 op: BinOp::LogicalAnd,
             };
 
-            lhs = Expr::new(expr_ty, span);
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -947,7 +999,7 @@ impl<'a> Parser<'a> {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span)
+            lhs = Expr::new(expr_ty, span, self.new_id())
         }
 
         Ok(lhs)
@@ -978,7 +1030,7 @@ impl<'a> Parser<'a> {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span)
+            lhs = Expr::new(expr_ty, span, self.new_id())
         }
 
         Ok(lhs)
@@ -1005,6 +1057,7 @@ impl<'a> Parser<'a> {
                     op,
                 },
                 span,
+                self.new_id(),
             )
         }
 
@@ -1031,7 +1084,7 @@ impl<'a> Parser<'a> {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span)
+            lhs = Expr::new(expr_ty, span, self.new_id())
         }
 
         Ok(lhs)
@@ -1056,7 +1109,7 @@ impl<'a> Parser<'a> {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span)
+            lhs = Expr::new(expr_ty, span, self.new_id())
         }
 
         Ok(lhs)
@@ -1081,7 +1134,7 @@ impl<'a> Parser<'a> {
                 target: Box::new(primary),
             };
 
-            return Ok(Expr::new(expr_ty, span));
+            return Ok(Expr::new(expr_ty, span, self.new_id()));
         };
 
         self.field_access_or_method_call()
@@ -1113,7 +1166,11 @@ impl<'a> Parser<'a> {
                 }
             };
 
-            lvalue = Expr::new(exprty, self.new_span(span_start, span_end, 0));
+            lvalue = Expr::new(
+                exprty,
+                self.new_span(span_start, span_end, 0),
+                self.new_id(),
+            );
         }
 
         Ok(lvalue)
@@ -1141,6 +1198,7 @@ impl<'a> Parser<'a> {
                     args,
                 },
                 span,
+                self.new_id(),
             ));
         }
 
@@ -1171,6 +1229,7 @@ impl<'a> Parser<'a> {
                 return Ok(Expr::new(
                     ExprType::Return { ret },
                     self.new_span(span.start(), end, 0),
+                    self.new_id(),
                 ));
             }
             TokenKind::If => return self.if_expr(),
@@ -1227,7 +1286,7 @@ impl<'a> Parser<'a> {
         self.lexemes.advance();
 
         if let Some(expr_ty) = expr {
-            return Ok(Expr::new(expr_ty, span));
+            return Ok(Expr::new(expr_ty, span, self.new_id()));
         }
 
         self.error_out(
