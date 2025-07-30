@@ -7,32 +7,73 @@ pub struct SymbolId {
     private: u32,
 }
 
+macro_rules! interned_consts {
+    ($($name:ident -> $id:expr ),*) => {
+        $(
+            pub const fn $name() -> SymbolId {
+                SymbolId { private: $id }
+            }
+        )*
+    };
+}
+
 impl SymbolId {
     pub const DUMMY: Self = Self { private: u32::MAX };
+
+    const BASE_SYMBOLS: [&str; 10] = [
+        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+    ];
+
+    // keep in touch with `BASE_SYMBOLS`
+    interned_consts!(
+        u8  -> 0,
+        u16 -> 1,
+        u32 -> 2,
+        u64 -> 3,
+        i8  -> 4,
+        i16 -> 5,
+        i32 -> 6,
+        i64 -> 7,
+        f32 -> 8,
+        f64 -> 9
+    );
 }
 
 pub struct Interner {
+    arena: Arena,
     map: HashMap<&'static str, SymbolId>,
     storage: Vec<&'static str>,
 }
 
 impl Interner {
     pub fn new() -> Self {
-        Self {
+        let mut me = Self {
             map: HashMap::new(),
             storage: Vec::new(),
+            arena: Arena::new(),
+        };
+
+        me.pre_interned();
+
+        me
+    }
+
+    pub fn pre_interned(&mut self) {
+        for sym in SymbolId::BASE_SYMBOLS {
+            self.intern(sym);
         }
     }
 
-    pub fn intern(&mut self, str: &str, arena: &Arena) -> SymbolId {
+    pub fn intern(&mut self, str: &str) -> SymbolId {
         if let Some(present) = self.map.get(str) {
             return *present;
         };
 
         // Safety:
         //
-        // The interner will live shorter than the entire session
-        let new_str: &'static str = unsafe { transmute(arena.alloc_string(str)) };
+        // The Arena is in the interner
+        let new_str: &'static str = unsafe { transmute(self.arena.alloc_string(str)) };
+
         let id = SymbolId {
             private: self.storage.len() as u32,
         };
@@ -45,10 +86,6 @@ impl Interner {
 }
 
 pub struct Session {
-    /// Arena for anything
-    /// that doesn't impl `Drop`
-    arena: Arena,
-
     /// Interner
     interner: Interner,
 }
@@ -56,13 +93,12 @@ pub struct Session {
 impl Session {
     pub fn new() -> Self {
         Self {
-            arena: Arena::new(),
             interner: Interner::new(),
         }
     }
 
     pub fn intern_string(&mut self, str: &str) -> SymbolId {
-        self.interner.intern(str, &self.arena)
+        self.interner.intern(str)
     }
 
     pub fn get_string(&self, id: SymbolId) -> &str {

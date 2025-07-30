@@ -1,0 +1,9 @@
+fun main() => i32 {
+	let a: i32 = 1;
+	let b: i32 = a + 1; # a is symbol 11
+	let a: u32 = d();
+}
+
+fun d() => u32 {
+	1 + 1;
+}

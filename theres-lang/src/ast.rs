@@ -267,7 +267,7 @@ pub enum TyKind {
     Array(Box<Ty>),
 
     /// Regular type like `u32`
-    Regular(SymbolId),
+    Regular(Name),
 
     /// With generics
     Params { base: Name, generics: Vec<Ty> },
@@ -300,7 +300,7 @@ impl Block {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct FnSig {
     pub name: Name,
-    pub args: FnArgs,
+    pub args: Vec<Arg>,
     pub ret_type: Ty,
     pub span: Span,
     pub id: AstId,
@@ -311,7 +311,7 @@ impl FnSig {
         FnSig {
             name,
             ret_type,
-            args: FnArgs { args },
+            args,
             span,
             id,
         }
@@ -414,13 +414,15 @@ pub struct Field {
     pub name: Name,
     pub ty: Ty,
     pub span: Span,
+    pub id: AstId,
 }
 
 impl Field {
-    pub fn new(constant: bool, name: Name, ty: Ty, span: Span) -> Self {
+    pub fn new(constant: bool, name: Name, ty: Ty, span: Span, id: AstId) -> Self {
         Self {
             constant,
             name,
+            id,
             ty,
             span,
         }
@@ -434,6 +436,7 @@ pub struct Instance {
     pub fields: Vec<Field>,
     pub assoc: Option<Block>,
     pub generics: Generics,
+    pub id: AstId,
 }
 
 impl Instance {
@@ -443,9 +446,11 @@ impl Instance {
         fields: Vec<Field>,
         assoc: Option<Block>,
         generics: Generics,
+        id: AstId,
     ) -> Self {
         Self {
             name,
+            id,
             span,
             fields,
             assoc,
@@ -557,8 +562,9 @@ impl ThingKind {
         fields: Vec<Field>,
         methods: Option<Block>,
         gens: Generics,
+        id: AstId,
     ) -> Self {
-        Self::Instance(Instance::new(name, span, fields, methods, gens))
+        Self::Instance(Instance::new(name, span, fields, methods, gens, id))
     }
 
     pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
@@ -690,6 +696,7 @@ pub trait Visitor<'a> {
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
         let Instance {
             name,
+            id: _,
             span: _,
             fields,
             assoc,
@@ -714,6 +721,7 @@ pub trait Visitor<'a> {
             name,
             ty,
             span: _,
+            id: _,
         } = val;
 
         try_visit!(self.visit_ty(ty));
@@ -836,7 +844,7 @@ pub trait Visitor<'a> {
                 Self::Result::normal()
             }
 
-            ExprType::UnaryExpr { op: _, target } => self.visit_expr(&target),
+            ExprType::UnaryExpr { op: _, target } => self.visit_expr(target),
 
             ExprType::Constant(..) => Self::Result::normal(),
 
@@ -1013,15 +1021,11 @@ pub trait Visitor<'a> {
             id: _,
         } = val;
 
-        try_visit!(self.visit_name(name), self.visit_fn_args(args));
+        try_visit!(self.visit_name(name));
+
+        visit_iter!(v: self, m: visit_arg, args);
 
         self.visit_ty(ret_type)
-    }
-
-    fn visit_fn_args(&mut self, val: &'a FnArgs) -> Self::Result {
-        let FnArgs { args } = val;
-
-        visit_iter!(v: self, m: visit_arg, args)
     }
 
     fn visit_arg(&mut self, val: &'a Arg) -> Self::Result {
@@ -1051,7 +1055,7 @@ pub trait Visitor<'a> {
             StmtKind::Block(b) => self.visit_block(b),
             StmtKind::Expr(e) => self.visit_expr(e),
             StmtKind::LocalVar(v) => self.visit_var_stmt(v),
-            StmtKind::Thing(d) => self.visit_ast_def(d),
+            StmtKind::Thing(d) => self.visit_thing(d),
         }
     }
 

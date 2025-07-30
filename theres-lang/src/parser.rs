@@ -120,7 +120,7 @@ impl<'a> Parser<'a> {
                 if tok2.kind != TokenKind::LeftArrowBracket {
                     let ty = Ty {
                         id,
-                        kind: TyKind::Regular(ident),
+                        kind: TyKind::Regular(Name::new(ident, tok.span)),
                         span: tok.span,
                     };
 
@@ -427,7 +427,14 @@ impl<'a> Parser<'a> {
 
         let span_end = assoc.as_ref().map_or(rcurly.span.end(), |x| x.span.end());
         let span = self.new_span(keyword.span.start(), span_end, 0);
-        Ok(ThingKind::instance(name, span, fields, assoc, generics))
+        Ok(ThingKind::instance(
+            name,
+            span,
+            fields,
+            assoc,
+            generics,
+            self.new_id(),
+        ))
     }
 
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
@@ -441,7 +448,13 @@ impl<'a> Parser<'a> {
             let ty = me.ty()?;
             let field_span = me.new_span(span_start, ty.span.end(), 0);
 
-            Ok(Field::new(is_const, field_name, ty, field_span))
+            Ok(Field::new(
+                is_const,
+                field_name,
+                ty,
+                field_span,
+                me.new_id(),
+            ))
         }
 
         let peeked = self.lexemes.peek_token();

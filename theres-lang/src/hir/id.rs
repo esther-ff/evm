@@ -3,5 +3,5 @@ pub struct HirId {
 }
 
 pub fn hir_id(i: u32) -> HirId {
-    HirId(i)
+    unimplemented!()
 }
