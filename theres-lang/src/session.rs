@@ -20,8 +20,8 @@ macro_rules! interned_consts {
 impl SymbolId {
     pub const DUMMY: Self = Self { private: u32::MAX };
 
-    const BASE_SYMBOLS: [&str; 10] = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+    const BASE_SYMBOLS: [&str; 11] = [
+        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil",
     ];
 
     // keep in touch with `BASE_SYMBOLS`
@@ -35,7 +35,8 @@ impl SymbolId {
         i32 -> 6,
         i64 -> 7,
         f32 -> 8,
-        f64 -> 9
+        f64 -> 9,
+        nil -> 10
     );
 }
 

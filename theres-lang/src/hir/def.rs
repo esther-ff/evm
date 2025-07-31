@@ -10,6 +10,7 @@ pub enum DefType {
     Fun,
     Instance,
     Interface,
+    Realm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
@@ -29,6 +30,8 @@ pub enum PrimTy {
     Float,
     /// f64
     Double,
+
+    Nil,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

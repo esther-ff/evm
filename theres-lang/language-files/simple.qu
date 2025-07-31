@@ -1,4 +1,15 @@
+realm RealmOne {
+	fun meow() => nil {
+		
+	}
+}
+
 fun main() => i32 {
+	let m: u32 = test();
+	fun test() => i32 {
+		1 + 1;
+	}
+
 	let a: i32 = 1;
 	let b: i32 = a + 1; # a is symbol 11
 	let a: u32 = d();

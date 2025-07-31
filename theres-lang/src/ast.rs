@@ -287,13 +287,19 @@ pub struct Ty {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
+    pub expr: Option<Box<Expr>>,
     pub span: Span,
     pub id: AstId,
 }
 
 impl Block {
-    pub fn new(stmts: Vec<Stmt>, span: Span, id: AstId) -> Self {
-        Self { stmts, span, id }
+    pub fn new(stmts: Vec<Stmt>, span: Span, id: AstId, expr: Option<Expr>) -> Self {
+        Self {
+            stmts,
+            span,
+            id,
+            expr: expr.map(Box::new),
+        }
     }
 }
 
@@ -532,6 +538,7 @@ pub enum ThingKind {
     Function(FnDecl),
     Global(GlobalDecl),
     Instance(Instance),
+    Realm(Realm),
     Interface(Interface),
     Apply(Apply),
 }
@@ -578,8 +585,17 @@ impl ThingKind {
             Self::Instance(i) => i.span,
             Self::Interface(it) => it.span,
             Self::Apply(a) => a.span,
+            Self::Realm(r) => r.span,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct Realm {
+    pub items: Vec<Thing>,
+    pub id: AstId,
+    pub span: Span,
+    pub name: Name,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -589,6 +605,11 @@ pub struct Name {
 }
 
 impl Name {
+    pub const DUMMY: Self = Self {
+        interned: SymbolId::DUMMY,
+        span: Span::DUMMY,
+    };
+
     pub fn new(interned: SymbolId, span: Span) -> Self {
         Self { span, interned }
     }
@@ -664,8 +685,8 @@ macro_rules! visit_iter {
     (v: $v:expr, m: $m:ident, $($i:expr),*) => {
         $(
             {
-                for __entry in $i {
-                    try_visit!($v.$m(__entry))
+                for entry in $i {
+                    try_visit!($v.$m(entry))
                 }
 
                 Self::Result::normal()
@@ -677,6 +698,18 @@ macro_rules! visit_iter {
 pub trait Visitor<'a> {
     type Result: VisitorResult;
 
+    fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
+        let Realm {
+            items,
+            id: _,
+            span: _,
+            name,
+        } = val;
+
+        visit_iter!(v: self, m: visit_thing, items);
+        self.visit_name(name)
+    }
+
     fn visit_thing(&mut self, val: &'a Thing) -> Self::Result {
         let Thing { kind, id: _ } = val;
 
@@ -686,6 +719,7 @@ pub trait Visitor<'a> {
     fn visit_def(&mut self, val: &'a ThingKind) -> Self::Result {
         match val {
             ThingKind::Function(f) => self.visit_fn_decl(f),
+            ThingKind::Realm(r) => self.visit_realm(r),
             ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Apply(a) => self.visit_apply_decl(a),
@@ -1040,9 +1074,11 @@ pub trait Visitor<'a> {
             stmts,
             span: _,
             id: _,
+            expr,
         } = val;
 
-        visit_iter!(v: self, m: visit_stmt, stmts)
+        visit_iter!(v: self, m: visit_stmt, stmts);
+        maybe_visit!(v: self, m: visit_expr, expr)
     }
 
     fn visit_stmt(&mut self, val: &'a Stmt) -> Self::Result {

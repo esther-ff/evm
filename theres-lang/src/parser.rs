@@ -32,6 +32,11 @@ pub enum FunctionPart {
     Full(FnDecl),
 }
 
+pub enum ExprOrStmt {
+    Stmt(Stmt),
+    Expr(Expr),
+}
+
 pub struct Parser<'a> {
     lexemes: Lexemes,
 
@@ -70,8 +75,10 @@ impl<'a> Parser<'a> {
         id
     }
 
-    pub fn parse(mut self) -> Vec<Thing> {
+    pub fn parse(mut self) -> Realm {
+        let realm_id = self.new_id();
         let id = self.new_id();
+
         while !self.lexemes.is_empty() {
             match self.declaration() {
                 Err(err) => self.errors.push(err),
@@ -79,7 +86,19 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.decls
+        let start = self
+            .decls
+            .first()
+            .map_or(0, |decl| decl.kind.span().start());
+        let end = self.decls.last().map_or(0, |decl| decl.kind.span().end());
+        let span = self.new_span(start, end, 0);
+
+        Realm {
+            items: self.decls,
+            id: realm_id,
+            span,
+            name: Name::DUMMY,
+        }
     }
 
     fn declaration(&mut self) -> Result<ThingKind> {
@@ -91,6 +110,7 @@ impl<'a> Parser<'a> {
             TokenKind::Instance => self.instance_decl()?,
             TokenKind::Interface => self.interface_decl()?,
             TokenKind::Apply => self.apply_interface()?,
+            TokenKind::Realm => self.realm_decl()?,
             TokenKind::Eof => return tok.to_err_if_eof().map(|_| unreachable!()),
 
             any => {
@@ -99,6 +119,8 @@ impl<'a> Parser<'a> {
                     got: any,
                 };
 
+                // dbg!(tok);
+
                 return self.error_out(err, tok.span);
             }
         };
@@ -106,7 +128,35 @@ impl<'a> Parser<'a> {
         Ok(decl)
     }
 
-    pub fn ty(&mut self) -> Result<Ty> {
+    fn realm_decl(&mut self) -> Result<ThingKind> {
+        let kw = self.expect_token(TokenKind::Realm)?;
+        let name = self.expect_ident_as_name()?;
+        let mut items = Vec::new();
+
+        self.expect_token(TokenKind::LeftCurlyBracket)?;
+
+        while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
+            let kind = self.declaration()?;
+            let thing = Thing {
+                id: self.new_id(),
+                kind,
+            };
+            items.push(thing);
+        }
+
+        let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
+
+        let realm = Realm {
+            id: self.new_id(),
+            items,
+            name,
+            span: self.new_span(kw.span.start, rcurly.span.end, 0),
+        };
+
+        Ok(ThingKind::Realm(realm))
+    }
+
+    fn ty(&mut self) -> Result<Ty> {
         let id = self.new_id();
         let tok = self.lexemes.peek_token();
         match tok.kind {
@@ -569,10 +619,14 @@ impl<'a> Parser<'a> {
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
 
         let initializer: Option<Expr> = if tok.kind == TokenKind::Semicolon {
+            self.lexemes.advance();
             None
         } else {
             self.expect_token(TokenKind::Assign)?;
-            self.expression()?.into()
+
+            let ret = self.expression()?.into();
+            self.expect_token(TokenKind::Semicolon)?;
+            ret
         };
 
         Ok(VariableStmt::new(
@@ -601,40 +655,61 @@ impl<'a> Parser<'a> {
         Ok(ThingKind::global(name, init, ty, constant, self.new_id()))
     }
 
-    fn statement(&mut self) -> Result<Stmt> {
+    fn statement(&mut self) -> Result<ExprOrStmt> {
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
         let id = self.new_id();
         let stmt = match tok.kind {
             TokenKind::LeftCurlyBracket => StmtKind::Block(self.block()?),
             TokenKind::Let | TokenKind::Const => StmtKind::LocalVar(self.local_variable_stmt()?),
+
             TokenKind::Function | TokenKind::Global => {
                 StmtKind::Thing(Thing::new(self.declaration()?, id))
             }
-            _ => StmtKind::Expr(self.expression()?),
-        };
 
-        let _ = self.expect_token(TokenKind::Semicolon)?;
+            _ => {
+                let expr = self.expression()?;
+
+                if self.consume_if(TokenKind::Semicolon) {
+                    StmtKind::Expr(expr)
+                } else {
+                    let ret = ExprOrStmt::Expr(expr);
+                    return Ok(ret);
+                }
+            }
+        };
 
         let span = stmt.span();
 
-        Ok(Stmt {
+        let stmt = Stmt {
             kind: stmt,
             span,
             id: self.new_id(),
-        })
+        };
+
+        Ok(ExprOrStmt::Stmt(stmt))
     }
 
     fn block(&mut self) -> Result<Block> {
         let span_start = self.expect_token(TokenKind::LeftCurlyBracket)?.span.start();
-
         let mut stmts = Vec::new();
+        let mut expr = None;
+
         while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
-            stmts.push(self.statement()?);
+            dbg!(self.lexemes.peek_token());
+            match self.statement()? {
+                ExprOrStmt::Stmt(stmt) => stmts.push(stmt),
+
+                ExprOrStmt::Expr(e) => {
+                    expr = Some(e);
+                    break;
+                }
+            }
         }
 
         let span_end = self.expect_token(TokenKind::RightCurlyBracket)?.span.end();
         let span = self.new_span(span_start, span_end, 0);
-        Ok(Block::new(stmts, span, self.new_id()))
+
+        Ok(Block::new(stmts, span, self.new_id(), expr))
     }
 
     fn expression(&mut self) -> Result<Expr> {
@@ -1385,9 +1460,10 @@ impl<'a> Parser<'a> {
     fn error_out<T>(&mut self, kind: ParseErrorKind, span: Span) -> Result<T, ParseError> {
         let err = ParseError::new(span, kind);
 
-        println!("erroring it out! at {}", Location::caller());
+        // println!("erroring it out! at {}", Location::caller());
         loop {
             let next = self.lexemes.peek_token();
+            dbg!(next);
 
             if next.kind == TokenKind::Semicolon {
                 self.lexemes.advance();

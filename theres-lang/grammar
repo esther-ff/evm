@@ -1,5 +1,9 @@
-module         → (declaration)* ;
-declaration    → funDecl | globalDecl ;
+program        → realm+;
+
+realm          → (declaration)* ;
+realmDecl      → "realm" IDENT "{" declaration+ "}" ; 
+
+declaration    → funDecl | globalDecl | instanceDecl | realmDecl ;
 
 funSig         → "fun IDENT "(" funArgs? ")" "=>" IDENT;
 funcDecl       → funSig block ;
@@ -37,7 +41,7 @@ statement      → block
 
 
 			
-block         → "{" declaration* "}" ;
+block         → "{" (declaration | statement) expression? "}" ;
 
 localVariableStmt
               → ( "let" | "const" ) IDENT ":" IDENT ("=" expression)? ";" ;
@@ -110,4 +114,5 @@ primary        → NUMBER
 			   | makeExpr 
 			   | returnExpr 
 			   | makeExpr
-			   | pathExpr ;
+			   | pathExpr
+			   | block ;

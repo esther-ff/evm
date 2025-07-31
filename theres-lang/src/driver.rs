@@ -1,7 +1,7 @@
 use std::{io, path::Path};
 
 use crate::{
-    ast::{Thing, Visitor},
+    ast::{Realm, Visitor},
     errors::Errors,
     hir::validate_ast::{LateResolver, ThingDefResolver},
     lexer::{LexError, Lexemes, Lexer},
@@ -65,7 +65,7 @@ impl<T: FileManager> Compiler<T> {
         lexemes
     }
 
-    fn parse_to_ast(&mut self, lexemes: Lexemes) -> Vec<Thing> {
+    fn parse_to_ast(&mut self, lexemes: Lexemes) -> Realm {
         let decls = Parser::new(lexemes, &mut self.parse_errors).parse();
 
         if !self.parse_errors.is_empty() {
@@ -81,14 +81,13 @@ impl<T: FileManager> Compiler<T> {
         decls
     }
 
-    fn resolvers(&mut self, ast: &[Thing]) {
-        let mut first_pass = ThingDefResolver::new();
-        for decl in ast {
+    fn resolvers(&mut self, ast: &Realm) {
+        let mut first_pass = ThingDefResolver::new(ast);
+        for decl in &ast.items {
             first_pass.visit_thing(decl)
         }
-
         let mut inner = LateResolver::new(first_pass);
-        for decl in ast {
+        for decl in &ast.items {
             inner.visit_thing(decl)
         }
 
