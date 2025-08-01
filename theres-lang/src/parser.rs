@@ -1327,7 +1327,7 @@ impl<'a> Parser<'a> {
         let mut span = token.span;
 
         let expr = match token.kind {
-            TokenKind::Return => return self.expression(),
+            TokenKind::Return => return self.return_expr(token),
 
             TokenKind::If => return self.if_expr(),
             TokenKind::Loop => return self.loop_expr(),

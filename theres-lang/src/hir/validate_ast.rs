@@ -553,7 +553,11 @@ impl<'a> LateResolver<'a> {
                             .get(scope_id)
                             .expect("ast id -> instance scope mapping is invalid");
 
-                        let res = instance_scope.get(name, Space::Values);
+                        self.current_scope = old_scope;
+
+                        let Some(val_name) = path.get(ix + 1) else {
+                            return Resolved::Err;
+                        };
 
                         if ix + 1 != amount_of_segments {
                             todo!(
@@ -561,7 +565,8 @@ impl<'a> LateResolver<'a> {
                             );
                         }
 
-                        self.current_scope = old_scope;
+                        let res = instance_scope.get(val_name.name.interned, Space::Values);
+
                         return res.unwrap_or(Resolved::Err);
                     }
 
@@ -720,6 +725,7 @@ where
                 StmtKind::LocalVar(l) => {
                     debug_assert!(l.mode == VarMode::Const);
                     debug_assert!(l.initializer.is_some());
+
                     let def_id = self.gen_def_id(l.id);
                     scope.add(
                         &l.name,

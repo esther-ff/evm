@@ -105,4 +105,8 @@ impl Session {
     pub fn get_string(&self, id: SymbolId) -> &str {
         self.interner.storage[id.private as usize]
     }
+
+    pub fn debug_symbol_id_string(&self) -> &HashMap<&'static str, SymbolId> {
+        &self.interner.map
+    }
 }

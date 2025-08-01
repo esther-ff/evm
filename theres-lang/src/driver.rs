@@ -96,6 +96,13 @@ impl<T: FileManager> Compiler<T> {
             for (id, res) in inner.res_map().iter() {
                 println!("ast id of res: {id:?} -> resolved as: {res:?}",);
             }
+
+            self.session
+                .debug_symbol_id_string()
+                .iter()
+                .for_each(|(name, id)| {
+                    println!("{id:?} -> {name:?}");
+                })
         }
     }
 

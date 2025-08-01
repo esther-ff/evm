@@ -16,13 +16,13 @@ fun main() => i32 {
 		1 + 1;
 	}
 
-	let a: i32 = 1;
-	let b: i32 = a + 1; # a is symbol 11
-	let a: u32 = d();
+	let varA: i32 = 1;
+	let bindA: i32 = varA + 1; # a is symbol 11
+	let function: u32 = d();
 
-	let r: nil = RealmOne::meow();
+	let realmRef: nil = RealmOne::meow();
 
-	let v: u32 = Simple::SimpleConst;
+	let ConstToVar: u32 = Simple::SimpleConst;
 }
 
 fun d() => u32 {
