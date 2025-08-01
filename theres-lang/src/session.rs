@@ -2,10 +2,12 @@ use std::{collections::HashMap, mem::transmute};
 
 use crate::arena::Arena;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymbolId {
-    private: u32,
-}
+// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// pub struct SymbolId {
+//     private: u32,
+// }
+
+crate::newtyped_index!(SymbolId, SymbolMap, SymbolVec);
 
 macro_rules! interned_consts {
     ($($name:ident -> $id:expr ),*) => {
@@ -18,8 +20,6 @@ macro_rules! interned_consts {
 }
 
 impl SymbolId {
-    pub const DUMMY: Self = Self { private: u32::MAX };
-
     const BASE_SYMBOLS: [&str; 11] = [
         "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil",
     ];

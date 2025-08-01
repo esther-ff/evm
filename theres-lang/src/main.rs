@@ -6,6 +6,7 @@ mod ctx;
 mod driver;
 mod errors;
 mod hir;
+mod id;
 mod lexer;
 mod parser;
 mod session;

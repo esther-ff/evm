@@ -1,17 +1,7 @@
 use crate::lexer::Span;
+pub use crate::parser::AstId;
 use crate::session::SymbolId;
 use core::ops::ControlFlow;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AstId {
-    private: u32,
-}
-
-impl AstId {
-    pub fn new(n: u32) -> Self {
-        Self { private: n }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum BinOp {
@@ -147,10 +137,6 @@ pub enum ExprType {
         name: Name,
     },
 
-    Variable {
-        name: Name,
-    },
-
     For {
         iterable: Box<Expr>,
         pat: Pat, // todo
@@ -204,6 +190,8 @@ pub enum ExprType {
     },
 
     Path(Path),
+
+    Block(Block),
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -390,7 +378,6 @@ pub struct GlobalDecl {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum StmtKind {
-    Block(Block),
     Expr(Expr),
     LocalVar(VariableStmt),
     Thing(Thing),
@@ -399,7 +386,6 @@ pub enum StmtKind {
 impl StmtKind {
     pub fn span(&self) -> Span {
         match self {
-            Self::Block(b) => b.span,
             Self::Expr(x) => x.span,
             Self::LocalVar(l) => l.name.span,
             Self::Thing(t) => t.kind.span(),
@@ -910,7 +896,7 @@ pub trait Visitor<'a> {
                 self.visit_name(name)
             }
 
-            ExprType::Variable { name } => self.visit_name(name),
+            ExprType::Path(p) => self.visit_path(p),
 
             ExprType::While { cond, body } => {
                 try_visit!(self.visit_expr(cond));
@@ -963,8 +949,6 @@ pub trait Visitor<'a> {
                 self.visit_name(field)
             }
 
-            ExprType::Path(path) => self.visit_path(path),
-
             ExprType::Lambda { args, body } => {
                 visit_iter!(v: self, m: visit_pat, args);
 
@@ -980,6 +964,8 @@ pub trait Visitor<'a> {
                 try_visit!(self.visit_ty(created));
                 visit_iter!(v: self, m: visit_expr, ctor_args)
             }
+
+            ExprType::Block(b) => self.visit_block(b),
         }
     }
 
@@ -1088,7 +1074,6 @@ pub trait Visitor<'a> {
             id: _,
         } = val;
         match kind {
-            StmtKind::Block(b) => self.visit_block(b),
             StmtKind::Expr(e) => self.visit_expr(e),
             StmtKind::LocalVar(v) => self.visit_var_stmt(v),
             StmtKind::Thing(d) => self.visit_thing(d),

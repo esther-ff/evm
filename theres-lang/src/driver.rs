@@ -86,13 +86,17 @@ impl<T: FileManager> Compiler<T> {
         for decl in &ast.items {
             first_pass.visit_thing(decl)
         }
-        let mut inner = LateResolver::new(first_pass);
+        let mut inner = LateResolver::new(first_pass, &self.session);
         for decl in &ast.items {
             inner.visit_thing(decl)
         }
 
         #[cfg(debug_assertions)]
-        dbg!(inner.res_map());
+        {
+            for (id, res) in inner.res_map().iter() {
+                println!("ast id of res: {id:?} -> resolved as: {res:?}",);
+            }
+        }
     }
 
     pub fn emit_errors(&mut self, src: &SourceFile) -> io::Result<()> {

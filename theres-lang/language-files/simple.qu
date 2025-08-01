@@ -1,3 +1,9 @@
+instance Simple {
+	field: nil
+} with {
+	const SimpleConst: u32 = 1;
+}
+
 realm RealmOne {
 	fun meow() => nil {
 		
@@ -13,6 +19,10 @@ fun main() => i32 {
 	let a: i32 = 1;
 	let b: i32 = a + 1; # a is symbol 11
 	let a: u32 = d();
+
+	let r: nil = RealmOne::meow();
+
+	let v: u32 = Simple::SimpleConst;
 }
 
 fun d() => u32 {

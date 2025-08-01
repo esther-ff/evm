@@ -25,49 +25,38 @@ applyDecl      → "apply" IDENT "for" IDENT "with" "{" ( interfaceField )* "}" 
 
 type           → "fun" "(" type ( "," type )* ") "=>" type?
 			   | "[" type "]"
-			   | IDENT
-			   | IDENT "<" type ("," type)* ">"
-			   ;
-
-genericParams  → IDENT (":" path ("+" path)*)
-
+			   | path ;
 
 path           → IDENT ("::" IDENT)* ;
 
-statement      → block
-			   | expressionStmt
+statement      → expressionStmt
 			   | localVariableStmt
 			   | declaration ;
 
+localVariableStmt
+               → ( "let" | "const" ) IDENT ":" IDENT ("=" expression)? ";" ;
+expressionStmt → expression ";" ;
 
-			
 block         → "{" (declaration | statement) expression? "}" ;
 
-localVariableStmt
-              → ( "let" | "const" ) IDENT ":" IDENT ("=" expression)? ";" ;
 
 ifExpr        → "if" expression block
 				  ( "else" "if" block )?*
 				  ( "else" block )? ;
-
 whileExpr     → "while" expression block ;
 untilExpr     → "until" expression block ;
 forExpr       → "for" pat "in" expression block ;
 loopExpr      → "loop" block;
-
 lambdaExpr    → "\" pat ("," pat)*? "=>" (expression | block)
 arrayExpr     → "[" expression "]" type ("{" expression ("," expression)* "}")?
-
 returnExpr    → "return" expression? ;
-pathExpr      → "::" IDENT ("::" IDENT)* ;
-
 makeExpr      → "make" type callArgs ;
+pathExpr      → path ;
 
 pat           → IDENT
 		      | "(" IDENT ("," IDENT) ")"
 		      | "_"
 								
-expressionStmt → expression ";" ;
 
 expression     → assignment 
                | assignment ( ( "," expression ) )* ;

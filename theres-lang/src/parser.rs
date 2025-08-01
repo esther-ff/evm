@@ -4,6 +4,8 @@ use crate::ast::*;
 use crate::lexer::{Lexemes, Span, Token, TokenKind};
 use crate::session::SymbolId;
 
+crate::newtyped_index!(AstId, AstIdMap, AstIdVec);
+
 type Result<T, E = ParseError> = core::result::Result<T, E>;
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -119,7 +121,7 @@ impl<'a> Parser<'a> {
                     got: any,
                 };
 
-                // dbg!(tok);
+                dbg!(tok);
 
                 return self.error_out(err, tok.span);
             }
@@ -625,17 +627,18 @@ impl<'a> Parser<'a> {
             self.expect_token(TokenKind::Assign)?;
 
             let ret = self.expression()?.into();
+
             self.expect_token(TokenKind::Semicolon)?;
             ret
         };
 
-        Ok(VariableStmt::new(
+        dbg!(Ok(VariableStmt::new(
             mode,
             name,
             initializer,
             ty,
             self.new_id(),
-        ))
+        )))
     }
 
     fn global_variable_decl(&mut self) -> Result<ThingKind> {
@@ -659,7 +662,6 @@ impl<'a> Parser<'a> {
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
         let id = self.new_id();
         let stmt = match tok.kind {
-            TokenKind::LeftCurlyBracket => StmtKind::Block(self.block()?),
             TokenKind::Let | TokenKind::Const => StmtKind::LocalVar(self.local_variable_stmt()?),
 
             TokenKind::Function | TokenKind::Global => {
@@ -695,7 +697,6 @@ impl<'a> Parser<'a> {
         let mut expr = None;
 
         while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
-            dbg!(self.lexemes.peek_token());
             match self.statement()? {
                 ExprOrStmt::Stmt(stmt) => stmts.push(stmt),
 
@@ -1177,6 +1178,7 @@ impl<'a> Parser<'a> {
 
         Ok(lhs)
     }
+
     fn factor(&mut self) -> Result<Expr> {
         let mut lhs = self.unary()?;
 
@@ -1202,6 +1204,7 @@ impl<'a> Parser<'a> {
 
         Ok(lhs)
     }
+
     fn unary(&mut self) -> Result<Expr> {
         if self.consume_if(TokenKind::ExclamationMark) || self.consume_if(TokenKind::Minus) {
             let tok = self.lexemes.previous();
@@ -1266,6 +1269,8 @@ impl<'a> Parser<'a> {
 
     fn fun_call(&mut self) -> Result<Expr> {
         let callee = self.primary()?;
+        dbg!(&callee);
+        dbg!(self.lexemes.peek_token());
 
         if self.consume_if(TokenKind::LeftParen) {
             let mut args = vec![];
@@ -1278,6 +1283,7 @@ impl<'a> Parser<'a> {
             }
 
             let end_paren = self.expect_token(TokenKind::RightParen)?;
+            dbg!(end_paren);
             let span = self.new_span(callee.span.start(), end_paren.span.end(), 0);
 
             return Ok(Expr::new(
@@ -1293,33 +1299,36 @@ impl<'a> Parser<'a> {
         Ok(callee)
     }
 
+    fn return_expr(&mut self, tok: Token) -> Result<Expr> {
+        let span = tok.span;
+        self.lexemes.advance();
+        let ret = if matches!(
+            self.lexemes.peek_token().kind,
+            TokenKind::Semicolon | TokenKind::RightParen | TokenKind::RightSqBracket
+        ) {
+            None
+        } else {
+            Some(self.expression()?)
+        }
+        .map(Box::new);
+
+        let end = ret.as_ref().map_or(span.end(), |tok| tok.span.end());
+
+        Ok(Expr::new(
+            ExprType::Return { ret },
+            self.new_span(span.start(), end, 0),
+            self.new_id(),
+        ))
+    }
+
     fn primary(&mut self) -> Result<Expr> {
         let token = self.lexemes.peek_token().to_err_if_eof()?;
 
         let mut span = token.span;
 
         let expr = match token.kind {
-            TokenKind::Return => {
-                self.lexemes.advance();
-                // might be bad
-                let ret = if matches!(
-                    self.lexemes.peek_token().kind,
-                    TokenKind::Semicolon | TokenKind::RightParen | TokenKind::RightSqBracket
-                ) {
-                    None
-                } else {
-                    Some(self.expression()?)
-                }
-                .map(Box::new);
+            TokenKind::Return => return self.expression(),
 
-                let end = ret.as_ref().map_or(span.end(), |tok| tok.span.end());
-
-                return Ok(Expr::new(
-                    ExprType::Return { ret },
-                    self.new_span(span.start(), end, 0),
-                    self.new_id(),
-                ));
-            }
             TokenKind::If => return self.if_expr(),
             TokenKind::Loop => return self.loop_expr(),
             TokenKind::For => return self.for_loop(),
@@ -1356,9 +1365,15 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            TokenKind::Identifier(id) => Some(ExprType::Variable {
-                name: Name::new(id, token.span),
-            }),
+            TokenKind::Identifier(..) => {
+                let path = self.path()?;
+                let span = path.span;
+                let ty = ExprType::Path(path);
+
+                return Ok(Expr::new(ty, span, self.new_id()));
+            }
+
+            TokenKind::LeftCurlyBracket => Some(ExprType::Block(self.block()?)),
 
             any => {
                 return self.error_out(
@@ -1460,7 +1475,7 @@ impl<'a> Parser<'a> {
     fn error_out<T>(&mut self, kind: ParseErrorKind, span: Span) -> Result<T, ParseError> {
         let err = ParseError::new(span, kind);
 
-        // println!("erroring it out! at {}", Location::caller());
+        println!("erroring it out! at {}", Location::caller());
         loop {
             let next = self.lexemes.peek_token();
             dbg!(next);

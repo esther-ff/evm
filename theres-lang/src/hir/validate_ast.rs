@@ -4,11 +4,12 @@ type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
 use crate::{
     ast::{
-        self, Arg, AstId, Block, ExprType, Field, FnDecl, FnSig, Instance, Name, Realm, Stmt,
+        self, Arg, AstId, Block, ExprType, Field, FnDecl, FnSig, Instance, Name, Path, Realm, Stmt,
         StmtKind, Thing, ThingKind, TyKind, VarMode, VariableStmt, Visitor, VisitorResult,
     },
     hir::def::{DefId, DefType, Definitions, IntTy, PrimTy, Resolved},
     lexer::Span,
+    parser::AstIdMap,
     session::{Session, SymbolId},
 };
 
@@ -45,6 +46,15 @@ impl AstError {
 pub struct Validator<'a> {
     errors: Vec<AstError>,
     sess: &'a Session,
+}
+
+impl<'a> Validator<'a> {
+    pub fn new(sess: &'a Session) -> Self {
+        Self {
+            errors: vec![],
+            sess,
+        }
+    }
 }
 
 impl<'a> Visitor<'a> for Validator<'a> {
@@ -103,8 +113,7 @@ impl<'a> Visitor<'a> for Validator<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ScopeId(u32);
+crate::newtyped_index!(ScopeId, ScopeIdMap, ScopeIdVec);
 
 #[derive(Debug)]
 pub struct Scope {
@@ -145,7 +154,7 @@ impl Scope {
         .copied()
     }
 
-    pub fn add(&mut self, name: Name, res: Resolved<AstId>, ns: Space) {
+    pub fn add(&mut self, name: &Name, res: Resolved<AstId>, ns: Space) {
         match ns {
             Space::Types => self.types.insert(name.interned, res),
             Space::Values => self.bindings.insert(name.interned, res),
@@ -167,49 +176,6 @@ const PRIMITIVES: [(SymbolId, Resolved<AstId>); 11] = [
     (SymbolId::nil(), Resolved::Prim(PrimTy::Nil)),
 ];
 
-pub struct FirstPassResolver {
-    definitions: HashMap<SymbolId, DefId>,
-
-    top_scope: Scope,
-}
-
-impl FirstPassResolver {
-    pub fn new() -> Self {
-        let f = |scope: &mut Scope| {
-            for (id, prim) in PRIMITIVES {
-                scope.types.insert(id, prim);
-            }
-        };
-
-        Self {
-            definitions: HashMap::new(),
-            top_scope: Scope::new_with(None, f),
-        }
-    }
-}
-
-impl<'a> Visitor<'a> for FirstPassResolver {
-    type Result = ();
-
-    fn visit_interface(&mut self, _val: &'a crate::ast::Interface) -> Self::Result {
-        todo!("interfaces: resolving")
-    }
-
-    fn visit_fn_decl(&mut self, val: &'a crate::ast::FnDecl) -> Self::Result {
-        self.top_scope.bindings.insert(
-            val.sig.name.interned,
-            Resolved::Def(DefId::DUMMY, DefType::Instance),
-        );
-    }
-
-    fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
-        self.top_scope.bindings.insert(
-            val.name.interned,
-            Resolved::Def(DefId::DUMMY, DefType::Instance),
-        );
-    }
-}
-
 pub struct ThingDefResolver {
     // mapping names to definitions,
     definitions: Definitions,
@@ -227,7 +193,8 @@ pub struct ThingDefResolver {
     module_scopes: HashMap<AstId, Scope>,
 
     // mapping ast ids to def ids
-    ast_id_to_def_id: HashMap<AstId, DefId>,
+    ast_id_to_def_id: AstIdMap<DefId>,
+    def_id_to_ast_id: HashMap<DefId, AstId>,
 }
 
 impl ThingDefResolver {
@@ -243,6 +210,7 @@ impl ThingDefResolver {
             top: Scope::new_with(None, f),
             in_top_scope: true,
             ast_id_to_def_id: HashMap::new(),
+            def_id_to_ast_id: HashMap::new(),
             root: root.id,
         }
     }
@@ -270,7 +238,7 @@ impl<'a> Visitor<'a> for ThingDefResolver {
 
         let scope = mem::replace(&mut self.top, old_scope);
         self.top
-            .add(*name, Resolved::Def(def_id, DefType::Realm), Space::Types);
+            .add(name, Resolved::Def(def_id, DefType::Realm), Space::Types);
 
         self.module_scopes.insert(*id, scope);
     }
@@ -286,8 +254,11 @@ impl<'a> Visitor<'a> for ThingDefResolver {
         self.ast_id_to_def_id.insert(*id, def_id);
 
         if self.in_top_scope {
-            self.top
-                .add(sig.name, Resolved::Def(def_id, DefType::Fun), Space::Values);
+            self.top.add(
+                &sig.name,
+                Resolved::Def(def_id, DefType::Fun),
+                Space::Values,
+            );
         }
 
         self.in_top_scope = false;
@@ -309,11 +280,8 @@ impl<'a> Visitor<'a> for ThingDefResolver {
         self.ast_id_to_def_id.insert(*id, def_id);
 
         if self.in_top_scope {
-            self.top.add(
-                *name,
-                Resolved::Def(def_id, DefType::Instance),
-                Space::Types,
-            );
+            self.top
+                .add(name, Resolved::Def(def_id, DefType::Instance), Space::Types);
         }
 
         self.in_top_scope = false;
@@ -354,7 +322,7 @@ impl<'a> Visitor<'a> for ThingDefResolver {
 }
 
 pub struct ScopeStack {
-    scopes: Vec<Scope>,
+    scopes: ScopeIdVec<Scope>,
     current_scope: ScopeId,
     scope_id_gen: u32,
 }
@@ -363,8 +331,25 @@ impl ScopeStack {
     fn new(n: u32) -> Self {
         Self {
             scope_id_gen: n,
-            current_scope: ScopeId(0),
-            scopes: Vec::new(),
+            current_scope: ScopeId::ZERO,
+            scopes: ScopeIdVec::new(),
+        }
+    }
+
+    fn new_with_prims() -> Self {
+        let f = |s: &mut Scope| {
+            for (k, v) in PRIMITIVES {
+                s.types.insert(k, v);
+            }
+        };
+
+        let mut scopes = ScopeIdVec::new();
+        scopes.push(Scope::new_with(None, f));
+
+        Self {
+            scope_id_gen: 1,
+            current_scope: ScopeId::ZERO,
+            scopes,
         }
     }
 
@@ -378,22 +363,22 @@ impl ScopeStack {
         self.scopes.push(scope);
         let old = self.current_scope;
 
-        self.current_scope = ScopeId(new_id);
+        self.current_scope = ScopeId::new(new_id);
         old
     }
 
     fn get_scope(&self, id: ScopeId) -> &Scope {
-        self.scopes.get(id.0 as usize).expect("invalid scope id")
+        self.scopes.get(id).expect("invalid scope id")
     }
 
     fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
-        self.scopes
-            .get_mut(id.0 as usize)
-            .expect("invalid scope id")
+        self.scopes.get_mut(id).expect("invalid scope id")
     }
 }
 
-pub struct LateResolver {
+pub struct LateResolver<'a> {
+    sess: &'a Session,
+
     // ast id -> scope stack
     current_scope: AstId,
     module_scopes: HashMap<AstId, ScopeStack>,
@@ -404,24 +389,43 @@ pub struct LateResolver {
     // mapping names to definitions,
     definitions: Definitions,
 
+    // mapping realm def ids
+    // to their ast id counter parts
+    realm_def_ids: HashMap<DefId, AstId>,
+
     // mapping ast ids to def ids
     ast_id_to_def_id: HashMap<AstId, DefId>,
+    def_id_to_ast_id: HashMap<DefId, AstId>,
+
+    // instance to fields
+    instance_to_fields: AstIdMap<Vec<AstId>>,
+    fields_to_instance: AstIdMap<AstId>,
+    instance_to_scope: AstIdMap<Scope>,
 }
 
-impl LateResolver {
-    pub fn new(old: ThingDefResolver) -> Self {
+impl<'a> LateResolver<'a> {
+    pub fn new(old: ThingDefResolver, sess: &'a Session) -> Self {
+        let mut scopes = ScopeIdVec::new_with_capacity(8);
+        scopes.push(old.top);
         let sc = ScopeStack {
             scope_id_gen: 1,
-            scopes: vec![old.top],
-            current_scope: ScopeId(0),
+            scopes,
+            current_scope: ScopeId::ZERO,
         };
 
         Self {
+            sess,
+            realm_def_ids: HashMap::new(),
             current_scope: old.root,
             res_map: HashMap::new(),
             module_scopes: HashMap::from([(old.root, sc)]),
             definitions: old.definitions,
             ast_id_to_def_id: old.ast_id_to_def_id,
+            def_id_to_ast_id: old.def_id_to_ast_id,
+
+            instance_to_fields: HashMap::new(),
+            fields_to_instance: HashMap::new(),
+            instance_to_scope: HashMap::new(),
         }
     }
 
@@ -485,7 +489,7 @@ impl LateResolver {
     fn make_local_binding(&mut self, name: Name, res: AstId) {
         let local = Resolved::Local(res);
 
-        self.with_current_scope_mut(|scope| scope.add(name, local, Space::Values));
+        self.with_current_scope_mut(|scope| scope.add(&name, local, Space::Values));
     }
 
     fn get_name(&self, symbol: SymbolId, ns: Space) -> Resolved<AstId> {
@@ -503,9 +507,81 @@ impl LateResolver {
         }
     }
 
+    fn gen_def_id(&mut self, id: AstId) -> DefId {
+        let def_id = self.definitions.new_id();
+
+        self.ast_id_to_def_id.insert(id, def_id);
+        self.def_id_to_ast_id.insert(def_id, id);
+
+        def_id
+    }
+
     #[cfg(debug_assertions)]
     pub fn res_map(&self) -> &HashMap<AstId, Resolved<AstId>> {
         &self.res_map
+    }
+
+    fn resolve_path(&mut self, arg_path: &Path, last_space: Space) -> Resolved<AstId> {
+        let Path {
+            path,
+            span: _,
+            id: _,
+        } = arg_path;
+
+        let amount_of_segments = path.len().saturating_sub(1);
+        let old_scope = self.current_scope;
+        let mut ret = None;
+
+        for (ix, seg) in path.iter().enumerate() {
+            let name = seg.name.interned;
+
+            if ix == amount_of_segments {
+                ret = Some(self.get_name(name, last_space))
+            } else {
+                match self.get_name(name, Space::Types) {
+                    Resolved::Local(..) => todo!("locals don't have assoc items"),
+                    Resolved::Prim(..) => todo!("how to handle builtin types with paths..."),
+                    Resolved::Err => todo!("error while resolving path"),
+                    Resolved::Def(ref id, DefType::Instance) => {
+                        let scope_id = self
+                            .def_id_to_ast_id
+                            .get(id)
+                            .expect("instance def id -> ast id mapping is invalid");
+
+                        let instance_scope = self
+                            .instance_to_scope
+                            .get(scope_id)
+                            .expect("ast id -> instance scope mapping is invalid");
+
+                        let res = instance_scope.get(name, Space::Values);
+
+                        if ix + 1 != amount_of_segments {
+                            todo!(
+                                "somehow error out due to trying to access an assoc item as a module"
+                            );
+                        }
+
+                        self.current_scope = old_scope;
+                        return res.unwrap_or(Resolved::Err);
+                    }
+
+                    Resolved::Def(ref id, DefType::Realm) => {
+                        let scope = self
+                            .def_id_to_ast_id
+                            .get(id)
+                            .copied()
+                            .expect("realm ast id is invalid");
+                        self.current_scope = scope;
+                    }
+
+                    _ => todo!("handle getting wrong definitions"),
+                }
+            }
+        }
+
+        self.current_scope = old_scope;
+
+        ret.unwrap_or(Resolved::Err)
     }
 }
 
@@ -528,8 +604,34 @@ fn traverse_scopes(
     None
 }
 
-impl<'a> Visitor<'a> for LateResolver {
+impl<'a, 'v> Visitor<'a> for LateResolver<'v>
+where
+    'v: 'a,
+{
     type Result = ();
+
+    fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
+        let Realm {
+            items,
+            id,
+            span: _,
+            name,
+        } = val;
+
+        let old_stack = mem::replace(&mut self.current_scope, *id);
+        self.module_scopes.insert(*id, ScopeStack::new_with_prims());
+
+        for thing in items {
+            self.visit_thing(thing)
+        }
+
+        let realm_visited_stack = mem::replace(&mut self.current_scope, old_stack);
+        let def_id = self.gen_def_id(realm_visited_stack);
+
+        self.with_current_scope_mut(|s| {
+            s.add(name, Resolved::Def(def_id, DefType::Realm), Space::Types)
+        })
+    }
 
     fn visit_interface(&mut self, _val: &'a crate::ast::Interface) -> Self::Result {
         todo!("interfaces: resolving")
@@ -563,7 +665,7 @@ impl<'a> Visitor<'a> for LateResolver {
 
         if self
             .current_scope_stack()
-            .get_scope(ScopeId(0))
+            .get_scope(ScopeId::ZERO)
             .get(name.interned, Space::Values)
             .is_none()
         {
@@ -572,7 +674,7 @@ impl<'a> Visitor<'a> for LateResolver {
 
             let res = Resolved::Def(new_def_id, DefType::Fun);
 
-            self.with_current_scope_mut(|s| s.add(*name, res, Space::Values));
+            self.with_current_scope_mut(|s| s.add(name, res, Space::Values));
         };
 
         self.with_new_scope(|visitor| visitor.visit_block(block), Some(&bindings));
@@ -580,30 +682,69 @@ impl<'a> Visitor<'a> for LateResolver {
 
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
         let ast::Instance {
-            name: _,
+            name,
             span: _,
-            id: _,
-            fields: _,
-            assoc: _,
+            id: instance_id,
+            fields,
+            assoc,
             generics: _,
         } = val;
 
-        // if self
-        //     .scopes
-        //     .get(&ScopeId(0))
-        //     .expect("first scope must be here")
-        //     .get(name.interned, Space::Values)
-        //     .is_none()
-        // {
-        //     let new_def_id = self.definitions.new_id();
-        //     self.ast_id_to_def_id.insert(*id, new_def_id);
+        let instance_def_id = self.gen_def_id(*instance_id);
 
-        //     let res = Resolved::Def(new_def_id, DefType::Fun);
+        self.with_current_scope_mut(|sc| {
+            sc.add(
+                name,
+                Resolved::Def(instance_def_id, DefType::Instance),
+                Space::Types,
+            )
+        });
 
-        //     self.with_current_scope_mut(|s| s.add(*name, res, Space::Values));
-        // };
+        let mut instance_fields = Vec::new();
 
-        println!("later");
+        for f in fields {
+            let _field_def_id = self.gen_def_id(f.id);
+            self.fields_to_instance.insert(f.id, *instance_id);
+            instance_fields.push(f.id);
+        }
+
+        self.instance_to_fields
+            .insert(*instance_id, instance_fields);
+
+        let Some(block) = assoc else { return };
+
+        let mut scope = Scope::new(None);
+
+        for s in &block.stmts {
+            match &s.kind {
+                StmtKind::LocalVar(l) => {
+                    debug_assert!(l.mode == VarMode::Const);
+                    debug_assert!(l.initializer.is_some());
+                    let def_id = self.gen_def_id(l.id);
+                    scope.add(
+                        &l.name,
+                        Resolved::Def(def_id, DefType::Const),
+                        Space::Values,
+                    )
+                }
+
+                StmtKind::Thing(Thing {
+                    id: fun_id,
+                    kind: ThingKind::Function(fun),
+                }) => {
+                    let def_id = self.gen_def_id(*fun_id);
+                    scope.add(
+                        &fun.sig.name,
+                        Resolved::Def(def_id, DefType::Fun),
+                        Space::Values,
+                    )
+                }
+
+                _ => unreachable!(),
+            }
+        }
+
+        self.instance_to_scope.insert(*instance_id, scope);
     }
 
     fn visit_stmt(&mut self, val: &'a Stmt) -> Self::Result {
@@ -613,10 +754,6 @@ impl<'a> Visitor<'a> for LateResolver {
             id: _,
         } = val;
         match kind {
-            StmtKind::Block(block) => {
-                self.with_new_scope(|v| v.visit_block(block), None);
-            }
-
             StmtKind::LocalVar(VariableStmt {
                 mode: _,
                 name,
@@ -643,21 +780,10 @@ impl<'a> Visitor<'a> for LateResolver {
     fn visit_expr(&mut self, val: &'a ast::Expr) -> Self::Result {
         let ast::Expr { ty, span: _, id } = val;
         match ty {
-            ExprType::Variable { name } => {
-                // whatever
+            ExprType::Path(path) => {
+                let res = self.resolve_path(path, Space::Values);
 
-                match self.get_name(name.interned, Space::Values) {
-                    Resolved::Local(local_id) => {
-                        self.res_map.insert(*id, Resolved::Local(local_id));
-                    }
-
-                    Resolved::Def(def_id, DefType::Fun) => {
-                        self.res_map
-                            .insert(*id, Resolved::Def(def_id, DefType::Fun));
-                    }
-
-                    any => todo!("ehh... {any:#?}"),
-                };
+                self.res_map.insert(*id, res);
             }
 
             ExprType::FunCall { callee, args } => {
@@ -688,9 +814,11 @@ impl<'a> Visitor<'a> for LateResolver {
                 rvalue,
                 mode: _,
             } => {
-                let ExprType::Variable { .. } = lvalue.ty else {
-                    todo!("error, can't assign to anything other than variable")
+                let ExprType::Path(ref _path) = lvalue.ty else {
+                    todo!("error, can't assign to anything other than a variable")
                 };
+
+                // eval the path
 
                 self.visit_expr(lvalue);
                 self.visit_expr(rvalue);
@@ -756,6 +884,10 @@ impl<'a> Visitor<'a> for LateResolver {
 
             ExprType::Constant(..) => (),
 
+            ExprType::Block(b) => {
+                self.with_new_scope(|x| x.visit_block(b), None);
+            }
+
             any => todo!("to-do expression kinds: {any:#?}"),
         }
     }
@@ -812,10 +944,6 @@ impl<'a> Visitor<'a> for LateResolver {
 
         for stmt in stmts {
             match &stmt.kind {
-                StmtKind::Block(block) => {
-                    self.with_new_scope(|v| v.visit_block(block), None);
-                }
-
                 StmtKind::LocalVar(VariableStmt {
                     mode: _,
                     name,
