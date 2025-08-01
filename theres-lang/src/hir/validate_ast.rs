@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, mem};
+use std::{collections::HashMap, mem};
 
 type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
@@ -7,11 +7,18 @@ use crate::{
         self, Arg, AstId, Block, ExprType, Field, FnDecl, FnSig, Instance, Name, Path, Realm, Stmt,
         StmtKind, Thing, ThingKind, TyKind, VarMode, VariableStmt, Visitor, VisitorResult,
     },
-    hir::def::{DefId, DefType, Definitions, IntTy, PrimTy, Resolved},
+    hir::def::{DefId, DefMap, DefType, Definitions, IntTy, PrimTy, Resolved},
     lexer::Span,
     parser::AstIdMap,
     session::{Session, SymbolId},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NotFoundCulprit {
+    Ty,
+    Realm,
+    Value,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AstErrorKind {
@@ -28,6 +35,11 @@ pub enum AstErrorKind {
     NotConstInInstance {
         instance: String,
         span_of_const: Span,
+    },
+
+    NotFound {
+        offender: SymbolId,
+        culprit: NotFoundCulprit,
     },
 }
 
@@ -190,11 +202,11 @@ pub struct ThingDefResolver {
     root: AstId,
 
     // module scopes
-    module_scopes: HashMap<AstId, Scope>,
+    module_scopes: AstIdMap<Scope>,
 
     // mapping ast ids to def ids
     ast_id_to_def_id: AstIdMap<DefId>,
-    def_id_to_ast_id: HashMap<DefId, AstId>,
+    def_id_to_ast_id: DefMap<AstId>,
 }
 
 impl ThingDefResolver {
@@ -328,14 +340,6 @@ pub struct ScopeStack {
 }
 
 impl ScopeStack {
-    fn new(n: u32) -> Self {
-        Self {
-            scope_id_gen: n,
-            current_scope: ScopeId::ZERO,
-            scopes: ScopeIdVec::new(),
-        }
-    }
-
     fn new_with_prims() -> Self {
         let f = |s: &mut Scope| {
             for (k, v) in PRIMITIVES {
@@ -381,21 +385,17 @@ pub struct LateResolver<'a> {
 
     // ast id -> scope stack
     current_scope: AstId,
-    module_scopes: HashMap<AstId, ScopeStack>,
+    module_scopes: AstIdMap<ScopeStack>,
 
     // mapping node ids to their resolutions
-    res_map: HashMap<AstId, Resolved<AstId>>,
+    res_map: AstIdMap<Resolved<AstId>>,
 
     // mapping names to definitions,
     definitions: Definitions,
 
-    // mapping realm def ids
-    // to their ast id counter parts
-    realm_def_ids: HashMap<DefId, AstId>,
-
     // mapping ast ids to def ids
-    ast_id_to_def_id: HashMap<AstId, DefId>,
-    def_id_to_ast_id: HashMap<DefId, AstId>,
+    ast_id_to_def_id: AstIdMap<DefId>,
+    def_id_to_ast_id: DefMap<AstId>,
 
     // instance to fields
     instance_to_fields: AstIdMap<Vec<AstId>>,
@@ -415,13 +415,14 @@ impl<'a> LateResolver<'a> {
 
         Self {
             sess,
-            realm_def_ids: HashMap::new(),
             current_scope: old.root,
-            res_map: HashMap::new(),
             module_scopes: HashMap::from([(old.root, sc)]),
             definitions: old.definitions,
+
             ast_id_to_def_id: old.ast_id_to_def_id,
             def_id_to_ast_id: old.def_id_to_ast_id,
+
+            res_map: HashMap::new(),
 
             instance_to_fields: HashMap::new(),
             fields_to_instance: HashMap::new(),
@@ -493,18 +494,15 @@ impl<'a> LateResolver<'a> {
     }
 
     fn get_name(&self, symbol: SymbolId, ns: Space) -> Resolved<AstId> {
-        if let Some(v) = self.with_current_scope(|scope| {
-            if let Some(ret) = scope.get(symbol, ns) {
+        let f = |s: &Scope| {
+            if let Some(ret) = s.get(symbol, ns) {
                 Some(ret)
             } else {
-                traverse_scopes(scope.parent, self.current_scope_stack(), symbol, ns)
+                traverse_scopes(s.parent, self.current_scope_stack(), symbol, ns)
             }
-        }) {
-            v
-        } else {
-            println!("missing symbol: {symbol:?}");
-            Resolved::Err
-        }
+        };
+
+        self.with_current_scope(f).unwrap_or(Resolved::Err)
     }
 
     fn gen_def_id(&mut self, id: AstId) -> DefId {
@@ -697,8 +695,8 @@ where
 
         let instance_def_id = self.gen_def_id(*instance_id);
 
-        self.with_current_scope_mut(|sc| {
-            sc.add(
+        self.with_current_scope_mut(|s| {
+            s.add(
                 name,
                 Resolved::Def(instance_def_id, DefType::Instance),
                 Space::Types,
@@ -731,7 +729,9 @@ where
                         &l.name,
                         Resolved::Def(def_id, DefType::Const),
                         Space::Values,
-                    )
+                    );
+
+                    self.visit_var_stmt(l);
                 }
 
                 StmtKind::Thing(Thing {
@@ -743,7 +743,9 @@ where
                         &fun.sig.name,
                         Resolved::Def(def_id, DefType::Fun),
                         Space::Values,
-                    )
+                    );
+
+                    self.visit_fn_decl(fun);
                 }
 
                 _ => unreachable!(),
@@ -823,8 +825,6 @@ where
                 let ExprType::Path(ref _path) = lvalue.ty else {
                     todo!("error, can't assign to anything other than a variable")
                 };
-
-                // eval the path
 
                 self.visit_expr(lvalue);
                 self.visit_expr(rvalue);
@@ -969,10 +969,6 @@ where
                     self.visit_expr(expr);
                 }
 
-                // explicitly here so i can track if i add something
-                // new
-                //
-                // ignored because we did this earlier
                 StmtKind::Thing(..) => (),
             }
         }

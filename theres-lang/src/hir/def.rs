@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
-use crate::ast::{self, Arg, FnDecl, FnSig, Name};
+use crate::ast::Name;
 use crate::hir;
 use crate::lexer::Span;
-use crate::session::SymbolId;
+
+crate::newtyped_index!(DefId, DefMap, DefVec);
+crate::newtyped_index!(BodyId, BodyMap, BodyVec);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DefType {
@@ -42,24 +44,6 @@ pub enum Resolved<Id> {
     Prim(PrimTy),
 
     Err,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DefId {
-    private: u32,
-}
-
-impl DefId {
-    pub const DUMMY: Self = Self { private: u32::MAX };
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BodyId {
-    pub(crate) private: u32,
-}
-
-impl BodyId {
-    pub const DUMMY: Self = Self { private: u32::MAX };
 }
 
 pub struct AssocConst {
