@@ -1,11 +1,89 @@
-use std::{collections::HashMap, mem::transmute};
+use std::{collections::HashMap, sync::LazyLock, sync::Mutex};
 
-use crate::arena::Arena;
+use crate::{arena::Arena, hir::lowering_ast::HirMap, lexer::LexError, parser::ParseError};
 
-// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct SymbolId {
-//     private: u32,
-// }
+pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
+    LazyLock::new(|| Mutex::new(DiagnosticCtxt::new()));
+
+pub struct DiagnosticCtxt {
+    lex_errors: Vec<LexError>,
+    parse_errors: Vec<ParseError>,
+}
+
+impl DiagnosticCtxt {
+    pub fn new() -> Self {
+        Self {
+            lex_errors: Vec::new(),
+            parse_errors: Vec::new(),
+        }
+    }
+    pub fn push_lex_error(&mut self, err: LexError) {
+        self.lex_errors.push(err)
+    }
+
+    pub fn push_parse_error(&mut self, err: ParseError) {
+        self.parse_errors.push(err)
+    }
+
+    pub fn errored(&self) -> bool {
+        !(self.parse_errors.is_empty() || self.lex_errors.is_empty())
+    }
+
+    pub fn parse_errors(&self) -> &[ParseError] {
+        &self.parse_errors
+    }
+
+    pub fn lex_errors(&self) -> &[LexError] {
+        &self.lex_errors
+    }
+}
+
+pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =
+    LazyLock::new(|| Mutex::new(GlobalInterner::new()));
+
+pub struct GlobalInterner {
+    arena: Arena,
+    map: HashMap<&'static str, SymbolId>,
+    storage: Vec<&'static str>,
+}
+
+impl GlobalInterner {
+    pub fn new() -> Self {
+        let iter = SymbolId::BASE_SYMBOLS
+            .into_iter()
+            .enumerate()
+            .map(|(k, v)| (v, SymbolId::new(k as u32)));
+
+        Self {
+            map: HashMap::from_iter(iter),
+            storage: SymbolId::BASE_SYMBOLS.to_vec(),
+            arena: Arena::new(),
+        }
+    }
+
+    pub fn pre_interned(&mut self) {
+        for sym in SymbolId::BASE_SYMBOLS {
+            self.intern(sym);
+        }
+    }
+
+    pub fn intern(&mut self, str: &str) -> SymbolId {
+        if let Some(present) = self.map.get(str) {
+            return *present;
+        };
+
+        let new_str: &'static str = unsafe { core::mem::transmute(self.arena.alloc_string(str)) };
+
+        let id = SymbolId {
+            private: self.storage.len() as u32,
+        };
+
+        self.map.insert(new_str, id);
+        self.storage.push(new_str);
+
+        id
+    }
+}
 
 crate::newtyped_index!(SymbolId, SymbolMap, SymbolVec);
 
@@ -38,75 +116,38 @@ impl SymbolId {
         f64 -> 9,
         nil -> 10
     );
-}
 
-pub struct Interner {
-    arena: Arena,
-    map: HashMap<&'static str, SymbolId>,
-    storage: Vec<&'static str>,
-}
-
-impl Interner {
-    pub fn new() -> Self {
-        let mut me = Self {
-            map: HashMap::new(),
-            storage: Vec::new(),
-            arena: Arena::new(),
-        };
-
-        me.pre_interned();
-
-        me
+    pub fn get_interned(&self) -> &str {
+        SYMBOL_INTERNER.lock().unwrap().storage[self.private as usize]
     }
 
-    pub fn pre_interned(&mut self) {
-        for sym in SymbolId::BASE_SYMBOLS {
-            self.intern(sym);
-        }
-    }
-
-    pub fn intern(&mut self, str: &str) -> SymbolId {
-        if let Some(present) = self.map.get(str) {
-            return *present;
-        };
-
-        // Safety:
-        //
-        // The Arena is in the interner
-        let new_str: &'static str = unsafe { transmute(self.arena.alloc_string(str)) };
-
-        let id = SymbolId {
-            private: self.storage.len() as u32,
-        };
-
-        self.map.insert(new_str, id);
-        self.storage.push(new_str);
-
-        id
+    pub fn intern(sym: &str) -> Self {
+        SYMBOL_INTERNER.lock().unwrap().intern(sym)
     }
 }
 
-pub struct Session {
-    /// Interner
-    interner: Interner,
+pub struct Session<'sess> {
+    dropless_arena: Arena,
+
+    hir_map: HirMap<'sess>,
 }
 
-impl Session {
+impl<'a> Session<'a> {
     pub fn new() -> Self {
         Self {
-            interner: Interner::new(),
+            hir_map: HirMap::new(),
+            dropless_arena: Arena::new(),
         }
     }
 
-    pub fn intern_string(&mut self, str: &str) -> SymbolId {
-        self.interner.intern(str)
+    pub fn enter<F, R>(&'a self, f: F) -> R
+    where
+        F: FnOnce(&'a Self) -> R,
+    {
+        f(self)
     }
 
-    pub fn get_string(&self, id: SymbolId) -> &str {
-        self.interner.storage[id.private as usize]
-    }
-
-    pub fn debug_symbol_id_string(&self) -> &HashMap<&'static str, SymbolId> {
-        &self.interner.map
+    pub fn hir(&mut self) -> &mut HirMap<'a> {
+        &mut self.hir_map
     }
 }

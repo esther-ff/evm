@@ -2,7 +2,7 @@ use std::panic::Location;
 
 use crate::ast::*;
 use crate::lexer::{Lexemes, Span, Token, TokenKind};
-use crate::session::SymbolId;
+use crate::session::{DIAG_CTXT, SymbolId};
 
 crate::newtyped_index!(AstId, AstIdMap, AstIdVec);
 
@@ -39,20 +39,17 @@ pub enum ExprOrStmt {
     Expr(Expr),
 }
 
-pub struct Parser<'a> {
+pub struct Parser {
     lexemes: Lexemes,
-
-    errors: &'a mut Vec<ParseError>,
 
     id: u32,
     decls: Vec<Thing>,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(lexemes: Lexemes, errors: &'a mut Vec<ParseError>) -> Self {
+impl Parser {
+    pub fn new(lexemes: Lexemes) -> Self {
         Self {
             lexemes,
-            errors,
             id: 0,
 
             decls: Vec::new(),
@@ -60,11 +57,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn has_errored(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
-    pub fn errors(&self) -> &[ParseError] {
-        self.errors
+        DIAG_CTXT.lock().unwrap().errored()
     }
 
     pub fn decls(&self) -> &[Thing] {
@@ -83,7 +76,7 @@ impl<'a> Parser<'a> {
 
         while !self.lexemes.is_empty() {
             match self.declaration() {
-                Err(err) => self.errors.push(err),
+                Err(err) => DIAG_CTXT.lock().unwrap().push_parse_error(err),
                 Ok(decl) => self.decls.push(Thing::new(decl, id)),
             }
         }
@@ -490,7 +483,7 @@ impl<'a> Parser<'a> {
     }
 
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
-        fn one_field(me: &mut Parser<'_>) -> Result<Field> {
+        fn one_field(me: &mut Parser) -> Result<Field> {
             let span_start = me.lexemes.peek_token().span.start();
             let is_const = me.consume_if(TokenKind::Const);
             let field_name = me.expect_ident_as_name()?;

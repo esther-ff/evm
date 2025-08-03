@@ -1,6 +1,6 @@
 use crate::{
     parser::{ParseError, ParseErrorKind},
-    session::{Session, SymbolId},
+    session::{DIAG_CTXT, SymbolId},
     sources::SourceId,
 };
 
@@ -308,7 +308,6 @@ impl Lexemes {
 pub struct Lexer<'a> {
     chars: Reader<'a>,
     tokens: Vec<Token>,
-    errors: &'a mut Vec<LexError>,
 
     current_line: u32,
 
@@ -316,11 +315,10 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(input: &'a [u8], sourceid: SourceId, errors: &'a mut Vec<LexError>) -> Self {
+    pub fn new(input: &'a [u8], sourceid: SourceId) -> Self {
         Self {
             tokens: Vec::new(),
             chars: Reader::new(input),
-            errors,
             current_line: 0,
             sourceid,
         }
@@ -334,7 +332,7 @@ impl<'a> Lexer<'a> {
         self.chars.get_str(span.start, span.end)
     }
 
-    pub fn lex(mut self, session: &mut Session) -> Lexemes {
+    pub fn lex(mut self) -> Lexemes {
         while let Some(char) = self.chars.next_char() {
             match char {
                 '(' => self.add_token_basic(TokenKind::LeftParen),
@@ -486,7 +484,7 @@ impl<'a> Lexer<'a> {
                 }
 
                 cap if (cap == '"') | (cap == '\'') => {
-                    self.string_literal(cap, session);
+                    self.string_literal(cap);
                 }
 
                 '0' if self.consume_if('x') => {
@@ -519,7 +517,7 @@ impl<'a> Lexer<'a> {
                     let kind = if let Some(kw) = check_for_keyword(string) {
                         kw
                     } else {
-                        let id = session.intern_string(string);
+                        let id = SymbolId::intern(string);
 
                         TokenKind::Identifier(id)
                     };
@@ -549,7 +547,7 @@ impl<'a> Lexer<'a> {
         Lexemes::new(self.tokens, self.sourceid)
     }
 
-    fn string_literal(&mut self, quote: char, session: &mut Session) {
+    fn string_literal(&mut self, quote: char) {
         debug_assert!((quote == '\'') | (quote == '"'));
         let mut finished_quote = false;
 
@@ -573,7 +571,7 @@ impl<'a> Lexer<'a> {
         debug_assert!(literal_end != 0);
 
         let span = self.new_span(literal_start, literal_end);
-        let id = session.intern_string(self.get_str_from_span(span).expect("should be valid"));
+        let id = SymbolId::intern(self.get_str_from_span(span).expect("should be valid"));
 
         let token = Token::new(span, TokenKind::StringLiteral(id));
         self.tokens.push(token)
@@ -691,7 +689,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn add_error(&mut self, span: Span, kind: LexErrorKind) {
-        self.errors.push(LexError { kind, span })
+        DIAG_CTXT
+            .lock()
+            .unwrap()
+            .push_lex_error(LexError { kind, span })
     }
 
     fn get_literal_str(&self, start: usize, end: usize) -> Option<&str> {
@@ -748,10 +749,10 @@ mod tests {
     #[test]
     fn rust_like() {
         let mut errors = Vec::new();
-        let lexer = Lexer::new(b"let meow: i32 = 123", SourceId::DUMMY, &mut errors);
+        let lexer = Lexer::new(b"let meow: i32 = 123", SourceId::DUMMY);
         let mut session = Session::new();
 
-        let mut lexer = lexer.lex(&mut session);
+        let mut lexer = lexer.lex(&mut errors);
 
         assert_eq!(lexer.next_token().kind, TokenKind::Let);
         assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(..)));

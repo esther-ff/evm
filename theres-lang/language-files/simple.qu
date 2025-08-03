@@ -1,7 +1,7 @@
 instance Simple {
 	field: nil
 } with {
-	const SimpleConst: u32 = 1;
+	const SimpleConst: Simple = 1;
 }
 
 realm RealmOne {
@@ -22,7 +22,7 @@ fun main() => i32 {
 
 	let realmRef: nil = RealmOne::meow();
 
-	let ConstToVar: u32aa = Simple::SimpleConst;
+	let ConstToVar: u32 = Simple::SimpleConst;
 }
 
 fun d() => u32 {

@@ -3,10 +3,10 @@ use std::{io, path::Path};
 use crate::{
     ast::{Realm, Visitor},
     errors::Errors,
-    hir::validate_ast::{LateResolver, ThingDefResolver},
-    lexer::{LexError, Lexemes, Lexer},
-    parser::{ParseError, Parser},
-    session::Session,
+    hir::{LateResolver, ThingDefResolver, Validator},
+    lexer::{Lexemes, Lexer},
+    parser::Parser,
+    session::{DIAG_CTXT, Session},
     sources::{FileManager, SourceFile, Sources},
 };
 
@@ -17,11 +17,7 @@ pub enum Compilation {
 }
 
 pub struct Compiler<T: FileManager> {
-    session: Session,
     sources: Sources<T>,
-
-    lex_errors: Vec<LexError>,
-    parse_errors: Vec<ParseError>,
 
     state: Compilation,
 }
@@ -30,9 +26,6 @@ impl<T: FileManager> Compiler<T> {
     pub fn new(manager: T) -> Self {
         Self {
             sources: Sources::new(manager),
-            parse_errors: Vec::new(),
-            lex_errors: Vec::new(),
-            session: Session::new(),
             state: Compilation::Ok,
         }
     }
@@ -46,19 +39,25 @@ impl<T: FileManager> Compiler<T> {
             .open(main.as_ref())
             .expect("failed to open main file");
 
-        let lexemes = self.lex(&src);
-        let ast = self.parse_to_ast(lexemes);
+        let session = Session::new();
 
-        self.resolvers(&ast);
+        session.enter(|session| {
+            let lexemes = self.lex(&src);
+            let ast = self.parse_to_ast(lexemes);
 
-        self.emit_errors(&src).unwrap();
+            self.resolvers(&ast, session);
+
+            self.emit_errors(&src).unwrap();
+        });
     }
 
     fn lex(&mut self, src: &SourceFile) -> Lexemes {
-        let lexemes =
-            Lexer::new(src.data(), src.source_id(), &mut self.lex_errors).lex(&mut self.session);
+        let lexemes = {
+            let lexer = Lexer::new(src.data(), src.source_id());
+            lexer.lex()
+        };
 
-        if !self.lex_errors.is_empty() {
+        if DIAG_CTXT.lock().unwrap().errored() {
             self.state = Compilation::Error;
         };
 
@@ -66,13 +65,11 @@ impl<T: FileManager> Compiler<T> {
     }
 
     fn parse_to_ast(&mut self, lexemes: Lexemes) -> Realm {
-        let decls = Parser::new(lexemes, &mut self.parse_errors).parse();
+        let decls = Parser::new(lexemes).parse();
 
-        if !self.parse_errors.is_empty() {
+        if DIAG_CTXT.lock().unwrap().errored() {
             self.state = Compilation::Error;
         }
-
-        dbg!(&self.parse_errors);
 
         if self.state == Compilation::Ok {
             dbg!(&decls);
@@ -81,12 +78,15 @@ impl<T: FileManager> Compiler<T> {
         decls
     }
 
-    fn resolvers(&mut self, ast: &Realm) {
+    fn resolvers(&mut self, ast: &Realm, sess: &Session) {
+        let mut v = Validator::new(sess);
+        v.visit_realm(ast);
+
         let mut first_pass = ThingDefResolver::new(ast);
         for decl in &ast.items {
             first_pass.visit_thing(decl)
         }
-        let mut inner = LateResolver::new(first_pass, &self.session);
+        let mut inner = LateResolver::new(first_pass);
         for decl in &ast.items {
             inner.visit_thing(decl)
         }
@@ -96,22 +96,17 @@ impl<T: FileManager> Compiler<T> {
             for (id, res) in inner.res_map().iter() {
                 println!("ast id of res: {id:?} -> resolved as: {res:?}",);
             }
-
-            self.session
-                .debug_symbol_id_string()
-                .iter()
-                .for_each(|(name, id)| {
-                    println!("{id:?} -> {name:?}");
-                })
         }
     }
 
     pub fn emit_errors(&mut self, src: &SourceFile) -> io::Result<()> {
         let mut stdout = io::stdout();
-        let mut errs = Errors::new(&self.lex_errors, &mut stdout);
+
+        let diag = DIAG_CTXT.lock().unwrap();
+        let mut errs = Errors::new(diag.lex_errors(), &mut stdout);
 
         errs.print_all(src)?;
-        let mut errs = Errors::new(&self.parse_errors, &mut stdout);
+        let mut errs = Errors::new(diag.parse_errors(), &mut stdout);
 
         errs.print_all(src)?;
 

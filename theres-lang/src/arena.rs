@@ -44,6 +44,9 @@ pub struct Arena {
     pages: RefCell<Vec<Page>>,
 }
 
+unsafe impl Sync for Arena {}
+unsafe impl Send for Arena {}
+
 impl Arena {
     pub fn new() -> Arena {
         let page = Page::new();
