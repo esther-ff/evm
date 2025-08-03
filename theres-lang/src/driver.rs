@@ -3,7 +3,7 @@ use std::{io, path::Path};
 use crate::{
     ast::{Realm, Visitor},
     errors::Errors,
-    hir::{LateResolver, ThingDefResolver, Validator},
+    hir::{LateResolver, ThingDefResolver, Validator, lowering_ast::AstLowerer},
     lexer::{Lexemes, Lexer},
     parser::Parser,
     session::{DIAG_CTXT, Session},
@@ -39,13 +39,31 @@ impl<T: FileManager> Compiler<T> {
             .open(main.as_ref())
             .expect("failed to open main file");
 
-        let session = Session::new();
+        let mut session = Session::new();
+        let lexemes = self.lex(&src);
+        let ast = self.parse_to_ast(lexemes);
 
         session.enter(|session| {
-            let lexemes = self.lex(&src);
-            let ast = self.parse_to_ast(lexemes);
+            let mut v = Validator::new(session);
+            v.visit_realm(&ast);
 
-            self.resolvers(&ast, session);
+            let mut first_pass = ThingDefResolver::new(&ast);
+            for decl in &ast.items {
+                first_pass.visit_thing(decl)
+            }
+
+            let mut inner = LateResolver::new(first_pass);
+            for decl in &ast.items {
+                inner.visit_thing(decl)
+            }
+
+            for (id, res) in inner.res_map().iter() {
+                println!("ast id of res: {id:?} -> resolved as: {res:?}",);
+            }
+
+            let mappings = inner.into_mappings();
+
+            let ast_lowerer = AstLowerer::new(mappings, session);
 
             self.emit_errors(&src).unwrap();
         });
@@ -76,27 +94,6 @@ impl<T: FileManager> Compiler<T> {
         }
 
         decls
-    }
-
-    fn resolvers(&mut self, ast: &Realm, sess: &Session) {
-        let mut v = Validator::new(sess);
-        v.visit_realm(ast);
-
-        let mut first_pass = ThingDefResolver::new(ast);
-        for decl in &ast.items {
-            first_pass.visit_thing(decl)
-        }
-        let mut inner = LateResolver::new(first_pass);
-        for decl in &ast.items {
-            inner.visit_thing(decl)
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            for (id, res) in inner.res_map().iter() {
-                println!("ast id of res: {id:?} -> resolved as: {res:?}",);
-            }
-        }
     }
 
     pub fn emit_errors(&mut self, src: &SourceFile) -> io::Result<()> {

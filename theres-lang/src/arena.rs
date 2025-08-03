@@ -1,9 +1,10 @@
-const PAGE_SIZE: usize = 1024 * 32;
+const PAGE_SIZE: usize = 1024 * 64;
 
 use std::alloc::{self, Layout, dealloc};
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::ops::{Drop, Index, IndexMut};
+use std::{mem, ptr};
 
 #[derive(Debug)]
 struct Page {
@@ -74,8 +75,8 @@ impl Arena {
     pub fn alloc_slice<A, B>(&self, arr: &A) -> &[B]
     where
         A: AsRef<[B]> + ?Sized,
-        B: Copy,
     {
+        assert!(!mem::needs_drop::<A>());
         let target = arr.as_ref();
 
         let ptr =
@@ -87,6 +88,43 @@ impl Arena {
 
             std::slice::from_raw_parts(saved, target.len())
         }
+    }
+
+    pub fn alloc_from_iter<T, I>(&self, items: I) -> &[T]
+    where
+        I: IntoIterator<Item = T>,
+    {
+        assert!(!mem::needs_drop::<T>());
+
+        let iter = items.into_iter();
+
+        let (beginning, Some(end)) = iter.size_hint() else {
+            let vec: Vec<_> = iter.collect();
+            assert!(!vec.is_empty());
+            return self.alloc_slice(&vec);
+        };
+
+        let amount = end - beginning;
+
+        if amount == 0 {
+            return &[];
+        }
+
+        let layout = Layout::array::<T>(amount).expect("layout in `alloc_from_iter` was invalid");
+        let ptr = self.alloc_raw(layout).cast::<T>();
+
+        unsafe {
+            for (ix, item) in iter.enumerate() {
+                if ix == amount {
+                    break;
+                }
+
+                let new_ptr = ptr.add(ix);
+                ptr::write(new_ptr, item)
+            }
+        };
+
+        unsafe { core::slice::from_raw_parts(ptr, amount) }
     }
 
     pub fn alloc_string(&self, val: &str) -> &str {

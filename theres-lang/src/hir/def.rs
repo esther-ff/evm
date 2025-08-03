@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::ast::Name;
-use crate::hir;
+use crate::hir::lowering_ast::HirId;
+use crate::hir::{self, node};
+use crate::id::IdxVec;
 use crate::lexer::Span;
 
 crate::newtyped_index!(DefId, DefMap, DefVec);
@@ -108,22 +110,26 @@ pub enum TyKind {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct FnBody(pub(crate) hir::expr::Block);
 
-pub struct Definitions {
+pub struct Definitions<'hir> {
     map_instance: HashMap<DefId, Instance>,
     map_fun: HashMap<DefId, Fn>,
 
     fn_to_body: HashMap<DefId, BodyId>,
-    bodies: Vec<FnBody>,
+    bodies: BodyVec<&'hir node::Expr<'hir>>,
+
+    def_id_to_hir_id: DefMap<HirId>,
+
     id: u32,
 }
 
-impl Definitions {
+impl<'hir> Definitions<'hir> {
     pub fn new() -> Self {
         Self {
             map_instance: HashMap::new(),
             map_fun: HashMap::new(),
             fn_to_body: HashMap::new(),
-            bodies: Vec::new(),
+            bodies: IdxVec::new(),
+            def_id_to_hir_id: HashMap::new(),
 
             id: 0,
         }
@@ -133,5 +139,15 @@ impl Definitions {
         let id = DefId { private: self.id };
         self.id += 1;
         id
+    }
+
+    pub fn register_body(&mut self, expr: &'hir node::Expr<'hir>, def_id: DefId) -> BodyId {
+        let body_id = self.bodies.push(expr);
+        self.fn_to_body.insert(def_id, body_id);
+        body_id
+    }
+
+    pub fn map_def_id_to_hir(&mut self, def_id: DefId, hir_id: HirId) {
+        self.def_id_to_hir_id.insert(def_id, hir_id);
     }
 }

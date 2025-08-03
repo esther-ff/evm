@@ -158,14 +158,12 @@ impl Parser {
             TokenKind::Function => self.parse_function_type(),
             TokenKind::LeftSqBracket => self.parse_array_type(),
 
-            TokenKind::Identifier(ident) => {
-                self.lexemes.advance();
-
+            TokenKind::Identifier(..) => {
                 let tok2 = self.lexemes.peek_token();
                 if tok2.kind != TokenKind::LeftArrowBracket {
                     let ty = Ty {
                         id,
-                        kind: TyKind::Regular(Name::new(ident, tok.span)),
+                        kind: TyKind::Path(self.path()?),
                         span: tok.span,
                     };
 
@@ -179,18 +177,7 @@ impl Parser {
                     ty_params.push(self.ty()?)
                 }
 
-                let span_end = ty_params.last().as_ref().unwrap().span.end();
-
-                self.expect_token(TokenKind::RightArrowBracket)?;
-
-                Ok(Ty {
-                    id,
-                    kind: TyKind::Params {
-                        base: Name::new(ident, tok.span),
-                        generics: ty_params,
-                    },
-                    span: self.new_span(tok.span.start(), span_end, 0),
-                })
+                todo!("generics");
             }
 
             any => {

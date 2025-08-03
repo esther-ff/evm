@@ -296,11 +296,8 @@ pub enum TyKind {
     /// like [u64]
     Array(Box<Ty>),
 
-    /// Regular type like `u32`
-    Regular(Name),
-
-    /// With generics
-    Params { base: Name, generics: Vec<Ty> },
+    /// Some path to a type
+    Path(Path),
 
     /// `self` argument
     /// in methods
@@ -840,13 +837,9 @@ pub trait Visitor<'a> {
 
             TyKind::Array(ty) => self.visit_ty(ty),
 
-            TyKind::Params { base, generics } => {
-                try_visit!(self.visit_name(base));
+            TyKind::Path(p) => self.visit_path(p),
 
-                visit_iter!(v: self, m: visit_ty, generics)
-            }
-
-            TyKind::MethodSelf | TyKind::Regular(..) => Self::Result::normal(),
+            TyKind::MethodSelf => Self::Result::normal(),
         }
     }
 

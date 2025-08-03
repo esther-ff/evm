@@ -4,6 +4,7 @@ use crate::ast::{
     StmtKind, Thing, ThingKind, Ty, TyKind, VarMode, VariableStmt, Visitor,
 };
 
+use crate::hir::lowering_ast::Mappings;
 use crate::parser::AstIdMap;
 use crate::session::{SymbolId, SymbolMap};
 use std::collections::HashMap;
@@ -74,9 +75,9 @@ impl Scope {
     }
 }
 
-pub struct ThingDefResolver {
+pub struct ThingDefResolver<'a> {
     // mapping names to definitions,
-    definitions: Definitions,
+    definitions: Definitions<'a>,
 
     // top scope
     top: Scope,
@@ -95,7 +96,7 @@ pub struct ThingDefResolver {
     def_id_to_ast_id: DefMap<AstId>,
 }
 
-impl ThingDefResolver {
+impl<'a> ThingDefResolver<'a> {
     pub fn new(root: &Realm) -> Self {
         let f = |s: &mut Scope| {
             for (k, v) in PRIMITIVES {
@@ -114,7 +115,10 @@ impl ThingDefResolver {
     }
 }
 
-impl<'a> Visitor<'a> for ThingDefResolver {
+impl<'a, 'b> Visitor<'a> for ThingDefResolver<'b>
+where
+    'b: 'a,
+{
     type Result = ();
 
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
@@ -267,7 +271,7 @@ impl ScopeStack {
     }
 }
 
-pub struct LateResolver {
+pub struct LateResolver<'a> {
     // ast id -> scope stack
     current_scope: AstId,
     module_scopes: AstIdMap<ScopeStack>,
@@ -276,7 +280,7 @@ pub struct LateResolver {
     pub res_map: AstIdMap<Resolved<AstId>>,
 
     // mapping names to definitions,
-    pub definitions: Definitions,
+    pub definitions: Definitions<'a>,
 
     // mapping ast ids to def ids
     pub ast_id_to_def_id: AstIdMap<DefId>,
@@ -288,8 +292,8 @@ pub struct LateResolver {
     pub instance_to_scope: AstIdMap<Scope>,
 }
 
-impl LateResolver {
-    pub fn new(old: ThingDefResolver) -> Self {
+impl<'a> LateResolver<'a> {
+    pub fn new(old: ThingDefResolver<'a>) -> Self {
         let mut scopes = ScopeIdVec::new_with_capacity(8);
         scopes.push(old.top);
         let sc = ScopeStack {
@@ -312,6 +316,14 @@ impl LateResolver {
             fields_to_instance: HashMap::new(),
             instance_to_scope: HashMap::new(),
         }
+    }
+
+    pub fn into_mappings(self) -> Mappings {
+        Mappings::new(
+            self.instance_to_fields,
+            self.fields_to_instance,
+            self.res_map,
+        )
     }
 
     fn current_scope_stack(&self) -> &ScopeStack {
@@ -491,7 +503,7 @@ fn traverse_scopes(
     None
 }
 
-impl<'a> Visitor<'a> for LateResolver {
+impl<'a> Visitor<'a> for LateResolver<'_> {
     type Result = ();
 
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
@@ -799,17 +811,12 @@ impl<'a> Visitor<'a> for LateResolver {
 
             TyKind::Array(ty) => self.visit_ty(ty),
 
-            TyKind::Regular(id) => {
-                match self.get_name(id.interned, Space::Types) {
-                    Resolved::Err => println!("error: type not found, symbol id: {id:?}"),
+            TyKind::Path(path) => {
+                match self.resolve_path(path, Space::Types) {
+                    Resolved::Err => println!("error: type not found, path: {path:?}"),
                     test => println!("type was correct!!! {test:#?}"), // just to silence clippy
                 }
             }
-
-            TyKind::Params {
-                base: _,
-                generics: _,
-            } => todo!("generics"),
 
             TyKind::MethodSelf => (),
         }

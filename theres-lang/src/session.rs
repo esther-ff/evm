@@ -1,6 +1,19 @@
-use std::{collections::HashMap, sync::LazyLock, sync::Mutex};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+};
 
-use crate::{arena::Arena, hir::lowering_ast::HirMap, lexer::LexError, parser::ParseError};
+use crate::{
+    arena::Arena,
+    hir::{
+        def::{BodyId, DefId, Definitions},
+        lowering_ast::{HirId, HirMap},
+        node,
+    },
+    lexer::LexError,
+    parser::ParseError,
+};
 
 pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
     LazyLock::new(|| Mutex::new(DiagnosticCtxt::new()));
@@ -130,6 +143,8 @@ pub struct Session<'sess> {
     dropless_arena: Arena,
 
     hir_map: HirMap<'sess>,
+
+    defs: RefCell<Definitions<'sess>>,
 }
 
 impl<'a> Session<'a> {
@@ -137,17 +152,30 @@ impl<'a> Session<'a> {
         Self {
             hir_map: HirMap::new(),
             dropless_arena: Arena::new(),
+            defs: RefCell::new(Definitions::new()),
         }
     }
 
-    pub fn enter<F, R>(&'a self, f: F) -> R
+    pub fn enter<F, R>(&'a mut self, f: F) -> R
     where
-        F: FnOnce(&'a Self) -> R,
+        F: FnOnce(&'a mut Self) -> R,
     {
         f(self)
     }
 
     pub fn hir(&mut self) -> &mut HirMap<'a> {
         &mut self.hir_map
+    }
+
+    pub fn associate_body(&self, def_id: DefId, expr: &'a node::Expr<'a>) -> BodyId {
+        self.defs.borrow_mut().register_body(expr, def_id)
+    }
+
+    pub fn map_def_id(&self, def_id: DefId, hir_id: HirId) {
+        self.defs.borrow_mut().map_def_id_to_hir(def_id, hir_id);
+    }
+
+    pub fn arena(&self) -> &Arena {
+        &self.dropless_arena
     }
 }

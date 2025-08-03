@@ -1,5 +1,5 @@
 use crate::{
-    ast::{BinOp, Name, UnaryOp},
+    ast::{AssignMode, BinOp, Name, UnaryOp},
     hir::{
         def::{BodyId, DefId, Resolved},
         lowering_ast::HirId,
@@ -8,6 +8,7 @@ use crate::{
     session::SymbolId,
 };
 
+#[derive(Debug, Clone, Copy)]
 pub enum Node<'h> {
     Thing(&'h Thing<'h>),
     Expr(&'h Expr<'h>),
@@ -18,21 +19,52 @@ pub enum Node<'h> {
     Field(&'h Field<'h>),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Expr<'h> {
     kind: ExprKind<'h>,
     span: Span,
     hir_id: HirId,
 }
 
+impl<'h> Expr<'h> {
+    pub fn new(kind: ExprKind<'h>, span: Span, hir_id: HirId) -> Self {
+        Self { kind, span, hir_id }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum AssignOp {
     Add,
     Sub,
     Mul,
     Div,
+    Mod,
     ShiftLeft,
     ShiftRight,
+    Xor,
+    Or,
+    And,
 }
 
+impl AssignOp {
+    pub fn lower_assign_mode(mode: AssignMode) -> Self {
+        match mode {
+            AssignMode::Add => Self::Add,
+            AssignMode::Sub => Self::Sub,
+            AssignMode::Mul => Self::Mul,
+            AssignMode::Div => Self::Div,
+            AssignMode::Mod => Self::Mod,
+            AssignMode::Shl => Self::ShiftLeft,
+            AssignMode::Shr => Self::ShiftRight,
+            AssignMode::Xor => Self::Xor,
+            AssignMode::Or => Self::Or,
+            AssignMode::And => Self::And,
+            AssignMode::Regular => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum LoopDesugarKind {
     For,
     While,
@@ -41,6 +73,7 @@ pub enum LoopDesugarKind {
     None,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ExprKind<'h> {
     Binary {
         lhs: &'h Expr<'h>,
@@ -101,30 +134,70 @@ pub enum ExprKind<'h> {
         body: &'h Block<'h>,
         reason: LoopDesugarKind,
     },
+
+    Literal(HirLiteral),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum HirLiteral {
+    Bool(bool),
+    Float(f64),
+    Uint(u64),
+    Int(i64),
+    Str(SymbolId),
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Block<'h> {
     stmts: &'h [Stmt<'h>],
     expr: Option<&'h Expr<'h>>,
     span: Span,
+    hir_id: HirId,
 }
 
+impl<'h> Block<'h> {
+    pub fn new(
+        span: Span,
+        stmts: &'h [Stmt<'h>],
+        hir_id: HirId,
+        expr: Option<&'h Expr<'h>>,
+    ) -> Self {
+        Self {
+            span,
+            stmts,
+            hir_id,
+            expr,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Stmt<'h> {
     span: Span,
     kind: StmtKind<'h>,
+    hir_id: HirId,
 }
 
+impl<'h> Stmt<'h> {
+    pub fn new(span: Span, kind: StmtKind<'h>, hir_id: HirId) -> Self {
+        Self { span, kind, hir_id }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum StmtKind<'h> {
     Local(&'h Local<'h>),
     Expr(&'h Expr<'h>),
     Thing(&'h Thing<'h>),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Constant {
     Yes,
     No,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Local<'h> {
     mutability: Constant,
     name: Name,
@@ -133,6 +206,25 @@ pub struct Local<'h> {
     hir_id: HirId,
 }
 
+impl<'h> Local<'h> {
+    pub fn new(
+        mutability: Constant,
+        name: Name,
+        hir_id: HirId,
+        ty: &'h Ty<'h>,
+        init: Option<&'h Expr<'h>>,
+    ) -> Self {
+        Self {
+            mutability,
+            name,
+            hir_id,
+            init,
+            ty,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Thing<'h> {
     hir_id: HirId,
     def_id: DefId,
@@ -140,10 +232,22 @@ pub struct Thing<'h> {
     span: Span,
 }
 
+impl<'h> Thing<'h> {
+    pub fn new(kind: ThingKind<'h>, span: Span, hir_id: HirId, def_id: DefId) -> Self {
+        Self {
+            span,
+            hir_id,
+            def_id,
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum ThingKind<'h> {
     Fn {
         name: Name,
-        sig: FnSig<'h>,
+        sig: &'h FnSig<'h>,
     },
 
     Instance {
@@ -166,6 +270,7 @@ pub enum ThingKind<'h> {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct FnSig<'h> {
     span: Span,
     return_type: &'h Ty<'h>,
@@ -173,11 +278,35 @@ pub struct FnSig<'h> {
     body: BodyId,
 }
 
+impl<'h> FnSig<'h> {
+    pub fn new(
+        span: Span,
+        return_type: &'h Ty<'h>,
+        arguments: &'h [Param<'h>],
+        body: BodyId,
+    ) -> Self {
+        Self {
+            span,
+            return_type,
+            arguments,
+            body,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Param<'h> {
     name: Name,
     ty: &'h Ty<'h>,
 }
 
+impl<'h> Param<'h> {
+    pub fn new(name: Name, ty: &'h Ty<'h>) -> Self {
+        Self { name, ty }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Ty<'h> {
     span: Span,
     hir_id: HirId,
@@ -190,16 +319,55 @@ impl<'a> Ty<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum TyKind<'h> {
     MethodSelf,
     Array(&'h Ty<'h>),
-    Normal(Resolved<HirId>),
+    Path(&'h Path<'h>),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Field<'h> {
     mutability: Constant,
     span: Span,
     hir_id: HirId,
     name: Name,
     ty: &'h Ty<'h>,
+}
+
+impl<'h> Field<'h> {
+    pub fn new(
+        mutability: Constant,
+        span: Span,
+        hir_id: HirId,
+        name: Name,
+        ty: &'h Ty<'h>,
+    ) -> Self {
+        Self {
+            mutability,
+            span,
+            hir_id,
+            name,
+            ty,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Path<'h> {
+    res: Resolved<HirId>,
+    segments: &'h [SymbolId],
+    hir_id: HirId,
+    span: Span,
+}
+
+impl<'h> Path<'h> {
+    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], hir_id: HirId, span: Span) -> Self {
+        Self {
+            res,
+            segments,
+            hir_id,
+            span,
+        }
+    }
 }
