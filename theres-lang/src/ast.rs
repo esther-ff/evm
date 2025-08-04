@@ -114,8 +114,8 @@ impl Expr {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct ElseIf {
-    cond: Expr,
-    body: Block,
+    pub cond: Expr,
+    pub body: Block,
 }
 
 impl ElseIf {

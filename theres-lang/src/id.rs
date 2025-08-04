@@ -33,6 +33,11 @@ impl<I: IndexId, T> IdxVec<I, T> {
         I::new(id)
     }
 
+    pub fn future_id(&self) -> I {
+        let id = self.inner.len();
+        I::new(id)
+    }
+
     pub fn get(&self, id: I) -> Option<&T> {
         self.inner.get(id.idx())
     }

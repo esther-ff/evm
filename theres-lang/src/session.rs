@@ -142,33 +142,32 @@ impl SymbolId {
 pub struct Session<'sess> {
     dropless_arena: Arena,
 
-    hir_map: HirMap<'sess>,
+    hir_map: RefCell<HirMap<'sess>>,
 
     defs: RefCell<Definitions<'sess>>,
 }
 
-impl<'a> Session<'a> {
+impl<'sess> Session<'sess> {
     pub fn new() -> Self {
         Self {
-            hir_map: HirMap::new(),
+            hir_map: RefCell::new(HirMap::new()),
             dropless_arena: Arena::new(),
             defs: RefCell::new(Definitions::new()),
         }
     }
 
-    pub fn enter<F, R>(&'a mut self, f: F) -> R
+    pub fn enter<F, R>(&'sess self, f: F) -> R
     where
-        F: FnOnce(&'a mut Self) -> R,
+        F: FnOnce(&'sess Self) -> R,
     {
         f(self)
     }
 
-    pub fn hir(&mut self) -> &mut HirMap<'a> {
-        &mut self.hir_map
-    }
-
-    pub fn associate_body(&self, def_id: DefId, expr: &'a node::Expr<'a>) -> BodyId {
-        self.defs.borrow_mut().register_body(expr, def_id)
+    pub fn hir<F, R>(&'sess self, f: F) -> R
+    where
+        F: FnOnce(&mut HirMap<'sess>) -> R,
+    {
+        f(&mut self.hir_map.borrow_mut())
     }
 
     pub fn map_def_id(&self, def_id: DefId, hir_id: HirId) {

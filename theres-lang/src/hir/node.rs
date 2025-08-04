@@ -2,7 +2,7 @@ use crate::{
     ast::{AssignMode, BinOp, Name, UnaryOp},
     hir::{
         def::{BodyId, DefId, Resolved},
-        lowering_ast::HirId,
+        lowering_ast::{HirId, OwnerId},
     },
     lexer::Span,
     session::SymbolId,
@@ -118,7 +118,7 @@ pub enum ExprKind<'h> {
         condition: &'h Expr<'h>,
         block: &'h Block<'h>,
         else_ifs: &'h [(Block<'h>, Expr<'h>)],
-        otherwise: Option<&'h Expr<'h>>,
+        otherwise: Option<&'h Block<'h>>,
     },
 
     Return {
@@ -226,20 +226,14 @@ impl<'h> Local<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thing<'h> {
-    hir_id: HirId,
-    def_id: DefId,
+    id: OwnerId,
     kind: ThingKind<'h>,
     span: Span,
 }
 
 impl<'h> Thing<'h> {
-    pub fn new(kind: ThingKind<'h>, span: Span, hir_id: HirId, def_id: DefId) -> Self {
-        Self {
-            span,
-            hir_id,
-            def_id,
-            kind,
-        }
+    pub fn new(kind: ThingKind<'h>, span: Span, id: OwnerId) -> Self {
+        Self { id, span, kind }
     }
 }
 
@@ -357,16 +351,14 @@ impl<'h> Field<'h> {
 pub struct Path<'h> {
     res: Resolved<HirId>,
     segments: &'h [SymbolId],
-    hir_id: HirId,
     span: Span,
 }
 
 impl<'h> Path<'h> {
-    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], hir_id: HirId, span: Span) -> Self {
+    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], span: Span) -> Self {
         Self {
             res,
             segments,
-            hir_id,
             span,
         }
     }
