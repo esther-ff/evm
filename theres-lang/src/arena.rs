@@ -78,9 +78,8 @@ impl Arena {
     {
         assert!(!mem::needs_drop::<A>());
         let target = arr.as_ref();
-
-        let ptr =
-            self.alloc_raw(Layout::array::<B>(target.len()).expect("invalid layout")) as *mut B;
+        let layout = Layout::array::<B>(target.len()).expect("invalid layout");
+        let ptr = self.alloc_raw(layout).cast::<B>();
         let saved = ptr;
 
         unsafe {
@@ -120,7 +119,7 @@ impl Arena {
                 }
 
                 let new_ptr = ptr.add(ix);
-                ptr::write(new_ptr, item)
+                ptr::write(new_ptr, item);
             }
         };
 
@@ -234,7 +233,7 @@ impl<T, I: Id> TypedArena<T, I> {
         }
     }
 
-    pub fn get(&self, id: I) -> Option<&T> {
+    pub fn get(&self, id: &I) -> Option<&T> {
         let chunk_pos = id.get_arena_chunk_index();
         let vec_pos = id.get_inside_chunk_index();
 
@@ -243,7 +242,7 @@ impl<T, I: Id> TypedArena<T, I> {
             .and_then(|chunk| chunk.inner.get(vec_pos))
     }
 
-    pub fn get_mut(&mut self, id: I) -> Option<&mut T> {
+    pub fn get_mut(&mut self, id: &I) -> Option<&mut T> {
         let chunk_pos = id.get_arena_chunk_index();
         let vec_pos = id.get_inside_chunk_index();
 
@@ -264,7 +263,7 @@ impl<T, I: Id> Index<I> for TypedArena<T, I> {
         let chunk_index = index.get_arena_chunk_index();
         let chunk_inside_ix = index.get_inside_chunk_index();
 
-        match self.get(index) {
+        match self.get(&index) {
             Some(val) => val,
 
             None => {
@@ -281,7 +280,7 @@ impl<T, I: Id> IndexMut<I> for TypedArena<T, I> {
         let chunk_index = index.get_arena_chunk_index();
         let chunk_inside_ix = index.get_inside_chunk_index();
 
-        match self.get_mut(index) {
+        match self.get_mut(&index) {
             Some(val) => val,
 
             None => {
@@ -332,20 +331,21 @@ mod tests {
 
         dbg!(arena.upper.get() as usize);
 
-        let _reff = arena.alloc_string(value);
-        let _reff1 = arena.alloc_string(value1);
+        let reff = arena.alloc_string(value);
+        let reff1 = arena.alloc_string(value1);
 
-        dbg!(_reff);
+        dbg!(reff);
 
-        dbg!(_reff.as_ptr() as usize);
-        dbg!(_reff1.as_ptr() as usize);
+        dbg!(reff.as_ptr() as usize);
+        dbg!(reff1.as_ptr() as usize);
 
-        dbg!(_reff1);
+        dbg!(reff1);
 
-        dbg!(_reff);
+        dbg!(reff);
     }
     #[test]
     fn big_alloc() {
+        #[allow(clippy::large_stack_arrays)]
         let value = [2u8; 31000];
 
         let arena = Arena::new();

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+#[allow(clippy::wildcard_imports)]
 use crate::ast::*;
+
 use crate::hir::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
-use crate::hir::node::{self, Constant};
-use crate::hir::node::{Node, Param};
+use crate::hir::node::{self, Constant, Node, Param};
 use crate::id::IdxVec;
 use crate::parser::{AstId, AstIdMap};
 use crate::session::Session;
@@ -12,8 +13,8 @@ crate::newtyped_index!(HirId, HirIdMap, HirVec);
 crate::newtyped_index!(LocalId, LocalMap, LocalVec);
 
 pub struct Mappings {
-    instance_to_field_list: AstIdMap<Vec<AstId>>,
-    field_id_to_instance: AstIdMap<AstId>,
+    instance_to_field_list: AstIdMap<Vec<DefId>>,
+    field_id_to_instance: AstIdMap<DefId>,
 
     resolution_map: AstIdMap<Resolved<AstId>>,
     ast_id_to_def_id: AstIdMap<DefId>,
@@ -21,8 +22,8 @@ pub struct Mappings {
 
 impl Mappings {
     pub fn new(
-        instance_to_field_list: AstIdMap<Vec<AstId>>,
-        field_id_to_instance: AstIdMap<AstId>,
+        instance_to_field_list: AstIdMap<Vec<DefId>>,
+        field_id_to_instance: AstIdMap<DefId>,
         resolution_map: AstIdMap<Resolved<AstId>>,
         ast_id_to_def_id: AstIdMap<DefId>,
     ) -> Self {
@@ -44,12 +45,15 @@ pub struct HirMap<'hir> {
 
     bodies: BodyVec<&'hir node::Expr<'hir>>,
     node_to_body: DefMap<BodyId>,
+
+    thing_to_associated: HirIdMap<&'hir [HirId]>,
 }
 
 impl<'hir> HirMap<'hir> {
     pub fn new() -> Self {
         Self {
             nodes: HashMap::new(),
+            thing_to_associated: HashMap::new(),
             child_to_parent: HashMap::new(),
 
             def_id_to_hir_id: HashMap::new(),
@@ -89,12 +93,15 @@ pub struct AstLowerer<'hir> {
     hir_id_counter: u32,
 
     ast_id_to_hir_id: AstIdMap<HirId>,
+
+    current_instance: Option<HirId>,
 }
 
 impl<'hir> AstLowerer<'hir> {
-    pub fn new(map: Mappings, session: &'hir mut Session<'hir>) -> Self {
+    pub fn new(map: Mappings, session: &'hir Session<'hir>) -> Self {
         Self {
             map,
+            current_instance: None,
             session,
             current_parent: HirId::DUMMY,
 
@@ -103,8 +110,8 @@ impl<'hir> AstLowerer<'hir> {
         }
     }
 
-    fn get_def_id(&self, ast_id: &AstId) -> DefId {
-        match self.map.ast_id_to_def_id.get(ast_id).copied() {
+    fn get_def_id(&self, ast_id: AstId) -> DefId {
+        match self.map.ast_id_to_def_id.get(&ast_id).copied() {
             Some(v) => v,
             None => panic!("{ast_id:?} was not mapped to any DefId!"),
         }
@@ -113,7 +120,7 @@ impl<'hir> AstLowerer<'hir> {
     /// Returns the next id that will be valid
     /// after inserting a node into the HIR map
     ///
-    /// Panics if the same AstId is again used for this function
+    /// Panics if the same `AstId` is again used for this function
     /// as it maps `AstId`s to `HirId`s for lowering `Resolved`s
     pub fn next_hir_id(&mut self, ast_id: AstId) -> HirId {
         let hir_id = HirId::new(self.hir_id_counter);
@@ -154,13 +161,13 @@ impl<'hir> AstLowerer<'hir> {
 
         let hir_expr_kind = match &expr.ty {
             ExprType::BinaryExpr { lhs, rhs, op } => node::ExprKind::Binary {
-                lhs: self.lower_expr_arena(&lhs),
-                rhs: self.lower_expr_arena(&rhs),
+                lhs: self.lower_expr_arena(lhs),
+                rhs: self.lower_expr_arena(rhs),
                 op: *op,
             },
 
             ExprType::UnaryExpr { op, target } => node::ExprKind::Unary {
-                target: self.lower_expr_arena(&target),
+                target: self.lower_expr_arena(target),
                 op: *op,
             },
 
@@ -170,19 +177,19 @@ impl<'hir> AstLowerer<'hir> {
                 mode,
             } => match mode {
                 AssignMode::Regular => node::ExprKind::Assign {
-                    variable: self.lower_expr_arena(&lvalue),
-                    value: self.lower_expr_arena(&rvalue),
+                    variable: self.lower_expr_arena(lvalue),
+                    value: self.lower_expr_arena(rvalue),
                 },
 
                 any => node::ExprKind::AssignWithOp {
-                    variable: self.lower_expr_arena(&lvalue),
-                    value: self.lower_expr_arena(&rvalue),
+                    variable: self.lower_expr_arena(lvalue),
+                    value: self.lower_expr_arena(rvalue),
                     op: node::AssignOp::lower_assign_mode(*any),
                 },
             },
 
             ExprType::FunCall { callee, args } => node::ExprKind::Call {
-                function: self.lower_expr_arena(&callee),
+                function: self.lower_expr_arena(callee),
                 args: self.lower_args(args.iter()),
             },
 
@@ -191,7 +198,7 @@ impl<'hir> AstLowerer<'hir> {
                 args,
                 name,
             } => node::ExprKind::MethodCall {
-                receiver: self.lower_expr_arena(&receiver),
+                receiver: self.lower_expr_arena(receiver),
                 method: name.interned,
                 args: self.lower_args(args.iter()),
             },
@@ -223,6 +230,52 @@ impl<'hir> AstLowerer<'hir> {
                 todo!("lowering while loop")
             }
 
+            ExprType::Loop { body } => node::ExprKind::Loop {
+                body: self.lower_block(body),
+                reason: node::LoopDesugarKind::None,
+            },
+
+            ExprType::Group(expr) => return self.lower_expr_alone(expr),
+
+            ExprType::CommaGroup(exprs) => node::ExprKind::CommaSep(
+                self.session
+                    .arena()
+                    .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_alone(expr))),
+            ),
+
+            ExprType::ArrayDecl {
+                ty,
+                size,
+                initialize,
+            } => node::ExprKind::Array {
+                ty_of_array: self.lower_ty(ty),
+                init: self
+                    .session
+                    .arena()
+                    .alloc_from_iter(initialize.iter().map(|expr| self.lower_expr_alone(expr))),
+                size: self.lower_expr_arena(size),
+            },
+
+            ExprType::Return { ret } => node::ExprKind::Return {
+                expr: ret.as_ref().map(|expr| self.lower_expr_arena(expr)),
+            },
+
+            ExprType::Make {
+                created: _,
+                ctor_args: _,
+            } => todo!("Make in HIR!"),
+
+            ExprType::Lambda { args: _, body: _ } => todo!("Lambdas in HIR!"),
+
+            ExprType::FieldAccess { source, field } => node::ExprKind::Field {
+                src: self.lower_expr_arena(source),
+                field: field.interned,
+            },
+
+            ExprType::Path(path) => node::ExprKind::Path(self.lower_path(path)),
+
+            ExprType::Block(b) => node::ExprKind::Block(self.lower_block(b)),
+
             ExprType::If {
                 cond,
                 if_block,
@@ -240,10 +293,8 @@ impl<'hir> AstLowerer<'hir> {
                             self.lower_expr_alone(&els.cond),
                         )
                     })),
-                otherwise: otherwise.as_ref().map(|target| self.lower_block(&target)),
+                otherwise: otherwise.as_ref().map(|target| self.lower_block(target)),
             },
-
-            _ => todo!(),
         };
 
         node::Expr::new(hir_expr_kind, expr.span, hir_id)
@@ -278,9 +329,9 @@ impl<'hir> AstLowerer<'hir> {
     pub fn lower_block_into_expr(&mut self, block: &Block) -> &'hir node::Expr<'hir> {
         let kind = node::ExprKind::Block(self.lower_block(block));
 
-        let v = node::Expr::new(kind, block.span, self.new_hir_id());
-
-        self.session.arena().alloc(v)
+        self.session
+            .arena()
+            .alloc(node::Expr::new(kind, block.span, self.new_hir_id()))
     }
 
     pub fn lower_stmt(&mut self, stmt: &Stmt) -> node::Stmt<'hir> {
@@ -315,9 +366,9 @@ impl<'hir> AstLowerer<'hir> {
     pub fn lower_ty(&mut self, ty: &Ty) -> &'hir node::Ty<'hir> {
         let kind = match &ty.kind {
             TyKind::Fn { args: _, ret: _ } => todo!(),
-            TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(&inner)),
+            TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(inner)),
             TyKind::MethodSelf => node::TyKind::MethodSelf,
-            TyKind::Path(path) => node::TyKind::Path(self.lower_path(&path)),
+            TyKind::Path(path) => node::TyKind::Path(self.lower_path(path)),
         };
 
         let ty = node::Ty::new(ty.span, self.next_hir_id(ty.id), kind);
@@ -340,9 +391,9 @@ impl<'hir> AstLowerer<'hir> {
 
     pub fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'hir> {
         let kind = match &thing.kind {
-            ThingKind::Function(decl) => return self.lower_fn_decl(&decl),
+            ThingKind::Function(decl) => return self.lower_fn_decl(decl),
             ThingKind::Realm(realm) => self.lower_realm(realm),
-            ThingKind::Instance(_inst) => todo!(),
+            ThingKind::Instance(inst) => return self.lower_instance(inst),
 
             _ => todo!("other parts "),
         };
@@ -365,7 +416,7 @@ impl<'hir> AstLowerer<'hir> {
         );
 
         let body = self.session.arena().alloc(expr_body);
-        let def_id = self.get_def_id(fn_id);
+        let def_id = self.get_def_id(*fn_id);
 
         node::Thing::new(
             node::ThingKind::Fn {
@@ -406,18 +457,49 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     pub fn lower_instance(&mut self, inst: &Instance) -> node::Thing<'hir> {
-        let hir_id = self.next_hir_id(inst.id);
-
         let Instance {
             name,
             span,
             fields,
-            assoc,
             generics: _,
-            id: _,
+            id,
         } = inst;
 
-        todo!();
+        let hir_id = self.map_ast_id_to_hir_id(*id);
+
+        let kind = node::ThingKind::Instance {
+            fields: self
+                .session
+                .arena()
+                .alloc_from_iter(fields.iter().map(|f| self.lower_field(f))),
+            name: *name,
+        };
+
+        node::Thing::new(kind, *span, hir_id)
+    }
+
+    pub fn lower_field(&mut self, field: &Field) -> node::Field<'hir> {
+        let Field {
+            constant,
+            name,
+            ty,
+            span,
+            id,
+        } = field;
+
+        let mutability = if *constant {
+            Constant::Yes
+        } else {
+            Constant::No
+        };
+
+        node::Field::new(
+            mutability,
+            *span,
+            self.next_hir_id(*id),
+            *name,
+            self.lower_ty(ty),
+        )
     }
 
     pub fn lower_resolved(&mut self, res: Resolved<AstId>) -> Resolved<HirId> {

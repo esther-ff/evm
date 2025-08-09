@@ -1,8 +1,8 @@
 use crate::{
     ast::{AssignMode, BinOp, Name, UnaryOp},
     hir::{
-        def::{BodyId, DefId, Resolved},
-        lowering_ast::{HirId, OwnerId},
+        def::{BodyId, Resolved},
+        lowering_ast::HirId,
     },
     lexer::Span,
     session::SymbolId,
@@ -136,6 +136,21 @@ pub enum ExprKind<'h> {
     },
 
     Literal(HirLiteral),
+
+    Array {
+        ty_of_array: &'h Ty<'h>,
+        init: &'h [Expr<'h>],
+        size: &'h Expr<'h>,
+    },
+
+    Index {
+        index: &'h Expr<'h>,
+        indexed_thing: &'h Expr<'h>,
+    },
+
+    Path(&'h Path<'h>),
+
+    CommaSep(&'h [Expr<'h>]),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -163,10 +178,12 @@ impl<'h> Block<'h> {
         expr: Option<&'h Expr<'h>>,
     ) -> Self {
         Self {
-            span,
             stmts,
-            hir_id,
+
             expr,
+            span,
+
+            hir_id,
         }
     }
 }
@@ -217,23 +234,29 @@ impl<'h> Local<'h> {
         Self {
             mutability,
             name,
-            hir_id,
+
             init,
             ty,
+
+            hir_id,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thing<'h> {
-    id: OwnerId,
     kind: ThingKind<'h>,
     span: Span,
+    hir_id: HirId,
 }
 
 impl<'h> Thing<'h> {
-    pub fn new(kind: ThingKind<'h>, span: Span, id: OwnerId) -> Self {
-        Self { id, span, kind }
+    pub fn new(kind: ThingKind<'h>, span: Span, id: HirId) -> Self {
+        Self {
+            hir_id: id,
+            span,
+            kind,
+        }
     }
 }
 
@@ -245,9 +268,7 @@ pub enum ThingKind<'h> {
     },
 
     Instance {
-        fields: &'h [HirId],
-        constants: &'h [DefId],
-        methods: &'h [DefId],
+        fields: &'h [Field<'h>],
         name: Name,
     },
 
@@ -321,11 +342,44 @@ pub enum TyKind<'h> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Field<'h> {
-    mutability: Constant,
+pub struct Path<'h> {
+    res: Resolved<HirId>,
+    segments: &'h [SymbolId],
     span: Span,
+}
+
+impl<'h> Path<'h> {
+    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], span: Span) -> Self {
+        Self {
+            res,
+            segments,
+            span,
+        }
+    }
+}
+
+pub struct Instance<'h> {
     hir_id: HirId,
     name: Name,
+    fields: &'h [Field<'h>],
+}
+
+impl<'h> Instance<'h> {
+    pub fn new(hir_id: HirId, name: Name, fields: &'h [Field<'h>]) -> Self {
+        Self {
+            hir_id,
+            name,
+            fields,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Field<'h> {
+    mutability: Constant,
+    name: Name,
+    span: Span,
+    hir_id: HirId,
     ty: &'h Ty<'h>,
 }
 
@@ -339,27 +393,11 @@ impl<'h> Field<'h> {
     ) -> Self {
         Self {
             mutability,
+
+            name,
             span,
             hir_id,
-            name,
             ty,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Path<'h> {
-    res: Resolved<HirId>,
-    segments: &'h [SymbolId],
-    span: Span,
-}
-
-impl<'h> Path<'h> {
-    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], span: Span) -> Self {
-        Self {
-            res,
-            segments,
-            span,
         }
     }
 }

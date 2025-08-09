@@ -97,9 +97,10 @@ pub struct ErrorLine<'a> {
 impl<'a> ErrorLine<'a> {
     pub fn new(msg: Option<Message>, content: &'a str, line_number: usize) -> Self {
         Self {
-            msg,
-            content,
             line_number,
+
+            content,
+            msg,
         }
     }
     pub fn print_to<O>(&self, indent: usize, writer: &mut O) -> io::Result<()>
@@ -128,11 +129,11 @@ pub struct Errors<'e, T, O> {
 
 impl<'e, T, O> Errors<'e, T, O> {
     pub fn new(errs: &'e [T], writer: &'e mut O) -> Self {
-        Self { writer, errs }
+        Self { errs, writer }
     }
 }
 
-impl<'e, T, O> Errors<'e, T, O>
+impl<T, O> Errors<'_, T, O>
 where
     T: TheresError,
     O: io::Write,
@@ -187,7 +188,7 @@ fn longest_line_number_from_origin(origin: usize, jump: usize) -> u32 {
 
     for _ in 0..jump {
         let tmp = up.saturating_sub(1);
-        up = cmp::max(up, tmp)
+        up = cmp::max(up, tmp);
     }
 
     dbg!(up);
@@ -196,7 +197,7 @@ fn longest_line_number_from_origin(origin: usize, jump: usize) -> u32 {
 
     for _ in 0..jump {
         let tmp = down.saturating_add(1);
-        down = cmp::max(up, tmp)
+        down = cmp::max(up, tmp);
     }
 
     dbg!(down);

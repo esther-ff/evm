@@ -1,7 +1,7 @@
 use super::def::{DefId, DefMap, DefType, Definitions, IntTy, PrimTy, Resolved};
 use crate::ast::{
     Arg, AstId, Block, Expr, ExprType, Field, FnDecl, FnSig, Instance, Name, Path, Realm, Stmt,
-    StmtKind, Thing, ThingKind, Ty, TyKind, VarMode, VariableStmt, Visitor,
+    StmtKind, Ty, TyKind, Universe, VariableStmt, Visitor,
 };
 
 use crate::hir::lowering_ast::Mappings;
@@ -96,13 +96,14 @@ pub struct ThingDefResolver<'a> {
     def_id_to_ast_id: DefMap<AstId>,
 }
 
-impl<'a> ThingDefResolver<'a> {
-    pub fn new(root: &Realm) -> Self {
+impl ThingDefResolver<'_> {
+    pub fn new(root: &Universe) -> Self {
         let f = |s: &mut Scope| {
             for (k, v) in PRIMITIVES {
                 s.types.insert(k, v);
             }
         };
+
         Self {
             definitions: Definitions::new(),
             module_scopes: HashMap::new(),
@@ -132,7 +133,7 @@ where
         } = val;
 
         for thing in items {
-            self.visit_thing(thing)
+            self.visit_thing(thing);
         }
 
         let def_id = self.definitions.new_id();
@@ -174,7 +175,6 @@ where
             name,
             span: _,
             fields,
-            assoc,
             generics: _,
             id,
         } = val;
@@ -187,13 +187,9 @@ where
                 .add(name, Resolved::Def(def_id, DefType::Instance), Space::Types);
         }
 
-        self.in_top_scope = false;
-        if let Some(b) = assoc {
-            self.visit_block(b)
+        for field in fields {
+            self.visit_field(field);
         }
-        self.in_top_scope = true;
-
-        fields.iter().for_each(|x| self.visit_field(x))
     }
 
     fn visit_field(&mut self, val: &'a Field) -> Self::Result {
@@ -217,9 +213,12 @@ where
             expr,
         } = val;
 
-        stmts.iter().for_each(|st| self.visit_stmt(st));
+        for st in stmts {
+            self.visit_stmt(st);
+        }
+
         if let Some(e) = expr {
-            self.visit_expr(e)
+            self.visit_expr(e);
         }
     }
 }
@@ -276,6 +275,10 @@ pub struct LateResolver<'a> {
     current_scope: AstId,
     module_scopes: AstIdMap<ScopeStack>,
 
+    // current instance
+    current_instance: Option<DefId>,
+    instance_field_stack: Vec<DefId>,
+
     // mapping node ids to their resolutions
     pub res_map: AstIdMap<Resolved<AstId>>,
 
@@ -287,8 +290,8 @@ pub struct LateResolver<'a> {
     pub def_id_to_ast_id: DefMap<AstId>,
 
     // instance to fields
-    pub instance_to_fields: AstIdMap<Vec<AstId>>,
-    pub fields_to_instance: AstIdMap<AstId>,
+    pub instance_to_fields: AstIdMap<Vec<DefId>>,
+    pub fields_to_instance: AstIdMap<DefId>,
     pub instance_to_scope: AstIdMap<Scope>,
 }
 
@@ -304,8 +307,10 @@ impl<'a> LateResolver<'a> {
 
         Self {
             current_scope: old.root,
+            current_instance: None,
             module_scopes: HashMap::from([(old.root, sc)]),
             definitions: old.definitions,
+            instance_field_stack: Vec::new(),
 
             ast_id_to_def_id: old.ast_id_to_def_id,
             def_id_to_ast_id: old.def_id_to_ast_id,
@@ -323,6 +328,7 @@ impl<'a> LateResolver<'a> {
             self.instance_to_fields,
             self.fields_to_instance,
             self.res_map,
+            self.ast_id_to_def_id,
         )
     }
 
@@ -343,7 +349,7 @@ impl<'a> LateResolver<'a> {
         self.current_scope_stack_mut().insert(scope)
     }
 
-    fn with_new_scope<'b, F>(&mut self, f: F, bindings: Option<BindingList<'b>>)
+    fn with_new_scope<F>(&mut self, f: F, bindings: Option<BindingList<'_>>)
     where
         F: FnOnce(&mut Self),
     {
@@ -430,7 +436,7 @@ impl<'a> LateResolver<'a> {
             let name = seg.name.interned;
 
             if ix == amount_of_segments {
-                ret = Some(self.get_name(name, last_space))
+                ret = Some(self.get_name(name, last_space));
             } else {
                 match self.get_name(name, Space::Types) {
                     Resolved::Local(..) => todo!("locals don't have assoc items"),
@@ -459,9 +465,9 @@ impl<'a> LateResolver<'a> {
                             );
                         }
 
-                        let res = instance_scope.get(val_name.name.interned, Space::Values);
-
-                        return res.unwrap_or(Resolved::Err);
+                        return instance_scope
+                            .get(val_name.name.interned, Space::Values)
+                            .unwrap_or(Resolved::Err);
                     }
 
                     Resolved::Def(ref id, DefType::Realm) => {
@@ -473,7 +479,7 @@ impl<'a> LateResolver<'a> {
                         self.current_scope = scope;
                     }
 
-                    _ => todo!("handle getting wrong definitions"),
+                    Resolved::Def(_, _) => todo!("handle getting wrong definitions"),
                 }
             }
         }
@@ -518,15 +524,15 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         self.module_scopes.insert(*id, ScopeStack::new_with_prims());
 
         for thing in items {
-            self.visit_thing(thing)
+            self.visit_thing(thing);
         }
 
         let realm_visited_stack = mem::replace(&mut self.current_scope, old_stack);
         let def_id = self.gen_def_id(realm_visited_stack);
 
         self.with_current_scope_mut(|s| {
-            s.add(name, Resolved::Def(def_id, DefType::Realm), Space::Types)
-        })
+            s.add(name, Resolved::Def(def_id, DefType::Realm), Space::Types);
+        });
     }
 
     fn visit_interface(&mut self, _val: &'a crate::ast::Interface) -> Self::Result {
@@ -571,7 +577,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             let res = Resolved::Def(new_def_id, DefType::Fun);
 
             self.with_current_scope_mut(|s| s.add(name, res, Space::Values));
-        };
+        }
 
         self.with_new_scope(|visitor| visitor.visit_block(block), Some(&bindings));
     }
@@ -580,72 +586,44 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         let Instance {
             name,
             span: _,
-            id: instance_id,
+            id,
             fields,
-            assoc,
             generics: _,
         } = val;
 
-        let instance_def_id = self.gen_def_id(*instance_id);
+        let instance_id = *id;
+        let instance_def_id = self.gen_def_id(instance_id);
+
+        self.current_instance.replace(instance_def_id);
 
         self.with_current_scope_mut(|s| {
             s.add(
                 name,
                 Resolved::Def(instance_def_id, DefType::Instance),
                 Space::Types,
-            )
+            );
         });
 
-        let mut instance_fields = Vec::new();
-
         for f in fields {
-            let _field_def_id = self.gen_def_id(f.id);
-            self.fields_to_instance.insert(f.id, *instance_id);
-            instance_fields.push(f.id);
+            self.visit_field(f);
         }
 
         self.instance_to_fields
-            .insert(*instance_id, instance_fields);
+            .insert(instance_id, mem::take(&mut self.instance_field_stack));
+    }
 
-        let Some(block) = assoc else { return };
+    fn visit_field(&mut self, field: &'a Field) -> Self::Result {
+        let field_def_id = self.gen_def_id(field.id);
 
-        let mut scope = Scope::new(None);
+        self.res_map
+            .insert(field.id, Resolved::Def(field_def_id, DefType::Field));
 
-        for s in &block.stmts {
-            match &s.kind {
-                StmtKind::LocalVar(l) => {
-                    debug_assert!(l.mode == VarMode::Const);
-                    debug_assert!(l.initializer.is_some());
+        let current_instance = self
+            .current_instance
+            .expect("visited a field outside an instance?");
 
-                    let def_id = self.gen_def_id(l.id);
-                    scope.add(
-                        &l.name,
-                        Resolved::Def(def_id, DefType::Const),
-                        Space::Values,
-                    );
-
-                    self.visit_var_stmt(l);
-                }
-
-                StmtKind::Thing(Thing {
-                    id: fun_id,
-                    kind: ThingKind::Function(fun),
-                }) => {
-                    let def_id = self.gen_def_id(*fun_id);
-                    scope.add(
-                        &fun.sig.name,
-                        Resolved::Def(def_id, DefType::Fun),
-                        Space::Values,
-                    );
-
-                    self.visit_fn_decl(fun);
-                }
-
-                _ => unreachable!(),
-            }
-        }
-
-        self.instance_to_scope.insert(*instance_id, scope);
+        self.fields_to_instance.insert(field.id, current_instance);
+        self.visit_ty(&field.ty);
     }
 
     fn visit_stmt(&mut self, val: &'a Stmt) -> Self::Result {
@@ -665,7 +643,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 self.visit_ty(ty);
 
                 if let Some(init) = initializer {
-                    self.visit_expr(init)
+                    self.visit_expr(init);
                 }
                 self.make_local_binding(*name, *id);
             }
@@ -706,7 +684,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             ExprType::CommaGroup(exprs) => {
                 for e in exprs {
-                    self.visit_expr(e)
+                    self.visit_expr(e);
                 }
             }
 
@@ -730,12 +708,12 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             } => {
                 self.visit_expr(receiver);
                 for arg in args {
-                    self.visit_expr(arg)
+                    self.visit_expr(arg);
                 }
             }
 
-            ExprType::Return { ret } if matches!(ret, Some(..)) => {
-                self.visit_expr(ret.as_ref().unwrap())
+            ExprType::Return { ret: Some(expr) } => {
+                self.visit_expr(expr);
             }
 
             ExprType::For {
@@ -748,14 +726,9 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             ExprType::Loop { body } => self.visit_block(body),
 
-            ExprType::While { cond, body } => {
+            ExprType::While { cond, body } | ExprType::Until { cond, body } => {
                 self.visit_expr(cond);
-                self.visit_block(body)
-            }
-
-            ExprType::Until { cond, body } => {
-                self.visit_expr(cond);
-                self.visit_block(body)
+                self.visit_block(body);
             }
 
             ExprType::ArrayDecl {
@@ -765,7 +738,10 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             } => {
                 self.visit_ty(ty);
                 self.visit_expr(size);
-                initialize.iter().for_each(|expr| self.visit_expr(expr))
+
+                for inits in initialize {
+                    self.visit_expr(inits);
+                }
             }
 
             ExprType::FieldAccess { source, field: _ } => self.visit_expr(source),
@@ -801,11 +777,11 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         match kind {
             TyKind::Fn { args, ret } => {
                 for arg in args {
-                    self.visit_ty(arg)
+                    self.visit_ty(arg);
                 }
 
                 if let Some(ret) = ret {
-                    self.visit_ty(ret)
+                    self.visit_ty(ret);
                 }
             }
 
@@ -832,7 +808,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         for stmt in stmts {
             if let StmtKind::Thing(item) = &stmt.kind {
-                self.visit_thing(item)
+                self.visit_thing(item);
             }
         }
 
@@ -848,7 +824,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                     self.visit_ty(ty);
 
                     if let Some(init) = initializer {
-                        self.visit_expr(init)
+                        self.visit_expr(init);
                     }
                     self.make_local_binding(*name, *id);
                 }
@@ -862,7 +838,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         }
 
         if let Some(e) = expr {
-            self.visit_expr(e)
+            self.visit_expr(e);
         }
     }
 }

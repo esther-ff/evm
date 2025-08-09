@@ -1,4 +1,4 @@
-pub trait IndexId {
+pub trait IndexId: Copy + Clone {
     fn new(n: usize) -> Self;
     fn idx(&self) -> usize;
 }
@@ -20,6 +20,13 @@ impl<I, T> IdxVec<I, T> {
         Self {
             inner: Vec::with_capacity(cap),
             _boo: core::marker::PhantomData,
+        }
+    }
+
+    pub fn new_from_vec(vec: Vec<T>) -> Self {
+        Self {
+            _boo: core::marker::PhantomData,
+            inner: vec,
         }
     }
 }
@@ -107,11 +114,15 @@ macro_rules! newtyped_index {
             fn new(private: u32) -> Self {
                 Self { private }
             }
+
+            fn new_usize(i: usize) -> Self {
+                Self::new(i.try_into().expect("id overflow"))
+            }
         }
 
         impl $crate::id::IndexId for $name {
             fn new(a: usize) -> Self {
-                $name::new(a as u32)
+                $name::new(a.try_into().expect("id overflow"))
             }
 
             fn idx(&self) -> usize {

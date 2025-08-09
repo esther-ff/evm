@@ -98,6 +98,7 @@ pub enum TokenKind {
     Interface,
     Apply,
     Realm,
+    Bind,
 
     Eof,
 }
@@ -168,7 +169,7 @@ pub struct Token {
 
 impl Token {
     pub fn new(span: Span, kind: TokenKind) -> Self {
-        Self { span, kind }
+        Self { kind, span }
     }
 
     pub fn is_eof(&self) -> bool {
@@ -287,16 +288,12 @@ impl Lexemes {
         self.tokens[self.pos - 1]
     }
 
-    pub fn back(&mut self) {
-        self.pos -= 1;
-    }
-
     pub fn is_empty(&self) -> bool {
         self.tokens.len() <= self.pos
     }
 
     pub fn advance(&mut self) {
-        self.pos += 1
+        self.pos += 1;
     }
 
     fn eof_token(&self) -> Token {
@@ -319,7 +316,7 @@ impl<'a> Lexer<'a> {
         Self {
             tokens: Vec::new(),
             chars: Reader::new(input),
-            current_line: 0,
+            current_line: 1,
             sourceid,
         }
     }
@@ -357,16 +354,7 @@ impl<'a> Lexer<'a> {
 
                 ',' => self.add_token_basic(TokenKind::Comma),
                 '!' => {
-                    let start = self.chars.position;
-                    if self.consume_if('=') {
-                        self.add_token(
-                            self.new_span(start, self.chars.position),
-                            TokenKind::NotEqual,
-                        );
-                        continue;
-                    }
-
-                    self.add_token_basic(TokenKind::ExclamationMark)
+                    self.handle_exclamation();
                 }
                 '?' => self.add_token_basic(TokenKind::QuestionMark),
                 '.' => self.add_token_basic(TokenKind::Dot),
@@ -387,100 +375,26 @@ impl<'a> Lexer<'a> {
                     operators!(self, ModAssign, Modulo);
                 }
                 '&' => {
-                    operators!(Bitwise, '&', self, BitAndAssign, BitAnd)
+                    operators!(Bitwise, '&', self, BitAndAssign, BitAnd);
                 }
                 '|' => {
-                    operators!(Bitwise, '&', self, BitOrAssign, BitOr)
+                    operators!(Bitwise, '&', self, BitOrAssign, BitOr);
                 }
 
                 '^' => {
-                    operators!(self, BitXorAssign, Xor)
+                    operators!(self, BitXorAssign, Xor);
                 }
 
                 '=' => {
-                    let Some(char) = self.chars.peek_char() else {
-                        let span = self.new_span(self.chars.position, self.chars.position + 1);
-                        let token = Token::new(span, TokenKind::Assign);
-                        self.tokens.push(token);
-                        continue;
-                    };
-
-                    let kind = match char {
-                        '=' => TokenKind::Equals,
-                        '>' => TokenKind::RightArrow,
-                        '<' => TokenKind::LtEq,
-                        _ => {
-                            let span = self.new_span(self.chars.position, self.chars.position + 2);
-                            let token = Token::new(span, TokenKind::Assign);
-                            self.tokens.push(token);
-                            continue;
-                        }
-                    };
-
-                    let span = self.new_span(self.chars.position, self.chars.position + 2);
-                    let token = Token::new(span, kind);
-
-                    self.chars.advance(1);
-
-                    self.tokens.push(token)
-                }
-
-                '>' => {
-                    let token = if let Some(char) = self.chars.peek_char()
-                        && char == '='
-                    {
-                        let span = self.new_span(self.chars.position, self.chars.position + 2);
-                        self.chars.advance(1);
-                        Token::new(span, TokenKind::GtEq)
-                    } else if let Some('>') = self.chars.peek_char() {
-                        let mut kind = TokenKind::ShiftRight;
-                        let mut tok_span =
-                            self.new_span(self.chars.position, self.chars.position + 2);
-
-                        if let Some('=') = self.chars.peek_char_by(1) {
-                            tok_span.end += 1;
-                            kind = TokenKind::ShrAssign;
-                            self.chars.advance(2);
-                        } else {
-                            self.chars.advance(1);
-                        }
-
-                        Token::new(tok_span, kind)
-                    } else {
-                        let span = self.new_span(self.chars.position, self.chars.position + 1);
-                        Token::new(span, TokenKind::RightArrowBracket)
-                    };
-
-                    self.tokens.push(token);
+                    self.handle_equals();
                 }
 
                 '<' => {
-                    let token = if let Some(char) = self.chars.peek_char()
-                        && char == '='
-                    {
-                        let span = self.new_span(self.chars.position, self.chars.position + 2);
-                        self.chars.advance(1);
-                        Token::new(span, TokenKind::LeftArrow)
-                    } else if let Some('<') = self.chars.peek_char() {
-                        let mut kind = TokenKind::ShiftLeft;
-                        let mut tok_span =
-                            self.new_span(self.chars.position, self.chars.position + 2);
+                    self.handle_left_arrow_bracket();
+                }
 
-                        if let Some('=') = self.chars.peek_char_by(1) {
-                            tok_span.end += 1;
-                            kind = TokenKind::ShlAssign;
-                            self.chars.advance(2);
-                        } else {
-                            self.chars.advance(1);
-                        }
-
-                        Token::new(tok_span, kind)
-                    } else {
-                        let span = self.new_span(self.chars.position, self.chars.position + 1);
-                        Token::new(span, TokenKind::LeftArrowBracket)
-                    };
-
-                    self.tokens.push(token);
+                '>' => {
+                    self.handle_right_arrow_bracket();
                 }
 
                 cap if (cap == '"') | (cap == '\'') => {
@@ -504,26 +418,7 @@ impl<'a> Lexer<'a> {
                 '#' => self.skip_all_filter(|x| x != '\n'),
 
                 target if target == '_' || target.is_alphabetic() => {
-                    let start = self.chars.position - 1;
-                    self.skip_all_filter(|x| x.is_alphanumeric() || x == '_');
-
-                    let string = self
-                        .chars
-                        .get_str(start, self.chars.position)
-                        .expect("string should be present");
-
-                    let span = self.new_span(start, self.chars.position);
-
-                    let kind = if let Some(kw) = check_for_keyword(string) {
-                        kw
-                    } else {
-                        let id = SymbolId::intern(string);
-
-                        TokenKind::Identifier(id)
-                    };
-
-                    let token = Token::new(span, kind);
-                    self.tokens.push(token)
+                    self.handle_identifier();
                 }
 
                 '_' => self.add_token_basic(TokenKind::Underscore),
@@ -533,18 +428,142 @@ impl<'a> Lexer<'a> {
                 ' ' | '\t' => {}
 
                 any => {
-                    let start = self.chars.position - 1;
-                    self.skip_all_filter(|x| x == any);
-
-                    self.add_error(
-                        self.new_span(start, self.chars.position),
-                        LexErrorKind::UnknownChar(any),
-                    );
+                    self.lex_error(any);
                 }
             }
         }
 
         Lexemes::new(self.tokens, self.sourceid)
+    }
+
+    fn lex_error(&mut self, any: char) {
+        let start = self.chars.position - 1;
+        self.skip_all_filter(|x| x == any);
+
+        add_error(
+            self.new_span(start, self.chars.position),
+            LexErrorKind::UnknownChar(any),
+        );
+    }
+
+    fn handle_identifier(&mut self) {
+        let start = self.chars.position - 1;
+        self.skip_all_filter(|x| x.is_alphanumeric() || x == '_');
+
+        let string = self
+            .chars
+            .get_str(start, self.chars.position)
+            .expect("string should be present");
+
+        let span = self.new_span(start, self.chars.position);
+
+        let kind = if let Some(kw) = check_for_keyword(string) {
+            kw
+        } else {
+            let id = SymbolId::intern(string);
+
+            TokenKind::Identifier(id)
+        };
+
+        let token = Token::new(span, kind);
+        self.tokens.push(token);
+    }
+
+    fn handle_exclamation(&mut self) {
+        let start = self.chars.position;
+        if self.consume_if('=') {
+            self.add_token(
+                self.new_span(start, self.chars.position),
+                TokenKind::NotEqual,
+            );
+            return;
+        }
+
+        self.add_token_basic(TokenKind::ExclamationMark);
+    }
+
+    fn handle_equals(&mut self) {
+        let Some(char) = self.chars.peek_char() else {
+            let span = self.new_span(self.chars.position, self.chars.position + 1);
+            let token = Token::new(span, TokenKind::Assign);
+            self.tokens.push(token);
+            return;
+        };
+
+        let kind = match char {
+            '=' => TokenKind::Equals,
+            '>' => TokenKind::RightArrow,
+            '<' => TokenKind::LtEq,
+            _ => {
+                let span = self.new_span(self.chars.position, self.chars.position + 2);
+                let token = Token::new(span, TokenKind::Assign);
+                self.tokens.push(token);
+                return;
+            }
+        };
+
+        let span = self.new_span(self.chars.position, self.chars.position + 2);
+        let token = Token::new(span, kind);
+
+        self.chars.advance(1);
+
+        self.tokens.push(token);
+    }
+
+    fn handle_left_arrow_bracket(&mut self) {
+        let token = if let Some(char) = self.chars.peek_char()
+            && char == '='
+        {
+            let span = self.new_span(self.chars.position, self.chars.position + 2);
+            self.chars.advance(1);
+            Token::new(span, TokenKind::LeftArrow)
+        } else if let Some('<') = self.chars.peek_char() {
+            let mut kind = TokenKind::ShiftLeft;
+            let mut tok_span = self.new_span(self.chars.position, self.chars.position + 2);
+
+            if let Some('=') = self.chars.peek_char_by(1) {
+                tok_span.end += 1;
+                kind = TokenKind::ShlAssign;
+                self.chars.advance(2);
+            } else {
+                self.chars.advance(1);
+            }
+
+            Token::new(tok_span, kind)
+        } else {
+            let span = self.new_span(self.chars.position, self.chars.position + 1);
+            Token::new(span, TokenKind::LeftArrowBracket)
+        };
+
+        self.tokens.push(token);
+    }
+
+    fn handle_right_arrow_bracket(&mut self) {
+        let token = if let Some(char) = self.chars.peek_char()
+            && char == '='
+        {
+            let span = self.new_span(self.chars.position, self.chars.position + 2);
+            self.chars.advance(1);
+            Token::new(span, TokenKind::GtEq)
+        } else if let Some('>') = self.chars.peek_char() {
+            let mut kind = TokenKind::ShiftRight;
+            let mut tok_span = self.new_span(self.chars.position, self.chars.position + 2);
+
+            if let Some('=') = self.chars.peek_char_by(1) {
+                tok_span.end += 1;
+                kind = TokenKind::ShrAssign;
+                self.chars.advance(2);
+            } else {
+                self.chars.advance(1);
+            }
+
+            Token::new(tok_span, kind)
+        } else {
+            let span = self.new_span(self.chars.position, self.chars.position + 1);
+            Token::new(span, TokenKind::RightArrowBracket)
+        };
+
+        self.tokens.push(token);
     }
 
     fn string_literal(&mut self, quote: char) {
@@ -564,7 +583,7 @@ impl<'a> Lexer<'a> {
 
         if !finished_quote {
             let span = self.new_span(literal_start, self.chars.position + 1);
-            self.add_error(span, LexErrorKind::LackingEndForStringLiteral);
+            add_error(span, LexErrorKind::LackingEndForStringLiteral);
             return;
         }
 
@@ -574,14 +593,14 @@ impl<'a> Lexer<'a> {
         let id = SymbolId::intern(self.get_str_from_span(span).expect("should be valid"));
 
         let token = Token::new(span, TokenKind::StringLiteral(id));
-        self.tokens.push(token)
+        self.tokens.push(token);
     }
 
     fn float_literal(&mut self, start: usize) {
         while let Some(char) = self.chars.next_char() {
             if !char.is_ascii_digit() {
                 let span = self.new_span(start, self.chars.position + 1);
-                self.add_error(span, LexErrorKind::InvalidFloatLiteral);
+                add_error(span, LexErrorKind::InvalidFloatLiteral);
                 self.skip_all_filter(|x| !x.is_whitespace());
             }
         }
@@ -592,7 +611,7 @@ impl<'a> Lexer<'a> {
             .expect("couldn't retrieve the string");
 
         let Ok(float) = string.parse::<f64>() else {
-            self.add_error(span, LexErrorKind::InvalidFloatLiteral);
+            add_error(span, LexErrorKind::InvalidFloatLiteral);
             return;
         };
 
@@ -627,10 +646,9 @@ impl<'a> Lexer<'a> {
         self.skip_all_filter(|x| x.is_digit(radix));
 
         let literal = self.get_literal_str(start, self.chars.position).unwrap();
-
         let Ok(val) = i64::from_str_radix(literal, radix) else {
             let span = self.new_span(start, self.chars.position);
-            self.add_error(span, err_kind);
+            add_error(span, err_kind);
             return;
         };
 
@@ -680,7 +698,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn add_token(&mut self, span: Span, kind: TokenKind) {
-        self.tokens.push(Token::new(span, kind))
+        self.tokens.push(Token::new(span, kind));
     }
 
     fn add_token_basic(&mut self, kind: TokenKind) {
@@ -688,21 +706,21 @@ impl<'a> Lexer<'a> {
         self.add_token(span, kind);
     }
 
-    fn add_error(&mut self, span: Span, kind: LexErrorKind) {
-        DIAG_CTXT
-            .lock()
-            .unwrap()
-            .push_lex_error(LexError { kind, span })
-    }
-
     fn get_literal_str(&self, start: usize, end: usize) -> Option<&str> {
         self.chars.get_str(start, end)
     }
 }
 
+fn add_error(span: Span, kind: LexErrorKind) {
+    DIAG_CTXT
+        .lock()
+        .unwrap()
+        .push_lex_error(LexError { kind, span });
+}
+
 fn check_for_keyword(ident: &str) -> Option<TokenKind> {
     use TokenKind::{
-        Apply, Const, Default, Else, False, For, Function, Global, If, Import, In, Inline,
+        Apply, Bind, Const, Default, Else, False, For, Function, Global, If, Import, In, Inline,
         Instance, Interface, Let, Loop, Match, Native, Realm, Return, SelfArg, Then, True, Until,
         While, With,
     };
@@ -734,6 +752,7 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
         "interface" => Interface,
         "with" => With,
         "realm" => Realm,
+        "bind" => Bind,
 
         _ => return None,
     }
@@ -743,16 +762,13 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
 #[cfg(test)]
 mod tests {
     use super::{Lexer, TokenKind};
-    use crate::session::Session;
     use crate::sources::SourceId;
 
     #[test]
     fn rust_like() {
-        let mut errors = Vec::new();
         let lexer = Lexer::new(b"let meow: i32 = 123", SourceId::DUMMY);
-        let mut session = Session::new();
 
-        let mut lexer = lexer.lex(&mut errors);
+        let mut lexer = lexer.lex();
 
         assert_eq!(lexer.next_token().kind, TokenKind::Let);
         assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(..)));

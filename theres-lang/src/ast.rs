@@ -253,6 +253,7 @@ impl LambdaBody {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Path {
+    #[allow(clippy::struct_field_names)]
     pub path: Vec<PathSeg>,
     pub span: Span,
     pub id: AstId,
@@ -343,8 +344,9 @@ impl FnSig {
     pub fn new(name: Name, span: Span, ret_type: Ty, args: Vec<Arg>, id: AstId) -> Self {
         FnSig {
             name,
-            ret_type,
+
             args,
+            ret_type,
             span,
             id,
         }
@@ -453,9 +455,11 @@ impl Field {
         Self {
             constant,
             name,
-            id,
+
             ty,
             span,
+
+            id,
         }
     }
 }
@@ -465,27 +469,20 @@ pub struct Instance {
     pub name: Name,
     pub span: Span,
     pub fields: Vec<Field>,
-    pub assoc: Option<Block>,
     pub generics: Generics,
     pub id: AstId,
 }
 
 impl Instance {
-    pub fn new(
-        name: Name,
-        span: Span,
-        fields: Vec<Field>,
-        assoc: Option<Block>,
-        generics: Generics,
-        id: AstId,
-    ) -> Self {
+    pub fn new(name: Name, span: Span, fields: Vec<Field>, generics: Generics, id: AstId) -> Self {
         Self {
             name,
-            id,
+
             span,
             fields,
-            assoc,
             generics,
+
+            id,
         }
     }
 }
@@ -554,7 +551,7 @@ pub struct Thing {
 
 impl Thing {
     pub fn new(kind: ThingKind, id: AstId) -> Self {
-        Self { kind, id }
+        Self { id, kind }
     }
 }
 
@@ -565,15 +562,16 @@ pub enum ThingKind {
     Instance(Instance),
     Realm(Realm),
     Interface(Interface),
-    Apply(Apply),
+    Bind(Bind),
 }
 
 impl ThingKind {
     pub fn function(block: Block, span: Span, sig: FnSig, id: AstId) -> Self {
         Self::Function(FnDecl {
-            span,
-            block,
             sig,
+
+            block,
+            span,
             id,
         })
     }
@@ -588,15 +586,8 @@ impl ThingKind {
         })
     }
 
-    pub fn instance(
-        name: Name,
-        span: Span,
-        fields: Vec<Field>,
-        methods: Option<Block>,
-        gens: Generics,
-        id: AstId,
-    ) -> Self {
-        Self::Instance(Instance::new(name, span, fields, methods, gens, id))
+    pub fn instance(name: Name, span: Span, fields: Vec<Field>, gens: Generics, id: AstId) -> Self {
+        Self::Instance(Instance::new(name, span, fields, gens, id))
     }
 
     pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
@@ -609,10 +600,24 @@ impl ThingKind {
             Self::Global(g) => g.name.span,
             Self::Instance(i) => i.span,
             Self::Interface(it) => it.span,
-            Self::Apply(a) => a.span,
+            Self::Bind(a) => a.span,
             Self::Realm(r) => r.span,
         }
     }
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub struct Bind {
+    pub victim: Ty,
+    pub mask: Option<Path>,
+    pub items: Vec<BindItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub enum BindItem {
+    Const(VariableStmt),
+    Fun(FnDecl),
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -621,6 +626,13 @@ pub struct Realm {
     pub id: AstId,
     pub span: Span,
     pub name: Name,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct Universe {
+    pub id: AstId,
+    pub thingies: Vec<Thing>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -636,7 +648,7 @@ impl Name {
     };
 
     pub fn new(interned: SymbolId, span: Span) -> Self {
-        Self { span, interned }
+        Self { interned, span }
     }
 }
 
@@ -659,7 +671,7 @@ impl VisitorResult for () {
 
     fn normal() -> Self {}
 
-    fn into_branch(_: Self::Return) -> Self {}
+    fn into_branch((): Self::Return) -> Self {}
 }
 
 impl<T> VisitorResult for std::ops::ControlFlow<T> {
@@ -747,7 +759,7 @@ pub trait Visitor<'a> {
             ThingKind::Realm(r) => self.visit_realm(r),
             ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
-            ThingKind::Apply(a) => self.visit_apply_decl(a),
+            ThingKind::Bind(a) => self.visit_bind(a),
             ThingKind::Interface(ia) => self.visit_interface(ia),
         }
     }
@@ -758,20 +770,16 @@ pub trait Visitor<'a> {
             id: _,
             span: _,
             fields,
-            assoc,
             generics,
         } = val;
 
         try_visit!(self.visit_name(name), self.visit_generics(generics));
 
         for field in fields {
-            try_visit!(self.visit_field(field))
+            try_visit!(self.visit_field(field));
         }
 
-        assoc
-            .as_ref()
-            .map(|x| self.visit_block(x))
-            .unwrap_or_else(Self::Result::normal)
+        Self::Result::normal()
     }
 
     fn visit_field(&mut self, val: &'a Field) -> Self::Result {
@@ -865,17 +873,24 @@ pub trait Visitor<'a> {
         self.visit_expr(expr)
     }
 
-    fn visit_apply_decl(&mut self, val: &'a Apply) -> Self::Result {
-        let Apply {
-            interface,
-            receiver,
+    fn visit_bind(&mut self, val: &'a Bind) -> Self::Result {
+        let Bind {
+            mask,
+            victim,
             span: _,
             items,
         } = val;
 
-        try_visit!(self.visit_name(interface), self.visit_ty(receiver));
+        try_visit!(self.visit_ty(victim));
+        maybe_visit!(v: self, m: visit_path, mask);
+        visit_iter!(v: self, m: visit_bind_item, items)
+    }
 
-        visit_iter!(v: self, m: visit_interface_entry, items)
+    fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
+        match val {
+            BindItem::Const(var) => self.visit_var_stmt(var),
+            BindItem::Fun(f) => self.visit_fn_decl(f),
+        }
     }
 
     fn visit_pat(&mut self, val: &'a Pat) -> Self::Result {
@@ -933,12 +948,7 @@ pub trait Visitor<'a> {
 
             ExprType::Path(p) => self.visit_path(p),
 
-            ExprType::While { cond, body } => {
-                try_visit!(self.visit_expr(cond));
-                self.visit_block(body)
-            }
-
-            ExprType::Until { cond, body } => {
+            ExprType::While { cond, body } | ExprType::Until { cond, body } => {
                 try_visit!(self.visit_expr(cond));
                 self.visit_block(body)
             }

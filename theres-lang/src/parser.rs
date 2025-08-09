@@ -1,6 +1,8 @@
 use std::panic::Location;
 
+#[allow(clippy::wildcard_imports)]
 use crate::ast::*;
+
 use crate::lexer::{Lexemes, Span, Token, TokenKind};
 use crate::session::{DIAG_CTXT, SymbolId};
 
@@ -39,6 +41,12 @@ pub enum ExprOrStmt {
     Expr(Expr),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VariableReq {
+    None,
+    ConstAndInit,
+}
+
 pub struct Parser {
     lexemes: Lexemes,
 
@@ -56,22 +64,15 @@ impl Parser {
         }
     }
 
-    pub fn has_errored(&self) -> bool {
-        DIAG_CTXT.lock().unwrap().errored()
-    }
-
-    pub fn decls(&self) -> &[Thing] {
-        &self.decls
-    }
-
     fn new_id(&mut self) -> AstId {
         let id = AstId::new(self.id);
         self.id += 1;
         id
     }
 
-    pub fn parse(mut self) -> Realm {
-        let realm_id = self.new_id();
+    pub fn parse(mut self) -> Universe {
+        let universe_id = self.new_id();
+
         let id = self.new_id();
 
         while !self.lexemes.is_empty() {
@@ -88,11 +89,10 @@ impl Parser {
         let end = self.decls.last().map_or(0, |decl| decl.kind.span().end());
         let span = self.new_span(start, end, 0);
 
-        Realm {
-            items: self.decls,
-            id: realm_id,
+        Universe {
+            id: universe_id,
+            thingies: self.decls,
             span,
-            name: Name::DUMMY,
         }
     }
 
@@ -100,11 +100,11 @@ impl Parser {
         let tok = self.lexemes.peek_token();
 
         let decl = match tok.kind {
-            TokenKind::Function => self.function_declaration()?,
+            TokenKind::Function => ThingKind::Function(self.function_declaration()?),
             TokenKind::Global => self.global_variable_decl()?,
             TokenKind::Instance => self.instance_decl()?,
             TokenKind::Interface => self.interface_decl()?,
-            TokenKind::Apply => self.apply_interface()?,
+            TokenKind::Bind => ThingKind::Bind(self.bind_decl()?),
             TokenKind::Realm => self.realm_decl()?,
             TokenKind::Eof => return tok.to_err_if_eof().map(|_| unreachable!()),
 
@@ -168,13 +168,12 @@ impl Parser {
                     };
 
                     return Ok(ty);
-                };
-
+                }
                 self.lexemes.advance();
 
                 let mut ty_params = vec![self.ty()?];
                 while self.consume_if(TokenKind::Comma) {
-                    ty_params.push(self.ty()?)
+                    ty_params.push(self.ty()?);
                 }
 
                 todo!("generics");
@@ -258,7 +257,7 @@ impl Parser {
                 span: Span::DUMMY,
                 id: self.new_id(),
             });
-        };
+        }
 
         let mut params = vec![inner(self)?];
         let start = params[0].ident.span.start();
@@ -332,9 +331,9 @@ impl Parser {
         Ok(FnSig::new(name, span, ret_type, fun_args, self.new_id()))
     }
 
-    fn function_declaration(&mut self) -> Result<ThingKind> {
+    fn function_declaration(&mut self) -> Result<FnDecl> {
         match self.function()? {
-            FunctionPart::Full(decl) => Ok(ThingKind::Function(decl)),
+            FunctionPart::Full(decl) => Ok(decl),
 
             FunctionPart::Signature(sig) => {
                 self.error_out(ParseErrorKind::FunctionWithoutBody, sig.span)
@@ -356,8 +355,8 @@ impl Parser {
                 let span = self.new_span(sig.span.end(), block.span.end(), 0);
                 let id = self.new_id();
                 let fndecl = FnDecl {
-                    block,
                     sig,
+                    block,
                     span,
                     id,
                 };
@@ -372,14 +371,14 @@ impl Parser {
         let mut args = Vec::new();
 
         if let Some(self_arg) = self.fn_self_arg() {
-            args.push(self_arg)
+            args.push(self_arg);
         }
 
         if self.lexemes.peek_token().kind != TokenKind::RightParen {
             args.push(self.arg()?);
 
             while self.consume_if(TokenKind::Comma) {
-                args.push(self.arg()?)
+                args.push(self.arg()?);
             }
         }
 
@@ -441,29 +440,63 @@ impl Parser {
         Ok(args)
     }
 
+    fn bind_decl(&mut self) -> Result<Bind> {
+        let keyword = self.expect_token(TokenKind::Bind)?;
+        let ty = self.ty()?;
+        self.expect_token(TokenKind::With)?;
+
+        // mask as interface
+        let mask = if self.lexemes.peek_token().kind == TokenKind::LeftParen {
+            None
+        } else {
+            Some(self.path()?)
+        };
+
+        self.expect_token(TokenKind::LeftParen)?;
+
+        let mut items = vec![];
+        while !self.consume_if(TokenKind::RightParen) {
+            items.push(self.bind_item()?);
+        }
+
+        Ok(Bind {
+            victim: ty,
+            mask,
+            items,
+            span: self.new_span(keyword.span.start(), self.lexemes.previous().span.end(), 0),
+        })
+    }
+
+    fn bind_item(&mut self) -> Result<BindItem> {
+        let item = match self.lexemes.peek_token().kind {
+            TokenKind::Function => BindItem::Fun(self.function_declaration()?),
+            TokenKind::Const => {
+                BindItem::Const(self.local_variable_stmt(VariableReq::ConstAndInit)?)
+            }
+            _ => todo!(),
+        };
+
+        Ok(item)
+    }
+
     fn instance_decl(&mut self) -> Result<ThingKind> {
         let keyword = self.expect_token(TokenKind::Instance)?;
         let name = self.expect_ident_as_name()?;
 
-        self.expect_token(TokenKind::LeftCurlyBracket)?;
+        self.expect_token(TokenKind::LeftParen)?;
 
         let fields = self.instance_fields()?;
 
-        let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
+        let rcurly = self.expect_token(TokenKind::RightParen)?;
         let generics = self.generic_params()?;
-        let assoc = if self.consume_if(TokenKind::With) {
-            Some(self.block()?)
-        } else {
-            None
-        };
 
-        let span_end = assoc.as_ref().map_or(rcurly.span.end(), |x| x.span.end());
+        let span_end = rcurly.span.end();
         let span = self.new_span(keyword.span.start(), span_end, 0);
+
         Ok(ThingKind::instance(
             name,
             span,
             fields,
-            assoc,
             generics,
             self.new_id(),
         ))
@@ -497,7 +530,7 @@ impl Parser {
         let mut fields = vec![one_field(self)?];
         while self.consume_if(TokenKind::Comma) {
             if self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
-                fields.push(one_field(self)?)
+                fields.push(one_field(self)?);
             }
         }
 
@@ -524,9 +557,9 @@ impl Parser {
 
     fn interface_entry(&mut self) -> Result<InterfaceEntry> {
         let ret = match self.lexemes.peek_token().kind {
-            TokenKind::Let | TokenKind::Const => {
-                self.local_variable_stmt().map(InterfaceEntry::Const)?
-            }
+            TokenKind::Let | TokenKind::Const => self
+                .local_variable_stmt(VariableReq::None)
+                .map(InterfaceEntry::Const)?,
 
             TokenKind::Function => match self.function()? {
                 FunctionPart::Signature(sig) => InterfaceEntry::TemplateFn(sig),
@@ -550,36 +583,24 @@ impl Parser {
         Ok(ret)
     }
 
-    fn apply_interface(&mut self) -> Result<ThingKind> {
-        let apply = self.expect_token(TokenKind::Apply)?;
-        let interface_name = self.expect_ident_as_name()?;
-
-        self.expect_token(TokenKind::For)?;
-
-        let receiver = self.ty()?;
-        let mut entries = Vec::new();
-
-        self.expect_token(TokenKind::LeftCurlyBracket)?;
-        while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
-            entries.push(self.interface_entry()?);
-        }
-
-        let rcurly = self.expect_token(TokenKind::RightCurlyBracket)?;
-
-        Ok(ThingKind::Apply(Apply::new(
-            interface_name,
-            receiver,
-            self.new_span(apply.span.start(), rcurly.span.end(), 0),
-            entries,
-        )))
-    }
-
-    fn local_variable_stmt(&mut self) -> Result<VariableStmt> {
+    fn local_variable_stmt(&mut self, req: VariableReq) -> Result<VariableStmt> {
         let tok = self.lexemes.next_token().to_err_if_eof()?;
 
         let mode = match tok.kind {
             TokenKind::Const => VarMode::Const,
-            TokenKind::Let => VarMode::Let,
+            TokenKind::Let => {
+                if req == VariableReq::ConstAndInit {
+                    return self.error_out(
+                        ParseErrorKind::Expected {
+                            what: "a constant",
+                            got: tok.kind,
+                        },
+                        tok.span,
+                    );
+                }
+
+                VarMode::Let
+            }
 
             _ => {
                 let err = self.error_out(
@@ -606,11 +627,21 @@ impl Parser {
         } else {
             self.expect_token(TokenKind::Assign)?;
 
-            let ret = self.expression()?.into();
+            let expr = self.expression()?.into();
 
             self.expect_token(TokenKind::Semicolon)?;
-            ret
+            expr
         };
+
+        if req == VariableReq::ConstAndInit && initializer.is_none() {
+            return self.error_out(
+                ParseErrorKind::Expected {
+                    what: "an initializer for the constant",
+                    got: tok.kind,
+                },
+                tok.span,
+            );
+        }
 
         dbg!(Ok(VariableStmt::new(
             mode,
@@ -642,7 +673,9 @@ impl Parser {
         let tok = self.lexemes.peek_token().to_err_if_eof()?;
         let id = self.new_id();
         let stmt = match tok.kind {
-            TokenKind::Let | TokenKind::Const => StmtKind::LocalVar(self.local_variable_stmt()?),
+            TokenKind::Let | TokenKind::Const => {
+                StmtKind::LocalVar(self.local_variable_stmt(VariableReq::None)?)
+            }
 
             TokenKind::Function | TokenKind::Global => {
                 StmtKind::Thing(Thing::new(self.declaration()?, id))
@@ -719,7 +752,7 @@ impl Parser {
                 self.new_span(begin.span.start(), end, 0),
                 self.new_id(),
             ));
-        };
+        }
 
         // just an `if <expr> <block> else <block>`
         if !self.consume_if(TokenKind::If) {
@@ -864,7 +897,7 @@ impl Parser {
         let pat = self.pat()?;
         let mut args = vec![pat];
         while self.consume_if(TokenKind::Comma) {
-            args.push(self.pat()?)
+            args.push(self.pat()?);
         }
 
         self.expect_token(TokenKind::RightArrow)?;
@@ -900,12 +933,12 @@ impl Parser {
             inits.push(self.expression()?);
 
             while self.consume_if(TokenKind::Comma) {
-                inits.push(self.expression()?)
+                inits.push(self.expression()?);
             }
 
             let end = self.expect_token(TokenKind::RightCurlyBracket)?;
             span_end = end.span.end();
-        };
+        }
 
         Ok(Expr::new(
             ExprType::ArrayDecl {
@@ -1068,7 +1101,7 @@ impl Parser {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span, self.new_id())
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -1099,7 +1132,7 @@ impl Parser {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span, self.new_id())
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -1127,7 +1160,7 @@ impl Parser {
                 },
                 span,
                 self.new_id(),
-            )
+            );
         }
 
         Ok(lhs)
@@ -1153,7 +1186,7 @@ impl Parser {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span, self.new_id())
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -1179,7 +1212,7 @@ impl Parser {
                 op,
             };
 
-            lhs = Expr::new(expr_ty, span, self.new_id())
+            lhs = Expr::new(expr_ty, span, self.new_id());
         }
 
         Ok(lhs)
@@ -1206,7 +1239,7 @@ impl Parser {
             };
 
             return Ok(Expr::new(expr_ty, span, self.new_id()));
-        };
+        }
 
         self.field_access_or_method_call()
     }

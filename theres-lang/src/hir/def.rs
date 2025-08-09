@@ -16,6 +16,7 @@ pub enum DefType {
     Interface,
     Realm,
     Const,
+    Field,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]

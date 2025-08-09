@@ -1,3 +1,4 @@
+use crate::id::IdxVec;
 use std::{io, path::Path};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -34,11 +35,7 @@ impl LineSpan {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SourceId(u32);
-impl SourceId {
-    pub const DUMMY: Self = Self(u32::MAX);
-}
+crate::newtyped_index!(SourceId, SourceMap, SourceVec);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceFile {
@@ -116,7 +113,7 @@ pub trait FileManager {
 }
 
 pub struct Sources<Io> {
-    files: OneWayVec<SourceFile>,
+    files: SourceVec<SourceFile>,
     io: Io,
 }
 
@@ -124,7 +121,7 @@ impl<Io> Sources<Io> {
     pub fn new(io: Io) -> Self {
         Self {
             io,
-            files: OneWayVec::new(),
+            files: IdxVec::new(),
         }
     }
 }
@@ -136,16 +133,14 @@ impl<Io: FileManager> Sources<Io> {
     {
         let bytes = self.io.open_file(filepath.as_ref())?;
         let data = String::from_utf8(bytes).expect("file wasn't valid utf-8");
-        let id = SourceId(self.files.len() as u32);
+        let id = self.files.future_id();
         let access_name = filepath.as_ref().to_string_lossy().into_owned();
 
         Ok(SourceFile::new(id, access_name, data))
     }
 
     pub fn get_by_source_id(&self, id: SourceId) -> &SourceFile {
-        self.files
-            .get(id.0 as usize)
-            .expect("source ids should be valid")
+        self.files.get(id).expect("source ids should be valid")
     }
 }
 
@@ -157,7 +152,7 @@ mod tests {
     #[test]
     fn source_file_lines() {
         const DATA: &str = concat!("line 1\n", "line 2\n", "line 3\n", "line 4\n", "line 5");
-        let file = SourceFile::new(SourceId(0), String::from("test"), DATA.to_string());
+        let file = SourceFile::new(SourceId::ZERO, String::from("test"), DATA.to_string());
 
         let lines = file.get_lines_from_to(1, 3);
         dbg!(lines);

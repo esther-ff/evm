@@ -7,10 +7,10 @@ use std::{
 use crate::{
     arena::Arena,
     hir::{
-        def::{BodyId, DefId, Definitions},
+        def::{DefId, Definitions},
         lowering_ast::{HirId, HirMap},
-        node,
     },
+    id::IdxVec,
     lexer::LexError,
     parser::ParseError,
 };
@@ -31,11 +31,11 @@ impl DiagnosticCtxt {
         }
     }
     pub fn push_lex_error(&mut self, err: LexError) {
-        self.lex_errors.push(err)
+        self.lex_errors.push(err);
     }
 
     pub fn push_parse_error(&mut self, err: ParseError) {
-        self.parse_errors.push(err)
+        self.parse_errors.push(err);
     }
 
     pub fn errored(&self) -> bool {
@@ -57,19 +57,20 @@ pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =
 pub struct GlobalInterner {
     arena: Arena,
     map: HashMap<&'static str, SymbolId>,
-    storage: Vec<&'static str>,
+    storage: SymbolVec<&'static str>,
 }
 
 impl GlobalInterner {
     pub fn new() -> Self {
-        let iter = SymbolId::BASE_SYMBOLS
+        let map: HashMap<_, _> = SymbolId::BASE_SYMBOLS
             .into_iter()
             .enumerate()
-            .map(|(k, v)| (v, SymbolId::new(k as u32)));
+            .map(|(k, v)| (v, SymbolId::new_usize(k)))
+            .collect();
 
         Self {
-            map: HashMap::from_iter(iter),
-            storage: SymbolId::BASE_SYMBOLS.to_vec(),
+            map,
+            storage: IdxVec::new_from_vec(SymbolId::BASE_SYMBOLS.to_vec()),
             arena: Arena::new(),
         }
     }
@@ -83,13 +84,11 @@ impl GlobalInterner {
     pub fn intern(&mut self, str: &str) -> SymbolId {
         if let Some(present) = self.map.get(str) {
             return *present;
-        };
+        }
 
         let new_str: &'static str = unsafe { core::mem::transmute(self.arena.alloc_string(str)) };
 
-        let id = SymbolId {
-            private: self.storage.len() as u32,
-        };
+        let id = self.storage.future_id();
 
         self.map.insert(new_str, id);
         self.storage.push(new_str);
