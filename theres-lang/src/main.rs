@@ -7,6 +7,7 @@
 
 mod arena;
 mod ast;
+mod ast_pretty_printer;
 mod driver;
 mod errors;
 mod hir;
@@ -15,7 +16,6 @@ mod lexer;
 mod parser;
 mod session;
 mod sources;
-
 use std::{
     fs::File,
     io::{self, Read as _},

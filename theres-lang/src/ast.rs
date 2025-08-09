@@ -409,10 +409,10 @@ impl VariableStmt {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct GlobalDecl {
-    name: Name,
-    initializer: Expr,
-    ty: Ty,
-    constant: bool,
+    pub name: Name,
+    pub initializer: Expr,
+    pub ty: Ty,
+    pub constant: bool,
 
     pub id: AstId,
 }
@@ -612,6 +612,7 @@ pub struct Bind {
     pub mask: Option<Path>,
     pub items: Vec<BindItem>,
     pub span: Span,
+    pub id: AstId,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
@@ -879,6 +880,7 @@ pub trait Visitor<'a> {
             victim,
             span: _,
             items,
+            id: _,
         } = val;
 
         try_visit!(self.visit_ty(victim));

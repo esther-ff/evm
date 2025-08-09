@@ -169,10 +169,6 @@ impl<'sess> Session<'sess> {
         f(&mut self.hir_map.borrow_mut())
     }
 
-    pub fn map_def_id(&self, def_id: DefId, hir_id: HirId) {
-        self.defs.borrow_mut().map_def_id_to_hir(def_id, hir_id);
-    }
-
     pub fn arena(&self) -> &Arena {
         &self.dropless_arena
     }

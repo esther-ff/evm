@@ -1,7 +1,11 @@
-use std::{io, path::Path};
+use std::{
+    io::{self, stdout},
+    path::Path,
+};
 
 use crate::{
     ast::Universe,
+    ast_pretty_printer::PrettyPrinter,
     errors::Errors,
     hir,
     lexer::{Lexemes, Lexer},
@@ -70,9 +74,9 @@ impl<T: FileManager> Compiler<T> {
             self.state = Compilation::Error;
         }
 
-        if self.state == Compilation::Ok {
-            dbg!(&decls);
-        }
+        let mut stdout = stdout();
+        let mut p = PrettyPrinter::new(&mut stdout);
+        p.travel(&decls);
 
         decls
     }

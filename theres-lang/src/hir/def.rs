@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use crate::ast::Name;
-use crate::hir::lowering_ast::HirId;
-use crate::hir::{self, node};
+use crate::hir::node;
 use crate::id::IdxVec;
-use crate::lexer::Span;
+use crate::session::SymbolId;
 
 crate::newtyped_index!(DefId, DefMap, DefVec);
 crate::newtyped_index!(BodyId, BodyMap, BodyVec);
@@ -17,6 +16,7 @@ pub enum DefType {
     Realm,
     Const,
     Field,
+    Bind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
@@ -49,106 +49,37 @@ pub enum Resolved<Id> {
     Err,
 }
 
-pub struct AssocConst {
-    span: Span,
-    name: Name,
-    ty: Ty,
-}
-
-pub struct Instance {
-    name: Name,
-    fields: Vec<Field>,
-    constants: Vec<AssocConst>,
-    methods: Vec<DefId>,
-    span: Span,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Mutability {
-    None,
-    Mutable,
-}
-
-pub struct Field {
-    name: Name,
-    ty: Ty,
-    mutable: Mutability,
-    span: Span,
-}
-
-pub struct FunArg {
-    name: Name,
-    ty: Ty,
-}
-
-pub struct Fn {
-    name: Name,
-    args: Vec<FunArg>,
-    ret_ty: Ty,
-    body: BodyId,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct Ty {
-    span: Span,
-    name: Name,
-    kind: TyKind,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum TyKind {
-    /// Regular named type like `i32`
-    Regular,
-
-    // todo:
-    // function types later
-    // generics
-    // path?
-    /// For use in methods,
-    MethodSelf,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct FnBody(pub(crate) hir::expr::Block);
-
 pub struct Definitions<'hir> {
-    map_instance: HashMap<DefId, Instance>,
-    map_fun: HashMap<DefId, Fn>,
-
+    defs: HashMap<SymbolId, (DefType, DefId)>,
     fn_to_body: HashMap<DefId, BodyId>,
     bodies: BodyVec<&'hir node::Expr<'hir>>,
-
-    def_id_to_hir_id: DefMap<HirId>,
 
     id: u32,
 }
 
-impl<'hir> Definitions<'hir> {
+impl Definitions<'_> {
     pub fn new() -> Self {
         Self {
-            map_instance: HashMap::new(),
-            map_fun: HashMap::new(),
+            defs: HashMap::new(),
             fn_to_body: HashMap::new(),
             bodies: IdxVec::new(),
-            def_id_to_hir_id: HashMap::new(),
-
             id: 0,
         }
     }
 
-    pub fn new_id(&mut self) -> DefId {
-        let id = DefId { private: self.id };
-        self.id += 1;
+    pub fn register_defn(&mut self, kind: DefType, name: SymbolId) -> DefId {
+        let id = self.id();
+        self.defs.insert(name, (kind, id));
         id
     }
 
-    pub fn register_body(&mut self, expr: &'hir node::Expr<'hir>, def_id: DefId) -> BodyId {
-        let body_id = self.bodies.push(expr);
-        self.fn_to_body.insert(def_id, body_id);
-        body_id
+    pub fn get_def_via_name(&self, name: SymbolId) -> Option<(DefType, DefId)> {
+        self.defs.get(&name).copied()
     }
 
-    pub fn map_def_id_to_hir(&mut self, def_id: DefId, hir_id: HirId) {
-        self.def_id_to_hir_id.insert(def_id, hir_id);
+    fn id(&mut self) -> DefId {
+        let id = DefId::new(self.id);
+        self.id += 1;
+        id
     }
 }

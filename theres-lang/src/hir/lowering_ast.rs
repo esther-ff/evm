@@ -3,6 +3,7 @@ use std::collections::HashMap;
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 
+use crate::hir;
 use crate::hir::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
 use crate::hir::node::{self, Constant, Node, Param};
 use crate::id::IdxVec;
@@ -18,20 +19,62 @@ pub struct Mappings {
 
     resolution_map: AstIdMap<Resolved<AstId>>,
     ast_id_to_def_id: AstIdMap<DefId>,
+    def_id_to_ast_id: DefMap<AstId>,
+    instance_to_bind: DefMap<Vec<AstId>>,
+    binds_to_resolved_ty_id: AstIdMap<AstId>,
+    binds_to_items: AstIdMap<Vec<AstId>>,
 }
 
 impl Mappings {
-    pub fn new(
-        instance_to_field_list: AstIdMap<Vec<DefId>>,
-        field_id_to_instance: AstIdMap<DefId>,
-        resolution_map: AstIdMap<Resolved<AstId>>,
-        ast_id_to_def_id: AstIdMap<DefId>,
-    ) -> Self {
+    pub fn new(ast_id_to_def_id: AstIdMap<DefId>, def_id_to_ast_id: DefMap<AstId>) -> Self {
         Self {
-            instance_to_field_list,
-            field_id_to_instance,
-            resolution_map,
+            instance_to_field_list: HashMap::new(),
+            field_id_to_instance: HashMap::new(),
+            resolution_map: HashMap::new(),
             ast_id_to_def_id,
+            def_id_to_ast_id,
+            instance_to_bind: HashMap::new(),
+            binds_to_resolved_ty_id: HashMap::new(),
+            binds_to_items: HashMap::new(),
+        }
+    }
+
+    pub fn instance_to_bind(&self, id: DefId) -> Option<&Vec<AstId>> {
+        self.instance_to_bind.get(&id)
+    }
+
+    pub fn insert_instance_to_bind(&mut self, id: DefId, bind: AstId) {
+        match self.instance_to_bind.get_mut(&id) {
+            Some(storage) => storage.push(bind),
+
+            None => {
+                self.instance_to_bind.insert(id, vec![bind]);
+            }
+        }
+    }
+
+    pub fn insert_instance_field(&mut self, instance_id: AstId, field_id: DefId) {
+        match self.instance_to_field_list.get_mut(&instance_id) {
+            Some(storage) => storage.push(field_id),
+
+            None => {
+                self.instance_to_field_list
+                    .insert(instance_id, vec![field_id]);
+            }
+        }
+    }
+
+    pub fn def_id_of(&self, id: AstId) -> DefId {
+        match self.ast_id_to_def_id.get(&id) {
+            Some(id) => *id,
+            None => panic!("Provided `AstId` ({id:?}) is not mapped to any DefId!"),
+        }
+    }
+
+    pub fn ast_id_of(&self, id: DefId) -> AstId {
+        match self.def_id_to_ast_id.get(&id) {
+            Some(id) => *id,
+            None => panic!("Provided `DefId` ({id:?}) is not mapped to any AstId!"),
         }
     }
 }
@@ -110,13 +153,6 @@ impl<'hir> AstLowerer<'hir> {
         }
     }
 
-    fn get_def_id(&self, ast_id: AstId) -> DefId {
-        match self.map.ast_id_to_def_id.get(&ast_id).copied() {
-            Some(v) => v,
-            None => panic!("{ast_id:?} was not mapped to any DefId!"),
-        }
-    }
-
     /// Returns the next id that will be valid
     /// after inserting a node into the HIR map
     ///
@@ -153,21 +189,21 @@ impl<'hir> AstLowerer<'hir> {
     ) -> &'hir [node::Expr<'hir>] {
         self.session
             .arena()
-            .alloc_from_iter(a.map(|arg| self.lower_expr_alone(arg)))
+            .alloc_from_iter(a.map(|arg| self.lower_expr_noalloc(arg)))
     }
 
-    pub fn lower_expr_alone(&mut self, expr: &Expr) -> node::Expr<'hir> {
+    pub fn lower_expr_noalloc(&mut self, expr: &Expr) -> node::Expr<'hir> {
         let hir_id = self.next_hir_id(expr.id);
 
         let hir_expr_kind = match &expr.ty {
             ExprType::BinaryExpr { lhs, rhs, op } => node::ExprKind::Binary {
-                lhs: self.lower_expr_arena(lhs),
-                rhs: self.lower_expr_arena(rhs),
+                lhs: self.lower_expr(lhs),
+                rhs: self.lower_expr(rhs),
                 op: *op,
             },
 
             ExprType::UnaryExpr { op, target } => node::ExprKind::Unary {
-                target: self.lower_expr_arena(target),
+                target: self.lower_expr(target),
                 op: *op,
             },
 
@@ -177,19 +213,19 @@ impl<'hir> AstLowerer<'hir> {
                 mode,
             } => match mode {
                 AssignMode::Regular => node::ExprKind::Assign {
-                    variable: self.lower_expr_arena(lvalue),
-                    value: self.lower_expr_arena(rvalue),
+                    variable: self.lower_expr(lvalue),
+                    value: self.lower_expr(rvalue),
                 },
 
                 any => node::ExprKind::AssignWithOp {
-                    variable: self.lower_expr_arena(lvalue),
-                    value: self.lower_expr_arena(rvalue),
+                    variable: self.lower_expr(lvalue),
+                    value: self.lower_expr(rvalue),
                     op: node::AssignOp::lower_assign_mode(*any),
                 },
             },
 
             ExprType::FunCall { callee, args } => node::ExprKind::Call {
-                function: self.lower_expr_arena(callee),
+                function: self.lower_expr(callee),
                 args: self.lower_args(args.iter()),
             },
 
@@ -198,7 +234,7 @@ impl<'hir> AstLowerer<'hir> {
                 args,
                 name,
             } => node::ExprKind::MethodCall {
-                receiver: self.lower_expr_arena(receiver),
+                receiver: self.lower_expr(receiver),
                 method: name.interned,
                 args: self.lower_args(args.iter()),
             },
@@ -235,12 +271,12 @@ impl<'hir> AstLowerer<'hir> {
                 reason: node::LoopDesugarKind::None,
             },
 
-            ExprType::Group(expr) => return self.lower_expr_alone(expr),
+            ExprType::Group(expr) => return self.lower_expr_noalloc(expr),
 
             ExprType::CommaGroup(exprs) => node::ExprKind::CommaSep(
                 self.session
                     .arena()
-                    .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_alone(expr))),
+                    .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_noalloc(expr))),
             ),
 
             ExprType::ArrayDecl {
@@ -252,12 +288,12 @@ impl<'hir> AstLowerer<'hir> {
                 init: self
                     .session
                     .arena()
-                    .alloc_from_iter(initialize.iter().map(|expr| self.lower_expr_alone(expr))),
-                size: self.lower_expr_arena(size),
+                    .alloc_from_iter(initialize.iter().map(|expr| self.lower_expr_noalloc(expr))),
+                size: self.lower_expr(size),
             },
 
             ExprType::Return { ret } => node::ExprKind::Return {
-                expr: ret.as_ref().map(|expr| self.lower_expr_arena(expr)),
+                expr: ret.as_ref().map(|expr| self.lower_expr(expr)),
             },
 
             ExprType::Make {
@@ -268,7 +304,7 @@ impl<'hir> AstLowerer<'hir> {
             ExprType::Lambda { args: _, body: _ } => todo!("Lambdas in HIR!"),
 
             ExprType::FieldAccess { source, field } => node::ExprKind::Field {
-                src: self.lower_expr_arena(source),
+                src: self.lower_expr(source),
                 field: field.interned,
             },
 
@@ -281,27 +317,37 @@ impl<'hir> AstLowerer<'hir> {
                 if_block,
                 else_ifs,
                 otherwise,
-            } => node::ExprKind::If {
-                condition: self.lower_expr_arena(cond),
-                block: self.lower_block(if_block),
-                else_ifs: self
-                    .session
-                    .arena()
-                    .alloc_from_iter(else_ifs.iter().map(|els| {
-                        (
-                            self.lower_block_noalloc(&els.body),
-                            self.lower_expr_alone(&els.cond),
-                        )
-                    })),
-                otherwise: otherwise.as_ref().map(|target| self.lower_block(target)),
-            },
+            } => self.lower_expr_if(cond, if_block, else_ifs, otherwise.as_ref()),
         };
 
         node::Expr::new(hir_expr_kind, expr.span, hir_id)
     }
 
-    pub fn lower_expr_arena(&mut self, expr: &Expr) -> &'hir node::Expr<'hir> {
-        self.session.arena().alloc(self.lower_expr_alone(expr))
+    pub fn lower_expr_if(
+        &mut self,
+        cond: &Expr,
+        if_block: &Block,
+        else_ifs: &[ElseIf],
+        otherwise: Option<&Block>,
+    ) -> hir::node::ExprKind<'hir> {
+        node::ExprKind::If {
+            condition: self.lower_expr(cond),
+            block: self.lower_block(if_block),
+            else_ifs: self
+                .session
+                .arena()
+                .alloc_from_iter(else_ifs.iter().map(|els| {
+                    (
+                        self.lower_block_noalloc(&els.body),
+                        self.lower_expr_noalloc(&els.cond),
+                    )
+                })),
+            otherwise: otherwise.as_ref().map(|target| self.lower_block(target)),
+        }
+    }
+
+    pub fn lower_expr(&mut self, expr: &Expr) -> &'hir node::Expr<'hir> {
+        self.session.arena().alloc(self.lower_expr_noalloc(expr))
     }
 
     pub fn lower_block_noalloc(&mut self, block: &Block) -> node::Block<'hir> {
@@ -318,20 +364,12 @@ impl<'hir> AstLowerer<'hir> {
                 .arena()
                 .alloc_from_iter(stmts.iter().map(|stmt| self.lower_stmt(stmt))),
             self.next_hir_id(*id),
-            expr.as_ref().map(|expr| self.lower_expr_arena(expr)),
+            expr.as_ref().map(|expr| self.lower_expr(expr)),
         )
     }
 
     pub fn lower_block(&mut self, block: &Block) -> &'hir node::Block<'hir> {
         self.session.arena().alloc(self.lower_block_noalloc(block))
-    }
-
-    pub fn lower_block_into_expr(&mut self, block: &Block) -> &'hir node::Expr<'hir> {
-        let kind = node::ExprKind::Block(self.lower_block(block));
-
-        self.session
-            .arena()
-            .alloc(node::Expr::new(kind, block.span, self.new_hir_id()))
     }
 
     pub fn lower_stmt(&mut self, stmt: &Stmt) -> node::Stmt<'hir> {
@@ -340,7 +378,7 @@ impl<'hir> AstLowerer<'hir> {
         let hir_id = self.next_hir_id(*id);
 
         let new_kind = match kind {
-            StmtKind::Expr(expr) => node::StmtKind::Expr(self.lower_expr_arena(expr)),
+            StmtKind::Expr(expr) => node::StmtKind::Expr(self.lower_expr(expr)),
             StmtKind::LocalVar(local) => node::StmtKind::Local(self.lower_variable_stmt(local)),
             StmtKind::Thing(thing) => {
                 node::StmtKind::Thing(self.session.arena().alloc(self.lower_thing(thing)))
@@ -356,7 +394,7 @@ impl<'hir> AstLowerer<'hir> {
             VarMode::Const => Constant::Yes,
         };
 
-        let init = var.initializer.as_ref().map(|x| self.lower_expr_arena(x));
+        let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
         let ty = self.lower_ty(&var.ty);
         let local = node::Local::new(mutability, var.name, self.next_hir_id(var.id), ty, init);
 
@@ -384,9 +422,9 @@ impl<'hir> AstLowerer<'hir> {
 
         let res = self.map.resolution_map.get(id).expect("no res for this id");
 
-        let path = node::Path::new(self.lower_resolved(*res), segments, *span);
-
-        self.session.arena().alloc(path)
+        self.session
+            .arena()
+            .alloc(node::Path::new(self.lower_resolved(*res), segments, *span))
     }
 
     pub fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'hir> {
@@ -401,33 +439,26 @@ impl<'hir> AstLowerer<'hir> {
         node::Thing::new(kind, thing.kind.span(), self.new_hir_id())
     }
 
-    pub fn lower_fn_decl(&mut self, fndecl: &FnDecl) -> node::Thing<'hir> {
-        let FnDecl {
-            sig,
-            block,
-            span,
-            id: fn_id,
-        } = fndecl;
-
+    pub fn lower_fn_decl(&mut self, fn_decl: &FnDecl) -> node::Thing<'hir> {
         let expr_body = node::Expr::new(
-            node::ExprKind::Block(self.lower_block(block)),
-            *span,
+            node::ExprKind::Block(self.lower_block(&fn_decl.block)),
+            fn_decl.span,
             self.new_hir_id(),
         );
 
         let body = self.session.arena().alloc(expr_body);
-        let def_id = self.get_def_id(*fn_id);
+        let def_id = self.map.def_id_of(fn_decl.id);
 
         node::Thing::new(
             node::ThingKind::Fn {
-                name: sig.name,
+                name: fn_decl.sig.name,
                 sig: self.lower_fn_sig(
-                    sig,
+                    &fn_decl.sig,
                     self.session.hir(|map| map.insert_body_of(body, def_id)),
                 ),
             },
-            *span,
-            self.next_hir_id(*fn_id),
+            fn_decl.span,
+            self.next_hir_id(fn_decl.id),
         )
     }
 
@@ -452,7 +483,7 @@ impl<'hir> AstLowerer<'hir> {
             things: self
                 .session
                 .arena()
-                .alloc_from_iter(realm.items.iter().map(|t| self.lower_thing(t))),
+                .alloc_from_iter(realm.items.iter().map(|thing| self.lower_thing(thing))),
         }
     }
 

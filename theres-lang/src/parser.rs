@@ -73,9 +73,8 @@ impl Parser {
     pub fn parse(mut self) -> Universe {
         let universe_id = self.new_id();
 
-        let id = self.new_id();
-
         while !self.lexemes.is_empty() {
+            let id = self.new_id();
             match self.declaration() {
                 Err(err) => DIAG_CTXT.lock().unwrap().push_parse_error(err),
                 Ok(decl) => self.decls.push(Thing::new(decl, id)),
@@ -464,6 +463,7 @@ impl Parser {
             mask,
             items,
             span: self.new_span(keyword.span.start(), self.lexemes.previous().span.end(), 0),
+            id: self.new_id(),
         })
     }
 
@@ -643,13 +643,13 @@ impl Parser {
             );
         }
 
-        dbg!(Ok(VariableStmt::new(
+        Ok(VariableStmt::new(
             mode,
             name,
             initializer,
             ty,
             self.new_id(),
-        )))
+        ))
     }
 
     fn global_variable_decl(&mut self) -> Result<ThingKind> {
@@ -1282,8 +1282,6 @@ impl Parser {
 
     fn fun_call(&mut self) -> Result<Expr> {
         let callee = self.primary()?;
-        dbg!(&callee);
-        dbg!(self.lexemes.peek_token());
 
         if self.consume_if(TokenKind::LeftParen) {
             let mut args = vec![];
@@ -1296,7 +1294,6 @@ impl Parser {
             }
 
             let end_paren = self.expect_token(TokenKind::RightParen)?;
-            dbg!(end_paren);
             let span = self.new_span(callee.span.start(), end_paren.span.end(), 0);
 
             return Ok(Expr::new(

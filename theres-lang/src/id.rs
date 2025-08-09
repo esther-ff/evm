@@ -16,12 +16,12 @@ impl<I, T> IdxVec<I, T> {
         }
     }
 
-    pub fn new_with_capacity(cap: usize) -> Self {
-        Self {
-            inner: Vec::with_capacity(cap),
-            _boo: core::marker::PhantomData,
-        }
-    }
+    // pub fn new_with_capacity(cap: usize) -> Self {
+    //     Self {
+    //         inner: Vec::with_capacity(cap),
+    //         _boo: core::marker::PhantomData,
+    //     }
+    // }
 
     pub fn new_from_vec(vec: Vec<T>) -> Self {
         Self {
@@ -53,16 +53,16 @@ impl<I: IndexId, T> IdxVec<I, T> {
         self.inner.get_mut(id.idx())
     }
 
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
+    // pub fn len(&self) -> usize {
+    //     self.inner.len()
+    // }
 }
 
-impl<I: IndexId, T: Copy> IdxVec<I, T> {
-    pub fn get_copied(&self, id: I) -> Option<T> {
-        self.get(id).copied()
-    }
-}
+// impl<I: IndexId, T: Copy> IdxVec<I, T> {
+//     pub fn get_copied(&self, id: I) -> Option<T> {
+//         self.get(id).copied()
+//     }
+// }
 
 impl<I, T: core::fmt::Debug> core::fmt::Debug for IdxVec<I, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,10 +111,12 @@ macro_rules! newtyped_index {
             //     self.private
             // }
 
+            #[allow(dead_code)]
             fn new(private: u32) -> Self {
                 Self { private }
             }
 
+            #[allow(dead_code)]
             fn new_usize(i: usize) -> Self {
                 Self::new(i.try_into().expect("id overflow"))
             }
@@ -132,13 +134,13 @@ macro_rules! newtyped_index {
 
         impl ::core::fmt::Debug for $name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                write!(f, "{} #{}", stringify!($name), self.private)
+                write!(f, "{}#{}", stringify!($name), self.private)
             }
         }
 
         impl ::core::fmt::Display for $name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                write!(f, "{} #{}", stringify!($name), self.private)
+                write!(f, "{}#{}", stringify!($name), self.private)
             }
         }
     };
