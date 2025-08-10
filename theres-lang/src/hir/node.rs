@@ -17,6 +17,27 @@ pub enum Node<'h> {
     Ty(&'h Ty<'h>),
     VariableStmt(&'h Local<'h>),
     Field(&'h Field<'h>),
+
+    Path(&'h Path<'h>),
+
+    FnParam(&'h Param<'h>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Universe<'h> {
+    hir_id: HirId,
+    things: &'h [Thing<'h>],
+    span: Span,
+}
+
+impl<'h> Universe<'h> {
+    pub fn new(hir_id: HirId, things: &'h [Thing<'h>], span: Span) -> Self {
+        Self {
+            hir_id,
+            things,
+            span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -283,6 +304,38 @@ pub enum ThingKind<'h> {
         init: &'h Expr<'h>,
         ty: &'h Ty<'h>,
     },
+
+    Bind {
+        with: &'h Ty<'h>,
+        items: &'h [BindItem<'h>],
+        mask: Option<&'h Path<'h>>, // for now should be None
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BindItem<'h> {
+    hir_id: HirId,
+    span: Span,
+    kind: BindItemKind<'h>,
+}
+
+impl<'h> BindItem<'h> {
+    pub fn new(hir_id: HirId, span: Span, kind: BindItemKind<'h>) -> Self {
+        Self { hir_id, span, kind }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BindItemKind<'h> {
+    Fun {
+        sig: &'h FnSig<'h>,
+    },
+
+    Const {
+        ty: &'h Ty<'h>,
+        expr: &'h Expr<'h>,
+        sym: SymbolId,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -354,22 +407,6 @@ impl<'h> Path<'h> {
             res,
             segments,
             span,
-        }
-    }
-}
-
-pub struct Instance<'h> {
-    hir_id: HirId,
-    name: Name,
-    fields: &'h [Field<'h>],
-}
-
-impl<'h> Instance<'h> {
-    pub fn new(hir_id: HirId, name: Name, fields: &'h [Field<'h>]) -> Self {
-        Self {
-            hir_id,
-            name,
-            fields,
         }
     }
 }

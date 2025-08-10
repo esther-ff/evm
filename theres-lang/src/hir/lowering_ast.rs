@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::panic::Location;
 
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
@@ -16,7 +17,6 @@ crate::newtyped_index!(LocalId, LocalMap, LocalVec);
 pub struct Mappings {
     instance_to_field_list: AstIdMap<Vec<DefId>>,
     field_id_to_instance: AstIdMap<DefId>,
-
     resolution_map: AstIdMap<Resolved<AstId>>,
     ast_id_to_def_id: AstIdMap<DefId>,
     def_id_to_ast_id: DefMap<AstId>,
@@ -37,6 +37,10 @@ impl Mappings {
             binds_to_resolved_ty_id: HashMap::new(),
             binds_to_items: HashMap::new(),
         }
+    }
+
+    pub fn debug_resolutions(&self) -> impl IntoIterator<Item = (&AstId, &Resolved<AstId>)> {
+        &self.resolution_map
     }
 
     pub fn instance_to_bind(&self, id: DefId) -> Option<&Vec<AstId>> {
@@ -76,6 +80,17 @@ impl Mappings {
             Some(id) => *id,
             None => panic!("Provided `DefId` ({id:?}) is not mapped to any AstId!"),
         }
+    }
+
+    pub fn map_to_resolved(&mut self, id: AstId, res: Resolved<AstId>) {
+        self.resolution_map.insert(id, res);
+    }
+
+    pub fn resolve(&mut self, id: AstId) -> Resolved<AstId> {
+        self.resolution_map
+            .get(&id)
+            .copied()
+            .expect("Given AstId is not mapped to any resolution!")
     }
 }
 
@@ -163,7 +178,12 @@ impl<'hir> AstLowerer<'hir> {
         self.hir_id_counter += 1;
 
         let ret = self.ast_id_to_hir_id.insert(ast_id, hir_id);
-        assert!(ret.is_none());
+        assert!(
+            ret.is_none(),
+            "duplicate `AstId` given to `next_hir_id` ({} -> {})",
+            ast_id,
+            ret.unwrap()
+        );
 
         hir_id
     }
@@ -192,6 +212,7 @@ impl<'hir> AstLowerer<'hir> {
             .alloc_from_iter(a.map(|arg| self.lower_expr_noalloc(arg)))
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn lower_expr_noalloc(&mut self, expr: &Expr) -> node::Expr<'hir> {
         let hir_id = self.next_hir_id(expr.id);
 
@@ -420,23 +441,76 @@ impl<'hir> AstLowerer<'hir> {
             .arena()
             .alloc_from_iter(path.iter().map(|seg| seg.name.interned));
 
-        let res = self.map.resolution_map.get(id).expect("no res for this id");
+        let res = self.map.resolve(*id);
 
         self.session
             .arena()
-            .alloc(node::Path::new(self.lower_resolved(*res), segments, *span))
+            .alloc(node::Path::new(self.lower_resolved(res), segments, *span))
     }
 
     pub fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'hir> {
         let kind = match &thing.kind {
             ThingKind::Function(decl) => return self.lower_fn_decl(decl),
-            ThingKind::Realm(realm) => self.lower_realm(realm),
             ThingKind::Instance(inst) => return self.lower_instance(inst),
+            ThingKind::Bind(bind) => return self.lower_bind(bind),
+            ThingKind::Realm(realm) => self.lower_realm(realm),
 
             _ => todo!("other parts "),
         };
 
         node::Thing::new(kind, thing.kind.span(), self.new_hir_id())
+    }
+
+    pub fn lower_bind(&mut self, bind: &Bind) -> node::Thing<'hir> {
+        node::Thing::new(
+            node::ThingKind::Bind {
+                with: self.lower_ty(&bind.victim),
+                items: self
+                    .session
+                    .arena()
+                    .alloc_from_iter(bind.items.iter().map(|item| self.lower_bind_item(item))),
+                mask: None,
+            },
+            bind.span,
+            self.next_hir_id(bind.id),
+        )
+    }
+
+    pub fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'hir> {
+        let (lowered_kind, ast_id, span) = match kind {
+            BindItem::Const(variable) => (
+                node::BindItemKind::Const {
+                    ty: self.lower_ty(&variable.ty),
+                    expr: self.lower_expr(
+                        variable
+                            .initializer
+                            .as_ref()
+                            .expect("guarantee broken: all associated consts have an init expr"),
+                    ),
+                    sym: variable.name.interned,
+                },
+                variable.id,
+                variable.name.span,
+            ),
+
+            BindItem::Fun(fn_decl) => {
+                let body = self.session.arena().alloc(node::Expr::new(
+                    node::ExprKind::Block(self.lower_block(&fn_decl.block)),
+                    fn_decl.span,
+                    self.new_hir_id(),
+                ));
+                let def_id = self.map.def_id_of(fn_decl.id);
+
+                let sig = self.lower_fn_sig(
+                    &fn_decl.sig,
+                    self.session.hir(|map| map.insert_body_of(body, def_id)),
+                );
+
+                (node::BindItemKind::Fun { sig }, fn_decl.id, fn_decl.span)
+            }
+        };
+
+        node::BindItem::new(self.next_hir_id(ast_id), span, lowered_kind)
     }
 
     pub fn lower_fn_decl(&mut self, fn_decl: &FnDecl) -> node::Thing<'hir> {
@@ -487,7 +561,9 @@ impl<'hir> AstLowerer<'hir> {
         }
     }
 
+    #[track_caller]
     pub fn lower_instance(&mut self, inst: &Instance) -> node::Thing<'hir> {
+        dbg!(Location::caller());
         let Instance {
             name,
             span,
@@ -496,7 +572,7 @@ impl<'hir> AstLowerer<'hir> {
             id,
         } = inst;
 
-        let hir_id = self.map_ast_id_to_hir_id(*id);
+        let hir_id = self.next_hir_id(*id);
 
         let kind = node::ThingKind::Instance {
             fields: self
@@ -540,5 +616,21 @@ impl<'hir> AstLowerer<'hir> {
             Resolved::Prim(ty) => Resolved::Prim(ty),
             Resolved::Err => Resolved::Err,
         }
+    }
+
+    pub fn lower_universe(&mut self, universe: &Universe) -> &'hir node::Universe<'hir> {
+        let id = self.next_hir_id(universe.id);
+        let universe = node::Universe::new(
+            id,
+            self.session.arena().alloc_from_iter(
+                universe
+                    .thingies
+                    .iter()
+                    .map(|thing| self.lower_thing(thing)),
+            ),
+            universe.span,
+        );
+
+        self.session.arena().alloc(universe)
     }
 }

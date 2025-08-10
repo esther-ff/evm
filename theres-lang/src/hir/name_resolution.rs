@@ -211,9 +211,6 @@ pub struct LateResolver<'a> {
 
     current_instance: Option<AstId>,
 
-    // mapping node ids to their resolutions
-    pub res_map: AstIdMap<Resolved<AstId>>,
-
     // mapping names to definitions,
     pub definitions: Definitions<'a>,
 
@@ -232,7 +229,6 @@ impl<'a> LateResolver<'a> {
 
             definitions: old.definitions,
 
-            res_map: HashMap::new(),
             bind_to_scope: HashMap::new(),
 
             maps: Mappings::new(old.ast_id_to_def_id, old.def_id_to_ast_id),
@@ -329,11 +325,6 @@ impl<'a> LateResolver<'a> {
             .get(&ast_id)
             .copied()
             .expect("AstId -> bind decl mapping is wrong")
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn res_map(&self) -> &HashMap<AstId, Resolved<AstId>> {
-        &self.res_map
     }
 
     fn resolve_path(&mut self, arg_path: &Path, last_space: Space) -> Resolved<AstId> {
@@ -489,6 +480,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                         Space::Values,
                     );
                 });
+                self.visit_var_stmt(var_stmt);
             }
 
             BindItem::Fun(f) => self.visit_fn_decl(f),
@@ -546,8 +538,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     fn visit_field(&mut self, field: &'a Field) -> Self::Result {
         let field_def_id = self.get_def_id(field.id);
 
-        self.res_map
-            .insert(field.id, Resolved::Def(field_def_id, DefType::Field));
+        self.maps
+            .map_to_resolved(field.id, Resolved::Def(field_def_id, DefType::Field));
 
         let current_instance_id = self
             .current_instance
@@ -589,12 +581,12 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     }
 
     fn visit_expr(&mut self, val: &'a Expr) -> Self::Result {
-        let Expr { ty, span: _, id } = val;
+        let Expr { ty, span: _, id: _ } = val;
         match ty {
             ExprType::Path(path) => {
                 let res = self.resolve_path(path, Space::Values);
 
-                self.res_map.insert(*id, res);
+                self.maps.map_to_resolved(path.id, res);
             }
 
             ExprType::FunCall { callee, args } => {
@@ -721,7 +713,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             TyKind::Path(path) => {
                 let res = self.resolve_path(path, Space::Types);
-                self.res_map.insert(path.id, res);
+                self.visit_path(path);
+                self.maps.map_to_resolved(path.id, res);
             }
 
             TyKind::MethodSelf => (), // explicit matching in case i add smth new

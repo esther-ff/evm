@@ -19,9 +19,16 @@ pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Univers
         inner.visit_thing(decl);
     }
 
-    for (id, res) in inner.res_map() {
-        println!("{id} {:^5} resolved as: {res:?}", "->");
+    // dbg!(ast);
+
+    let mappings = inner.into_mappings();
+
+    for (id, res) in mappings.debug_resolutions() {
+        println!("{id:?} resolves to: {res:?}");
     }
 
-    let _ast_lowerer = lowering_ast::AstLowerer::new(inner.into_mappings(), sess);
+    let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
+
+    let hir = ast_lowerer.lower_universe(ast);
+    dbg!(hir);
 }
