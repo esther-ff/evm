@@ -234,6 +234,8 @@ pub enum ExprType {
     Path(Path),
 
     Block(Block),
+
+    Break,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -691,20 +693,29 @@ impl<T> VisitorResult for std::ops::ControlFlow<T> {
     }
 }
 
+#[macro_export]
 macro_rules! try_visit {
     ($($e:expr),*) => {
+        {
+
         $(
             match $e.into_flow() {
                 ::core::ops::ControlFlow::Continue(()) => (),
 
                 ::core::ops::ControlFlow::Break(p) => return $crate::ast::VisitorResult::into_branch(p)
 
-            }
+            };
+
+
 
        )*
+
+       Self::Result::normal()
+        }
     };
 }
 
+#[macro_export]
 macro_rules! maybe_visit {
     (v: $v:expr, m: $m: ident, $($e:expr),*) => {$(
        {
@@ -719,12 +730,13 @@ macro_rules! maybe_visit {
     )*};
 }
 
+#[macro_export]
 macro_rules! visit_iter {
     (v: $v:expr, m: $m:ident, $($i:expr),*) => {
         $(
             {
                 for entry in $i {
-                    try_visit!($v.$m(entry))
+                    try_visit!($v.$m(entry));
                 }
 
                 Self::Result::normal()
@@ -910,6 +922,8 @@ pub trait Visitor<'a> {
         let Expr { ty, span: _, id: _ } = val;
 
         match ty {
+            ExprType::Break => Self::Result::normal(),
+
             ExprType::BinaryExpr { lhs, rhs, op: _ } => {
                 try_visit!(self.visit_expr(lhs), self.visit_expr(rhs));
 

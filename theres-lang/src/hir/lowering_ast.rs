@@ -8,6 +8,7 @@ use crate::hir;
 use crate::hir::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
 use crate::hir::node::{self, Constant, Node, Param};
 use crate::id::IdxVec;
+use crate::lexer::Span;
 use crate::parser::{AstId, AstIdMap};
 use crate::session::Session;
 
@@ -140,6 +141,16 @@ impl<'hir> HirMap<'hir> {
         self.node_to_body.insert(body_owner, body_id);
         body_id
     }
+
+    pub fn bodies(&self) -> &[&node::Expr<'hir>] {
+        self.bodies.as_slice()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DesugarLoop {
+    While,
+    Until,
 }
 
 pub struct AstLowerer<'hir> {
@@ -173,6 +184,7 @@ impl<'hir> AstLowerer<'hir> {
     ///
     /// Panics if the same `AstId` is again used for this function
     /// as it maps `AstId`s to `HirId`s for lowering `Resolved`s
+    #[track_caller]
     pub fn next_hir_id(&mut self, ast_id: AstId) -> HirId {
         let hir_id = HirId::new(self.hir_id_counter);
         self.hir_id_counter += 1;
@@ -180,9 +192,10 @@ impl<'hir> AstLowerer<'hir> {
         let ret = self.ast_id_to_hir_id.insert(ast_id, hir_id);
         assert!(
             ret.is_none(),
-            "duplicate `AstId` given to `next_hir_id` ({} -> {})",
+            "duplicate `AstId` given to `next_hir_id` ({} -> {})\nat loc: {:?}",
             ast_id,
-            ret.unwrap()
+            ret.unwrap(),
+            Location::caller()
         );
 
         hir_id
@@ -217,6 +230,7 @@ impl<'hir> AstLowerer<'hir> {
         let hir_id = self.next_hir_id(expr.id);
 
         let hir_expr_kind = match &expr.ty {
+            ExprType::Break => node::ExprKind::Break,
             ExprType::BinaryExpr { lhs, rhs, op } => node::ExprKind::Binary {
                 lhs: self.lower_expr(lhs),
                 rhs: self.lower_expr(rhs),
@@ -279,13 +293,15 @@ impl<'hir> AstLowerer<'hir> {
                 todo!("lowering for loop")
             }
 
-            ExprType::While { cond: _, body: _ } => {
-                todo!("lowering while loop")
-            }
+            ExprType::While { cond, body } => node::ExprKind::Loop {
+                body: self.lower_while_or_until_loop(cond, body, DesugarLoop::While),
+                reason: node::LoopDesugarKind::While,
+            },
 
-            ExprType::Until { cond: _, body: _ } => {
-                todo!("lowering while loop")
-            }
+            ExprType::Until { cond, body } => node::ExprKind::Loop {
+                body: self.lower_while_or_until_loop(cond, body, DesugarLoop::Until),
+                reason: node::LoopDesugarKind::Until,
+            },
 
             ExprType::Loop { body } => node::ExprKind::Loop {
                 body: self.lower_block(body),
@@ -342,6 +358,79 @@ impl<'hir> AstLowerer<'hir> {
         };
 
         node::Expr::new(hir_expr_kind, expr.span, hir_id)
+    }
+
+    pub fn lower_while_or_until_loop(
+        &mut self,
+        cond: &Expr,
+        body: &Block,
+        desugar: DesugarLoop,
+    ) -> &'hir node::Block<'hir> {
+        let cond_block = node::Block::new(
+            Span::DUMMY,
+            &[],
+            self.new_hir_id(),
+            Some(self.session.arena().alloc(node::Expr::new(
+                node::ExprKind::Break,
+                Span::DUMMY,
+                self.new_hir_id(),
+            ))),
+        );
+
+        let condition = node::Expr::new(
+            node::ExprKind::If {
+                condition: match desugar {
+                    DesugarLoop::While => self.session.arena().alloc(node::Expr::new(
+                        node::ExprKind::Unary {
+                            target: self.lower_expr(cond),
+                            op: UnaryOp::Not,
+                        },
+                        cond.span,
+                        self.new_hir_id(),
+                    )),
+
+                    DesugarLoop::Until => self.lower_expr(cond),
+                },
+                block: self.session.arena().alloc(cond_block),
+                else_ifs: &[],
+                otherwise: None,
+            },
+            cond.span,
+            self.new_hir_id(),
+        );
+
+        let loop_body = match &body.expr {
+            None => node::Block::new(
+                body.span,
+                self.session
+                    .arena()
+                    .alloc_from_iter(body.stmts.iter().map(|stmt| self.lower_stmt(stmt))),
+                self.next_hir_id(body.id),
+                Some(self.session.arena().alloc(condition)),
+            ),
+            Some(expr) => {
+                let id = self.next_hir_id(expr.id);
+                let block_id = self.next_hir_id(body.id);
+                let lowered = self.lower_expr(expr);
+
+                node::Block::new(
+                    body.span,
+                    self.session.arena().alloc_from_iter(
+                        body.stmts.iter().map(|stmt| self.lower_stmt(stmt)).chain(
+                            core::iter::once(node::Stmt::new(
+                                expr.span,
+                                node::StmtKind::Expr(lowered),
+                                id,
+                            )),
+                        ),
+                    ),
+                    block_id,
+                    Some(self.session.arena().alloc(condition)),
+                )
+            }
+        };
+
+        self.session.arena().alloc(loop_body)
     }
 
     pub fn lower_expr_if(
@@ -415,9 +504,9 @@ impl<'hir> AstLowerer<'hir> {
             VarMode::Const => Constant::Yes,
         };
 
-        let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
+        // let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
         let ty = self.lower_ty(&var.ty);
-        let local = node::Local::new(mutability, var.name, self.next_hir_id(var.id), ty, init);
+        let local = node::Local::new(mutability, var.name, self.next_hir_id(var.id), ty, None);
 
         self.session.arena().alloc(local)
     }
@@ -563,7 +652,6 @@ impl<'hir> AstLowerer<'hir> {
 
     #[track_caller]
     pub fn lower_instance(&mut self, inst: &Instance) -> node::Thing<'hir> {
-        dbg!(Location::caller());
         let Instance {
             name,
             span,

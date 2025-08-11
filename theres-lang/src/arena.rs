@@ -1,359 +1,208 @@
-const PAGE_SIZE: usize = 1024 * 64;
+#![allow(clippy::mut_from_ref)]
 
-use std::alloc::{self, Layout, dealloc};
-use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
-use std::ops::{Drop, Index, IndexMut};
-use std::{mem, ptr};
+use std::ops::{Index, IndexMut};
 
-#[derive(Debug)]
-struct Page {
-    original_ptr: *const u8,
+use std::{
+    alloc::Layout,
+    cell::{Cell, RefCell},
+    mem::MaybeUninit,
+    ptr::NonNull,
+};
+
+const CHUNK_SIZE: usize = 1024 * 64;
+const BIG_CHUNK_SIZE: usize = 1024 * 1024 * 4;
+
+pub struct Chunk<T = u8> {
+    memory: NonNull<[MaybeUninit<T>]>,
 }
 
-impl Page {
-    fn new() -> Page {
-        let layout = Layout::array::<u8>(PAGE_SIZE).expect("infallible");
+impl<T> Chunk<T> {
+    fn new() -> Self {
+        let ptr: Box<[MaybeUninit<T>]> = Box::new_uninit_slice(CHUNK_SIZE);
 
         unsafe {
-            let ptr = alloc::alloc(layout);
-
-            if ptr.is_null() {
-                alloc::handle_alloc_error(layout)
+            Self {
+                memory: NonNull::new_unchecked(Box::leak(ptr) as *mut [MaybeUninit<T>]),
             }
-
-            Self { original_ptr: ptr }
         }
     }
-}
 
-impl Drop for Page {
-    fn drop(&mut self) {
+    fn new_big_chunk() -> Self {
+        let ptr: Box<[MaybeUninit<T>]> = Box::new_uninit_slice(BIG_CHUNK_SIZE);
+
         unsafe {
-            let layout = Layout::array::<u8>(PAGE_SIZE).expect("infallible");
-            dealloc(self.original_ptr.cast_mut(), layout);
+            Self {
+                memory: NonNull::new_unchecked(Box::leak(ptr) as *mut [MaybeUninit<T>]),
+            }
         }
+    }
+
+    fn start(&self) -> *mut u8 {
+        self.memory.as_ptr() as *mut u8
+    }
+
+    fn end(&self) -> *mut u8 {
+        unsafe { self.start().add(self.memory.len()) }
     }
 }
 
-#[derive(Debug)]
-pub struct Arena {
-    upper: Cell<*const u8>,
-    current: Cell<*const u8>,
-    lower: Cell<*const u8>,
+impl<T> Drop for Chunk<T> {
+    fn drop(&mut self) {
+        unsafe { drop(Box::from_raw(self.memory.as_ptr())) }
+    }
+}
 
-    pages: RefCell<Vec<Page>>,
+pub struct Arena {
+    start: Cell<*mut u8>,
+    end: Cell<*mut u8>,
+
+    chunks: RefCell<Vec<Chunk>>,
 }
 
 unsafe impl Sync for Arena {}
 unsafe impl Send for Arena {}
 
 impl Arena {
-    pub fn new() -> Arena {
-        let page = Page::new();
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        use core::ptr::null_mut;
 
-        let upper = page.original_ptr.wrapping_add(PAGE_SIZE);
-        let low = page.original_ptr;
         Self {
-            pages: RefCell::new(vec![page]),
-            upper: Cell::new(upper),
-            current: Cell::new(upper),
-
-            lower: Cell::new(low),
+            start: Cell::new(null_mut()),
+            end: Cell::new(null_mut()),
+            chunks: RefCell::new(vec![]),
         }
     }
 
-    pub fn alloc<T>(&self, data: T) -> &T {
-        let ptr = self.alloc_raw(Layout::new::<T>()).cast::<T>();
+    pub fn alloc_from_iter<T>(&self, iterable: impl IntoIterator<Item = T>) -> &mut [T] {
+        let iter = iterable.into_iter();
 
+        let size_hint = iter.size_hint();
+
+        match size_hint {
+            (lower, None) => self.write_from_iter(iter, lower),
+            (_, Some(higher)) => self.write_from_iter(iter, higher),
+        }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc<T>(&self, val: T) -> &mut T {
         unsafe {
-            std::ptr::write(ptr, data);
-            &*(ptr)
+            let ptr = self.alloc_raw(Layout::new::<T>()).cast::<T>();
+            ptr.write(val);
+
+            &mut *ptr
         }
     }
 
-    pub fn alloc_slice<A, B>(&self, arr: &A) -> &[B]
-    where
-        A: AsRef<[B]> + ?Sized,
-    {
-        assert!(!mem::needs_drop::<A>());
-        let target = arr.as_ref();
-        let layout = Layout::array::<B>(target.len()).expect("invalid layout");
-        let ptr = self.alloc_raw(layout).cast::<B>();
-        let saved = ptr;
-
-        unsafe {
-            std::ptr::copy_nonoverlapping(target.as_ptr(), ptr, target.len());
-
-            std::slice::from_raw_parts(saved, target.len())
-        }
-    }
-
-    pub fn alloc_from_iter<T, I>(&self, items: I) -> &[T]
-    where
-        I: IntoIterator<Item = T>,
-    {
-        assert!(!mem::needs_drop::<T>());
-
-        let iter = items.into_iter();
-
-        let (beginning, Some(end)) = iter.size_hint() else {
-            let vec: Vec<_> = iter.collect();
-            assert!(!vec.is_empty());
-            return self.alloc_slice(&vec);
-        };
-
-        let amount = end - beginning;
-
-        if amount == 0 {
-            return &[];
-        }
-
-        let layout = Layout::array::<T>(amount).expect("layout in `alloc_from_iter` was invalid");
-        let ptr = self.alloc_raw(layout).cast::<T>();
-
-        unsafe {
-            for (ix, item) in iter.enumerate() {
-                if ix == amount {
-                    break;
-                }
-
-                let new_ptr = ptr.add(ix);
-                ptr::write(new_ptr, item);
-            }
-        };
-
-        unsafe { core::slice::from_raw_parts(ptr, amount) }
-    }
-
-    pub fn alloc_string(&self, val: &str) -> &str {
-        let slice = self.alloc_slice(val);
-
-        unsafe { std::str::from_utf8_unchecked(slice) }
-    }
-
-    fn new_page(&self) {
-        let page = Page::new();
-
-        let upper = page.original_ptr.wrapping_add(PAGE_SIZE);
-        let low = page.original_ptr;
-
-        self.upper.replace(upper);
-        self.lower.replace(low);
-        self.current.replace(upper);
-
-        self.pages.borrow_mut().push(page);
+    pub fn alloc_string(&self, s: &str) -> &str {
+        let string = self.alloc_from_iter(s.bytes());
+        unsafe { core::str::from_utf8_unchecked(string) }
     }
 
     fn alloc_raw(&self, layout: Layout) -> *mut u8 {
-        assert!(PAGE_SIZE > layout.size());
-        if self.current.get() as usize - layout.size() < self.lower.get() as usize {
-            // we need a new page
-            self.new_page();
-        }
+        assert!(layout.size() != 0, "ZST alloc!");
 
-        let current_ptr = self.current.get();
-        let new = current_ptr.wrapping_sub(layout.size());
+        loop {
+            let start = self.start.get().addr();
+            let current_end = self.end.get();
 
-        self.current.replace(new);
+            let bytes = layout.size();
 
-        let new_ptr = new.with_addr(new as usize & (!(layout.align() - 1)));
-        new_ptr.cast_mut()
-    }
-}
+            if let Some(subbed) = current_end.addr().checked_sub(bytes) {
+                let new_end = align_down(subbed, layout.align());
 
-pub struct TypedArena<T, I: Id> {
-    chunks: Vec<Chunk<T>>,
-    chunk_pos: usize,
-
-    _marker: PhantomData<I>,
-}
-
-const CHUNK_SIZE: usize = 128;
-
-pub struct Chunk<T> {
-    inner: Vec<T>,
-}
-
-impl<T> Chunk<T> {
-    pub fn new() -> Self {
-        Self {
-            inner: Vec::with_capacity(CHUNK_SIZE),
-        }
-    }
-
-    pub fn alloc(&mut self, item: T) -> Result<(), T> {
-        if self.inner.len() == CHUNK_SIZE - 1 {
-            return Err(item);
-        }
-
-        self.inner.push(item);
-
-        Ok(())
-    }
-}
-
-pub trait Id {
-    fn get_inside_chunk_index(&self) -> usize;
-    fn get_arena_chunk_index(&self) -> usize;
-    fn new(chunk_index: usize, vec_index: usize) -> Self;
-}
-
-impl<T, I: Id> TypedArena<T, I> {
-    pub fn new() -> Self {
-        Self {
-            _marker: PhantomData,
-            chunks: vec![Chunk::new()],
-            chunk_pos: 0,
-        }
-    }
-
-    pub fn alloc(&mut self, item: T) -> I {
-        let current_chunk = self.get_current_chunk();
-        match current_chunk.alloc(item) {
-            Ok(()) => {
-                let chunk_index = current_chunk.inner.len() - 1;
-                let current_pos = self.chunks.len();
-
-                I::new(chunk_index, current_pos)
+                if start <= new_end {
+                    let aligned_end = current_end.with_addr(new_end);
+                    self.start.set(aligned_end);
+                    return aligned_end;
+                }
             }
 
-            Err(item) => {
-                let mut new_chunk = Chunk::new();
-                let res = new_chunk.alloc(item);
-                debug_assert!(res.is_ok());
-
-                let chunk_index = 0;
-                let current_pos = self.chunks.len() + 1;
-
-                self.chunks.push(new_chunk);
-
-                I::new(chunk_index, current_pos)
-            }
+            self.grow(layout);
         }
     }
 
-    pub fn get(&self, id: &I) -> Option<&T> {
-        let chunk_pos = id.get_arena_chunk_index();
-        let vec_pos = id.get_inside_chunk_index();
+    #[allow(clippy::mut_from_ref)]
+    fn write_from_iter<T>(&self, iter: impl Iterator<Item = T>, bound: usize) -> &mut [T] {
+        let alloc = self
+            .alloc_raw(Layout::array::<T>(bound).unwrap())
+            .cast::<T>();
 
-        self.chunks
-            .get(chunk_pos)
-            .and_then(|chunk| chunk.inner.get(vec_pos))
-    }
+        let mut len = 0;
 
-    pub fn get_mut(&mut self, id: &I) -> Option<&mut T> {
-        let chunk_pos = id.get_arena_chunk_index();
-        let vec_pos = id.get_inside_chunk_index();
-
-        self.chunks
-            .get_mut(chunk_pos)
-            .and_then(|chunk| chunk.inner.get_mut(vec_pos))
-    }
-
-    fn get_current_chunk(&mut self) -> &mut Chunk<T> {
-        &mut self.chunks[self.chunk_pos]
-    }
-}
-
-impl<T, I: Id> Index<I> for TypedArena<T, I> {
-    type Output = T;
-
-    fn index(&self, index: I) -> &Self::Output {
-        let chunk_index = index.get_arena_chunk_index();
-        let chunk_inside_ix = index.get_inside_chunk_index();
-
-        match self.get(&index) {
-            Some(val) => val,
-
-            None => {
-                panic!(
-                    "item not found at chunk {chunk_index}, at pos {chunk_inside_ix} while indexing arena",
-                )
+        for (ix, item) in iter.enumerate() {
+            unsafe {
+                len = ix;
+                alloc.add(ix).write(item)
             }
         }
+
+        unsafe { core::slice::from_raw_parts_mut(alloc, len) }
+    }
+
+    fn grow(&self, layout: Layout) {
+        let chunk = if layout.size() <= CHUNK_SIZE {
+            Chunk::new()
+        } else {
+            Chunk::new_big_chunk()
+        };
+
+        self.start.set(chunk.start());
+
+        let end = chunk.end().map_addr(|x| align_down(x, align_of::<usize>()));
+        self.end.set(end);
+
+        self.chunks.borrow_mut().push(chunk);
     }
 }
 
-impl<T, I: Id> IndexMut<I> for TypedArena<T, I> {
-    fn index_mut(&mut self, index: I) -> &mut T {
-        let chunk_index = index.get_arena_chunk_index();
-        let chunk_inside_ix = index.get_inside_chunk_index();
-
-        match self.get_mut(&index) {
-            Some(val) => val,
-
-            None => {
-                panic!(
-                    "item not found at chunk {chunk_index}, at pos {chunk_inside_ix} while indexing arena",
-                )
-            }
-        }
-    }
+fn align_down(addr: usize, align: usize) -> usize {
+    addr & (!(align - 1))
 }
+
+// fn align_up(addr: usize, align: usize) -> usize {
+//     (addr + align - 1) & !(align - 1)
+// }
 
 #[cfg(test)]
 mod tests {
-    use crate::arena::Arena;
+    use super::Arena;
 
     #[test]
-    fn single_alloc() {
-        let value = 42;
-
+    fn small_iter() {
         let arena = Arena::new();
 
-        dbg!(&arena);
-
-        let reff = arena.alloc(value);
-
-        dbg!(reff);
+        arena.alloc_from_iter(std::iter::repeat_n(64_u8, 500));
     }
 
     #[test]
-    fn slice_alloc() {
-        let value = [42, 21, 32, 411, 4];
-
+    fn small() {
         let arena = Arena::new();
 
-        dbg!(&arena);
+        arena.alloc([0u8; 1564]);
+    }
+    #[test]
+    fn big_iter() {
+        let arena = Arena::new();
 
-        let _reff = arena.alloc_slice(&value);
+        arena.alloc_from_iter(std::iter::repeat_n(64_u32, 500_000));
     }
 
     #[test]
-    fn slice_str() {
-        let value = "our children will hold their fists high";
-        let value1 = "meow woof wrff awrff :3";
-
-        dbg!(value.len());
-        dbg!(value1.len());
+    fn big() {
         let arena = Arena::new();
 
-        dbg!(arena.upper.get() as usize);
-
-        let reff = arena.alloc_string(value);
-        let reff1 = arena.alloc_string(value1);
-
-        dbg!(reff);
-
-        dbg!(reff.as_ptr() as usize);
-        dbg!(reff1.as_ptr() as usize);
-
-        dbg!(reff1);
-
-        dbg!(reff);
+        arena.alloc([0u8; 1_564_123]);
     }
-    #[test]
-    fn big_alloc() {
-        #[allow(clippy::large_stack_arrays)]
-        let value = [2u8; 31000];
 
+    #[test]
+    fn string() {
         let arena = Arena::new();
 
-        dbg!(&arena);
+        let string = arena.alloc_string(":3 :3 :3 :3");
 
-        let _reff = arena.alloc_slice(&value);
-
-        let _reff1 = arena.alloc_slice(&value);
+        assert!(string == ":3 :3 :3 :3");
     }
 }

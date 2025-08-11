@@ -2,6 +2,7 @@ pub mod def;
 pub mod lowering_ast;
 pub mod name_resolution;
 pub mod node;
+pub mod visitor;
 
 pub use name_resolution::{LateResolver, ThingDefResolver};
 
@@ -30,5 +31,12 @@ pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Univers
     let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 
     let hir = ast_lowerer.lower_universe(ast);
-    dbg!(hir);
+    println!("hir: \n{hir:#?}");
+    println!("hir bodies:\n");
+    sess.hir(|map| {
+        dbg!(map.bodies());
+        for (ix, body) in map.bodies().iter().enumerate() {
+            println!("body({ix}): {body:#?}");
+        }
+    });
 }

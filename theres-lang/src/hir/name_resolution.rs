@@ -14,7 +14,7 @@ type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
 crate::newtyped_index!(ScopeId, ScopeIdMap, ScopeIdVec);
 
-const PRIMITIVES: [(SymbolId, Resolved<AstId>); 11] = [
+const PRIMITIVES: [(SymbolId, Resolved<AstId>); 12] = [
     (SymbolId::u8(), Resolved::Prim(PrimTy::Uint(IntTy::N8))),
     (SymbolId::u16(), Resolved::Prim(PrimTy::Uint(IntTy::N16))),
     (SymbolId::u32(), Resolved::Prim(PrimTy::Uint(IntTy::N32))),
@@ -26,6 +26,7 @@ const PRIMITIVES: [(SymbolId, Resolved<AstId>); 11] = [
     (SymbolId::f32(), Resolved::Prim(PrimTy::Float)),
     (SymbolId::f64(), Resolved::Prim(PrimTy::Double)),
     (SymbolId::nil(), Resolved::Prim(PrimTy::Nil)),
+    (SymbolId::bool(), Resolved::Prim(PrimTy::Bool)),
 ];
 
 #[derive(Debug, Clone, Copy)]

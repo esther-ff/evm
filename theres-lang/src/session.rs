@@ -110,8 +110,8 @@ macro_rules! interned_consts {
 }
 
 impl SymbolId {
-    const BASE_SYMBOLS: [&str; 11] = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil",
+    const BASE_SYMBOLS: [&str; 12] = [
+        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil", "bool",
     ];
 
     // keep in touch with `BASE_SYMBOLS`
@@ -126,7 +126,8 @@ impl SymbolId {
         i64 -> 7,
         f32 -> 8,
         f64 -> 9,
-        nil -> 10
+        nil -> 10,
+        bool -> 11
     );
 
     pub fn get_interned(&self) -> &str {

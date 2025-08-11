@@ -38,6 +38,7 @@ pub enum PrimTy {
     Double,
 
     Nil,
+    Bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

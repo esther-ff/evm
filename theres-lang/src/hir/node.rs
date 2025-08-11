@@ -25,9 +25,9 @@ pub enum Node<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Universe<'h> {
-    hir_id: HirId,
-    things: &'h [Thing<'h>],
-    span: Span,
+    pub hir_id: HirId,
+    pub things: &'h [Thing<'h>],
+    pub span: Span,
 }
 
 impl<'h> Universe<'h> {
@@ -42,9 +42,9 @@ impl<'h> Universe<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Expr<'h> {
-    kind: ExprKind<'h>,
-    span: Span,
-    hir_id: HirId,
+    pub kind: ExprKind<'h>,
+    pub span: Span,
+    pub hir_id: HirId,
 }
 
 impl<'h> Expr<'h> {
@@ -172,6 +172,8 @@ pub enum ExprKind<'h> {
     Path(&'h Path<'h>),
 
     CommaSep(&'h [Expr<'h>]),
+
+    Break,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,10 +187,10 @@ pub enum HirLiteral {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Block<'h> {
-    stmts: &'h [Stmt<'h>],
-    expr: Option<&'h Expr<'h>>,
-    span: Span,
-    hir_id: HirId,
+    pub stmts: &'h [Stmt<'h>],
+    pub expr: Option<&'h Expr<'h>>,
+    pub span: Span,
+    pub hir_id: HirId,
 }
 
 impl<'h> Block<'h> {
@@ -211,9 +213,9 @@ impl<'h> Block<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Stmt<'h> {
-    span: Span,
-    kind: StmtKind<'h>,
-    hir_id: HirId,
+    pub span: Span,
+    pub kind: StmtKind<'h>,
+    pub hir_id: HirId,
 }
 
 impl<'h> Stmt<'h> {
@@ -237,11 +239,11 @@ pub enum Constant {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Local<'h> {
-    mutability: Constant,
-    name: Name,
-    init: Option<&'h Expr<'h>>,
-    ty: &'h Ty<'h>,
-    hir_id: HirId,
+    pub mutability: Constant,
+    pub name: Name,
+    pub init: Option<&'h Expr<'h>>,
+    pub ty: &'h Ty<'h>,
+    pub hir_id: HirId,
 }
 
 impl<'h> Local<'h> {
@@ -266,9 +268,9 @@ impl<'h> Local<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Thing<'h> {
-    kind: ThingKind<'h>,
-    span: Span,
-    hir_id: HirId,
+    pub kind: ThingKind<'h>,
+    pub span: Span,
+    pub hir_id: HirId,
 }
 
 impl<'h> Thing<'h> {
@@ -314,9 +316,9 @@ pub enum ThingKind<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BindItem<'h> {
-    hir_id: HirId,
-    span: Span,
-    kind: BindItemKind<'h>,
+    pub hir_id: HirId,
+    pub span: Span,
+    pub kind: BindItemKind<'h>,
 }
 
 impl<'h> BindItem<'h> {
@@ -340,10 +342,10 @@ pub enum BindItemKind<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FnSig<'h> {
-    span: Span,
-    return_type: &'h Ty<'h>,
-    arguments: &'h [Param<'h>],
-    body: BodyId,
+    pub span: Span,
+    pub return_type: &'h Ty<'h>,
+    pub arguments: &'h [Param<'h>],
+    pub body: BodyId,
 }
 
 impl<'h> FnSig<'h> {
@@ -364,8 +366,8 @@ impl<'h> FnSig<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Param<'h> {
-    name: Name,
-    ty: &'h Ty<'h>,
+    pub name: Name,
+    pub ty: &'h Ty<'h>,
 }
 
 impl<'h> Param<'h> {
@@ -376,9 +378,9 @@ impl<'h> Param<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Ty<'h> {
-    span: Span,
-    hir_id: HirId,
-    kind: TyKind<'h>,
+    pub span: Span,
+    pub hir_id: HirId,
+    pub kind: TyKind<'h>,
 }
 
 impl<'a> Ty<'a> {
@@ -396,9 +398,9 @@ pub enum TyKind<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Path<'h> {
-    res: Resolved<HirId>,
-    segments: &'h [SymbolId],
-    span: Span,
+    pub res: Resolved<HirId>,
+    pub segments: &'h [SymbolId],
+    pub span: Span,
 }
 
 impl<'h> Path<'h> {
@@ -413,11 +415,11 @@ impl<'h> Path<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Field<'h> {
-    mutability: Constant,
-    name: Name,
-    span: Span,
-    hir_id: HirId,
-    ty: &'h Ty<'h>,
+    pub mutability: Constant,
+    pub name: Name,
+    pub span: Span,
+    pub hir_id: HirId,
+    pub ty: &'h Ty<'h>,
 }
 
 impl<'h> Field<'h> {
