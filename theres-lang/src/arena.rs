@@ -1,7 +1,4 @@
-#![allow(clippy::mut_from_ref)]
-
-use std::marker::PhantomData;
-use std::ops::{Index, IndexMut};
+#![allow(clippy::mut_from_ref, clippy::ref_as_ptr, clippy::inline_always)]
 
 use std::{
     alloc::Layout,
@@ -39,7 +36,7 @@ impl<T> Chunk<T> {
     }
 
     fn start(&self) -> *mut u8 {
-        self.memory.as_ptr() as *mut u8
+        self.memory.as_ptr().cast::<u8>()
     }
 
     fn end(&self) -> *mut u8 {
@@ -75,19 +72,22 @@ impl Arena {
         }
     }
 
-    pub fn alloc_from_iter<T>(&self, iterable: impl IntoIterator<Item = T>) -> &mut [T] {
+    #[inline]
+    pub fn alloc_from_iter<T>(&self, iterable: impl IntoIterator<Item = T>) -> &[T] {
         let iter = iterable.into_iter();
 
         let size_hint = iter.size_hint();
 
         match size_hint {
+            (0, None | Some(0)) => &mut [],
             (lower, None) => self.write_from_iter(iter, lower),
             (_, Some(higher)) => self.write_from_iter(iter, higher),
         }
     }
 
+    #[inline]
     #[allow(clippy::mut_from_ref)]
-    pub fn alloc<T>(&self, val: T) -> &mut T {
+    pub fn alloc<T>(&self, val: T) -> &T {
         unsafe {
             let ptr = self.alloc_raw(Layout::new::<T>()).cast::<T>();
             ptr.write(val);
@@ -96,9 +96,12 @@ impl Arena {
         }
     }
 
+    #[inline]
     pub fn alloc_string(&self, s: &str) -> &str {
         let string = self.alloc_from_iter(s.bytes());
-        unsafe { core::str::from_utf8_unchecked(string) }
+        let ret = unsafe { core::str::from_utf8_unchecked(string) };
+        debug_assert!(s == ret);
+        ret
     }
 
     fn alloc_raw(&self, layout: Layout) -> *mut u8 {
@@ -115,7 +118,7 @@ impl Arena {
 
                 if start <= new_end {
                     let aligned_end = current_end.with_addr(new_end);
-                    self.start.set(aligned_end);
+                    self.end.set(aligned_end);
                     return aligned_end;
                 }
             }
@@ -135,13 +138,14 @@ impl Arena {
         for (ix, item) in iter.enumerate() {
             unsafe {
                 len = ix;
-                alloc.add(ix).write(item)
+                alloc.add(ix).write(item);
             }
         }
 
-        unsafe { core::slice::from_raw_parts_mut(alloc, len) }
+        unsafe { core::slice::from_raw_parts_mut(alloc, len + 1) }
     }
 
+    #[cold]
     fn grow(&self, layout: Layout) {
         let chunk = if layout.size() <= CHUNK_SIZE {
             Chunk::new()
@@ -158,7 +162,8 @@ impl Arena {
     }
 }
 
-fn align_down(addr: usize, align: usize) -> usize {
+#[inline(always)]
+const fn align_down(addr: usize, align: usize) -> usize {
     addr & (!(align - 1))
 }
 
@@ -194,6 +199,7 @@ mod tests {
     fn big() {
         let arena = Arena::new();
 
+        #[allow(clippy::large_stack_arrays)]
         arena.alloc([0u8; 1_564_123]);
     }
 

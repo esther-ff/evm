@@ -82,16 +82,22 @@ impl GlobalInterner {
     }
 
     pub fn intern(&mut self, str: &str) -> SymbolId {
+        println!("interning: {:#?}", str);
         if let Some(present) = self.map.get(str) {
             return *present;
         }
 
-        let new_str: &'static str = unsafe { core::mem::transmute(self.arena.alloc_string(str)) };
+        #[allow(clippy::ref_as_ptr)]
+        let new_str: &'static str = unsafe { &*(self.arena.alloc_string(str) as *const str) };
+
+        println!("interned: {new_str:#?}");
 
         let id = self.storage.future_id();
 
         self.map.insert(new_str, id);
         self.storage.push(new_str);
+
+        dbg!(&self.storage);
 
         id
     }
@@ -131,7 +137,8 @@ impl SymbolId {
     );
 
     pub fn get_interned(&self) -> &str {
-        SYMBOL_INTERNER.lock().unwrap().storage[self.private as usize]
+        let interner = SYMBOL_INTERNER.lock().unwrap();
+        interner.storage[self.private as usize]
     }
 
     pub fn intern(sym: &str) -> Self {
