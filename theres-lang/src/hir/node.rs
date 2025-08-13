@@ -17,9 +17,7 @@ pub enum Node<'h> {
     Ty(&'h Ty<'h>),
     VariableStmt(&'h Local<'h>),
     Field(&'h Field<'h>),
-
     Path(&'h Path<'h>),
-
     FnParam(&'h Param<'h>),
 }
 
@@ -231,7 +229,7 @@ pub enum StmtKind<'h> {
     Thing(&'h Thing<'h>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Constant {
     Yes,
     No,
@@ -368,11 +366,12 @@ impl<'h> FnSig<'h> {
 pub struct Param<'h> {
     pub name: Name,
     pub ty: &'h Ty<'h>,
+    pub hir_id: HirId,
 }
 
 impl<'h> Param<'h> {
-    pub fn new(name: Name, ty: &'h Ty<'h>) -> Self {
-        Self { name, ty }
+    pub fn new(name: Name, ty: &'h Ty<'h>, hir_id: HirId) -> Self {
+        Self { name, ty, hir_id }
     }
 }
 
@@ -401,14 +400,16 @@ pub struct Path<'h> {
     pub res: Resolved<HirId>,
     pub segments: &'h [SymbolId],
     pub span: Span,
+    pub hir_id: HirId,
 }
 
 impl<'h> Path<'h> {
-    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], span: Span) -> Self {
+    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], span: Span, hir_id: HirId) -> Self {
         Self {
             res,
             segments,
             span,
+            hir_id,
         }
     }
 }

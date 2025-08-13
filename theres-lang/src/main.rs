@@ -16,6 +16,8 @@ mod lexer;
 mod parser;
 mod session;
 mod sources;
+mod ty;
+
 use std::{
     fs::File,
     io::{self, Read as _},

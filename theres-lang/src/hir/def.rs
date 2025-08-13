@@ -19,7 +19,7 @@ pub enum DefType {
     Bind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub enum IntTy {
     N8,
     N16,

@@ -1,8 +1,57 @@
 pub trait IndexId: Copy + Clone {
     fn new(n: usize) -> Self;
     fn idx(&self) -> usize;
+    fn own_name() -> &'static str;
+    fn is_dummy(&self) -> bool;
 }
 
+#[repr(transparent)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IdxSlice<I, T> {
+    _boo: core::marker::PhantomData<I>,
+    inner: [T],
+}
+
+impl<I, T> IdxSlice<I, T> {
+    pub fn new<'a>(slice: &'a [T]) -> &'a Self {
+        unsafe { core::mem::transmute(slice) }
+    }
+}
+
+impl<I: IndexId, T> IdxSlice<I, T> {
+    pub fn get(&self, id: I) -> Option<&T> {
+        self.inner.get(id.idx())
+    }
+
+    pub fn get_mut(&mut self, id: I) -> Option<&mut T> {
+        self.inner.get_mut(id.idx())
+    }
+}
+
+impl<I, T: core::fmt::Debug> core::fmt::Debug for IdxSlice<I, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        core::fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
+impl<I, T> core::ops::Deref for IdxSlice<I, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'lf, I, T> IntoIterator for &'lf IdxSlice<I, T> {
+    type Item = &'lf T;
+    type IntoIter = std::slice::Iter<'lf, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IdxVec<I, T> {
     inner: Vec<T>,
     _boo: core::marker::PhantomData<I>,
@@ -53,6 +102,14 @@ impl<I: IndexId, T> IdxVec<I, T> {
         self.inner.get_mut(id.idx())
     }
 
+    pub fn to_slice(&self) -> &IdxSlice<I, T> {
+        IdxSlice::new(self.inner.as_slice())
+    }
+
+    pub fn inner(&self) -> &[T] {
+        &self.inner
+    }
+
     // pub fn len(&self) -> usize {
     //     self.inner.len()
     // }
@@ -70,7 +127,7 @@ impl<I, T: core::fmt::Debug> core::fmt::Debug for IdxVec<I, T> {
     }
 }
 
-impl<I, T: core::ops::Deref> core::ops::Deref for IdxVec<I, T> {
+impl<I, T> core::ops::Deref for IdxVec<I, T> {
     type Target = Vec<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -89,6 +146,12 @@ impl<I, T> IntoIterator for IdxVec<I, T> {
 
 #[macro_export]
 macro_rules! newtyped_index {
+    ($name:ident, $map:ident, $vec:ident, $slice:ident) => {
+        $crate::newtyped_index!($name, $map, $vec);
+
+        pub type $slice<T> = $crate::id::IdxSlice<$name, T>;
+    };
+
     ($name:ident, $map:ident, $vec:ident) => {
         #[allow(dead_code)]
         pub type $map<T> = ::std::collections::HashMap<$name, T>;
@@ -129,6 +192,14 @@ macro_rules! newtyped_index {
 
             fn idx(&self) -> usize {
                 self.private as usize
+            }
+
+            fn own_name() -> &'static str {
+                stringify!($name)
+            }
+
+            fn is_dummy(&self) -> bool {
+                self == &Self::DUMMY
             }
         }
 

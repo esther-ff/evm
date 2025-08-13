@@ -1,15 +1,20 @@
 pub mod def;
 pub mod lowering_ast;
+pub mod map_builder;
 pub mod name_resolution;
 pub mod node;
 pub mod visitor;
-
 pub use name_resolution::{LateResolver, ThingDefResolver};
 
 use crate::ast::Visitor;
+use crate::hir::node::Universe;
+use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
 
-pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Universe) {
+pub fn lower_universe<'hir>(
+    sess: &'hir Session<'hir>,
+    ast: &crate::ast::Universe,
+) -> &'hir Universe<'hir> {
     let mut first_pass = ThingDefResolver::new();
     for decl in &ast.thingies {
         first_pass.visit_thing(decl);
@@ -30,13 +35,19 @@ pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Univers
 
     let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 
-    let hir = ast_lowerer.lower_universe(ast);
-    println!("hir: \n{hir:#?}");
+    let hir_universe = ast_lowerer.lower_universe(ast);
+    sess.hir(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
+    println!("hir: \n{hir_universe:#?}");
     println!("hir bodies:\n");
     sess.hir(|map| {
-        dbg!(map.bodies());
         for (ix, body) in map.bodies().iter().enumerate() {
             println!("body({ix}): {body:#?}");
         }
+
+        for (ix, node) in map.nodes().into_iter().enumerate() {
+            println!("node({ix}): \n{node:#?}")
+        }
     });
+
+    hir_universe
 }

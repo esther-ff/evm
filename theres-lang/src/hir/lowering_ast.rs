@@ -126,6 +126,17 @@ impl<'hir> HirMap<'hir> {
         self.nodes.insert(hir_id, node);
     }
 
+    pub fn nodes(&self) -> impl IntoIterator<Item = &Node<'hir>> {
+        self.nodes.values()
+    }
+
+    pub fn get_node(&'hir self, hir_id: HirId) -> &'hir Node<'hir> {
+        match self.nodes.get(&hir_id) {
+            None => panic!("Invalid `HirId` ({hir_id:?}) given to `get_node`!"),
+            Some(node) => node,
+        }
+    }
+
     pub fn associate_parent(&mut self, parent: HirId, child: HirId) {
         self.child_to_parent.insert(child, parent);
     }
@@ -144,6 +155,17 @@ impl<'hir> HirMap<'hir> {
 
     pub fn bodies(&self) -> &[&node::Expr<'hir>] {
         self.bodies.as_slice()
+    }
+
+    pub fn get_body(&self, body: BodyId) -> &'hir node::Expr<'hir> {
+        let Some(expr_body) = self.bodies.get(body).copied() else {
+            panic!(
+                "Invalid `BodyId` given ({:#?}), no function body mapped to it!",
+                body
+            )
+        };
+
+        expr_body
     }
 }
 
@@ -188,8 +210,8 @@ impl<'hir> AstLowerer<'hir> {
     pub fn next_hir_id(&mut self, ast_id: AstId) -> HirId {
         let hir_id = HirId::new(self.hir_id_counter);
         self.hir_id_counter += 1;
-
         let ret = self.ast_id_to_hir_id.insert(ast_id, hir_id);
+
         assert!(
             ret.is_none(),
             "duplicate `AstId` given to `next_hir_id` ({} -> {})\nat loc: {:?}",
@@ -524,17 +546,19 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     pub fn lower_path(&mut self, path: &Path) -> &'hir node::Path<'hir> {
-        let Path { path, span, id } = path;
         let segments = self
             .session
             .arena()
-            .alloc_from_iter(path.iter().map(|seg| seg.name.interned));
+            .alloc_from_iter(path.path.iter().map(|seg| seg.name.interned));
 
-        let res = self.map.resolve(*id);
+        let res = self.map.resolve(path.id);
 
-        self.session
-            .arena()
-            .alloc(node::Path::new(self.lower_resolved(res), segments, *span))
+        self.session.arena().alloc(node::Path::new(
+            self.lower_resolved(res),
+            segments,
+            path.span,
+            self.next_hir_id(path.id),
+        ))
     }
 
     pub fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'hir> {
@@ -632,7 +656,7 @@ impl<'hir> AstLowerer<'hir> {
             self.session.arena().alloc_from_iter(
                 sig.args
                     .iter()
-                    .map(|arg| Param::new(arg.ident, self.lower_ty(&arg.ty))),
+                    .map(|arg| Param::new(arg.ident, self.lower_ty(&arg.ty), self.new_hir_id())),
             ),
             body_id,
         );

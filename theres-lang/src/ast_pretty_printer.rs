@@ -1,7 +1,9 @@
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
+use crate::id::IndexId;
 use crate::lexer::Span;
 use crate::session::SymbolId;
+use crate::sources::SourceId;
 
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
@@ -46,6 +48,29 @@ impl<O> PrettyPrinter<'_, O>
 where
     O: Write,
 {
+    pub fn write_indent(&mut self) {
+        for _ in 0..self.indent {
+            self.write_arbitrary(" ");
+        }
+    }
+
+    pub fn write_span(&mut self, span: Span) {
+        if span == Span::DUMMY {
+            return self.write_arbitrary("synthetic");
+        }
+
+        let _ = write!(self.writer, "{}@{}/{}", span.line, span.start, span.end);
+    }
+
+    pub fn write_location_id<A: IndexId>(&mut self, span: Span, id: A) {
+        self.write_arbitrary("  <");
+        self.write_arbitrary(A::own_name());
+        self.write_arbitrary("#");
+        let _ = write!(self.writer, "{} -- ", id.idx());
+        self.write_span(span);
+        let _ = writeln!(self.writer, ">");
+    }
+
     pub fn write(
         &mut self,
         what: &str,
@@ -85,14 +110,9 @@ where
             )?;
         }
 
-        writeln!(
-            self.writer,
-            " {:>2} <{id:?} - {line}@{start}/{end}>",
-            "",
-            line = span.line,
-            start = span.start,
-            end = span.end,
-        )
+        self.write_location_id(span, id);
+
+        Ok(())
     }
 
     pub fn write_arbitrary(&mut self, s: &str) {
@@ -140,14 +160,6 @@ where
     }
 
     fn visit_thing(&mut self, val: &'v Thing) -> Self::Result {
-        // self.write(
-        //     "Thing",
-        //     val.kind.span(),
-        //     val.id,
-        //     None,
-        //     Some(thing_kind_to_name(&val.kind)),
-        // );
-
         match &val.kind {
             ThingKind::Function(f) => self.visit_fn_decl(f),
             ThingKind::Global(g) => self.visit_global(g),

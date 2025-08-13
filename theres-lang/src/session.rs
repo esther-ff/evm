@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    ptr,
     sync::{LazyLock, Mutex},
 };
 
@@ -13,6 +14,7 @@ use crate::{
     id::IdxVec,
     lexer::LexError,
     parser::ParseError,
+    ty::{Instance, InstanceDef, Ty, TyKind},
 };
 
 pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
@@ -146,12 +148,29 @@ impl SymbolId {
     }
 }
 
+#[derive(Debug, PartialOrd, Eq, Ord, Hash)]
+pub struct Pooled<'a, T>(&'a T);
+
+impl<T> Copy for Pooled<'_, T> {}
+impl<T> Clone for Pooled<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> PartialEq for Pooled<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self.0, other.0)
+    }
+}
+
 pub struct Session<'sess> {
     dropless_arena: Arena,
 
     hir_map: RefCell<HirMap<'sess>>,
 
-    defs: RefCell<Definitions<'sess>>,
+    types: RefCell<HashMap<TyKind<'sess>, Ty<'sess>>>,
+    instances: RefCell<HashMap<InstanceDef<'sess>, Instance<'sess>>>,
 }
 
 impl<'sess> Session<'sess> {
@@ -159,7 +178,10 @@ impl<'sess> Session<'sess> {
         Self {
             hir_map: RefCell::new(HirMap::new()),
             dropless_arena: Arena::new(),
-            defs: RefCell::new(Definitions::new()),
+
+            types: RefCell::new(HashMap::new()),
+
+            instances: RefCell::new(HashMap::new()),
         }
     }
 
@@ -179,5 +201,31 @@ impl<'sess> Session<'sess> {
 
     pub fn arena(&self) -> &Arena {
         &self.dropless_arena
+    }
+
+    pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
+        let mut map = self.types.borrow_mut();
+        match map.get(&ty) {
+            None => {
+                let pooled = Pooled(self.arena().alloc(ty));
+                map.insert(ty, pooled);
+                pooled
+            }
+
+            Some(pooled_ptr) => *pooled_ptr,
+        }
+    }
+
+    pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
+        let mut map = self.instances.borrow_mut();
+        match map.get(&def) {
+            None => {
+                let pooled = Pooled(self.arena().alloc(def));
+                map.insert(def, pooled);
+                pooled
+            }
+
+            Some(pooled_ptr) => *pooled_ptr,
+        }
     }
 }
