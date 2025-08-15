@@ -1,20 +1,26 @@
 use std::{
+    borrow::Borrow,
     cell::RefCell,
-    collections::HashMap,
+    hash::Hash,
+    ops::Deref,
     ptr,
     sync::{LazyLock, Mutex},
 };
 
+use hashbrown::HashMap;
+use hashbrown::hash_map::EntryRef;
+
 use crate::{
     arena::Arena,
     hir::{
-        def::{DefId, Definitions},
-        lowering_ast::{HirId, HirMap},
+        def::{DefId, DefType, IntTy, PrimTy, Resolved},
+        lowering_ast::HirMap,
+        node::{self, Field, Node, ThingKind},
     },
-    id::IdxVec,
+    id::{IdxSlice, IdxVec},
     lexer::LexError,
     parser::ParseError,
-    ty::{Instance, InstanceDef, Ty, TyKind},
+    ty::{FieldDef, Instance, InstanceDef, Ty, TyKind},
 };
 
 pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
@@ -152,9 +158,21 @@ impl SymbolId {
 pub struct Pooled<'a, T>(&'a T);
 
 impl<T> Copy for Pooled<'_, T> {}
+
 impl<T> Clone for Pooled<'_, T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+unsafe impl<T: Sync> Sync for Pooled<'_, T> {}
+unsafe impl<T: Send> Send for Pooled<'_, T> {}
+
+impl<'a, T> Deref for Pooled<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
     }
 }
 
@@ -164,68 +182,210 @@ impl<T> PartialEq for Pooled<'_, T> {
     }
 }
 
+// pub struct Pool<'a, T> {
+//     map: HashMap<Pooled<'a, T>, ()>,
+// }
+
+// impl<T> Borrow<T> for Pooled<'_, T> {
+//     fn borrow(&self) -> &T {
+//         self.0
+//     }
+// }
+
+// impl<'a, T: Hash + Eq> Pool<'a, T> {
+//     #[allow(clippy::new_without_default)]
+//     pub fn new() -> Self {
+//         Self {
+//             map: HashMap::new(),
+//         }
+//     }
+
+//     pub fn intern<F>(&mut self, item: T, mk: F) -> Pooled<'a, T>
+//     where
+//         F: FnOnce(T) -> Pooled<'a, T>,
+//     {
+//         match self.map.entry_ref(&item) {
+//             EntryRef::Vacant(_vacant) => {
+//                 let interned = mk(item);
+//                 self.map.insert(interned, ());
+
+//                 interned
+//             }
+
+//             EntryRef::Occupied(occup) => Pooled(occup.key().0),
+//         }
+//     }
+// }
+
+type Pool<'a, T> = std::collections::HashMap<T, Pooled<'a, T>>;
+
 pub struct Session<'sess> {
-    dropless_arena: Arena,
+    arena: Arena,
 
     hir_map: RefCell<HirMap<'sess>>,
 
-    types: RefCell<HashMap<TyKind<'sess>, Ty<'sess>>>,
-    instances: RefCell<HashMap<InstanceDef<'sess>, Instance<'sess>>>,
+    types: RefCell<Pool<'sess, TyKind<'sess>>>,
+    instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
 }
 
 impl<'sess> Session<'sess> {
     pub fn new() -> Self {
         Self {
+            arena: Arena::new(),
             hir_map: RefCell::new(HirMap::new()),
-            dropless_arena: Arena::new(),
-
-            types: RefCell::new(HashMap::new()),
-
-            instances: RefCell::new(HashMap::new()),
+            types: RefCell::new(Pool::new()),
+            instances: RefCell::new(Pool::new()),
         }
     }
 
-    pub fn enter<F, R>(&'sess self, f: F) -> R
+    pub fn enter<F, R>(&'sess self, work: F) -> R
     where
         F: FnOnce(&'sess Self) -> R,
     {
-        f(self)
+        work(self)
     }
 
-    pub fn hir<F, R>(&'sess self, f: F) -> R
+    pub fn hir_mut<F, R>(&'sess self, f: F) -> R
     where
         F: FnOnce(&mut HirMap<'sess>) -> R,
     {
         f(&mut self.hir_map.borrow_mut())
     }
 
-    pub fn arena(&self) -> &Arena {
-        &self.dropless_arena
+    pub fn hir<F, R>(&'sess self, f: F) -> R
+    where
+        F: FnOnce(&HirMap<'sess>) -> R,
+    {
+        f(&self.hir_map.borrow())
     }
 
-    pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
-        let mut map = self.types.borrow_mut();
-        match map.get(&ty) {
-            None => {
-                let pooled = Pooled(self.arena().alloc(ty));
-                map.insert(ty, pooled);
-                pooled
-            }
+    pub fn arena(&self) -> &Arena {
+        &self.arena
+    }
 
-            Some(pooled_ptr) => *pooled_ptr,
+    // pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
+    //     self.types
+    //         .borrow_mut()
+    //         .intern(ty, |item| Pooled(self.arena().alloc(item)))
+    // }
+
+    // pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
+    //     self.instances
+    //         .borrow_mut()
+    //         .intern(def, |item| Pooled(self.arena().alloc(item)))
+    // }
+
+    pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
+        match self.types.borrow_mut().get(&ty) {
+            Some(r) => *r,
+            None => Pooled(self.arena().alloc(ty)),
         }
     }
 
     pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
-        let mut map = self.instances.borrow_mut();
-        match map.get(&def) {
-            None => {
-                let pooled = Pooled(self.arena().alloc(def));
-                map.insert(def, pooled);
-                pooled
-            }
-
-            Some(pooled_ptr) => *pooled_ptr,
+        match self.instances.borrow_mut().get(&def) {
+            Some(r) => *r,
+            None => Pooled(self.arena().alloc(def)),
         }
     }
+
+    pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
+        self.hir(|map| match map.get_def(def_id) {
+            Node::Thing(thing) => match thing.kind {
+                ThingKind::Fn { .. } => self.intern_ty(TyKind::FnDef(def_id)),
+                ThingKind::Instance { fields, name } => self.intern_ty(TyKind::Instance(
+                    self.intern_instance_def(self.gen_instance_def(fields, name.interned)),
+                )),
+
+                ThingKind::Global { ty, .. } => {
+                    self.lower_ty(ty, || unreachable!("`Self` in global item"))
+                }
+
+                ThingKind::Realm { .. } => panic!("A realm doesn't have a type!"),
+                ThingKind::Bind { .. } => panic!("A bind doesn't have a type!"),
+            },
+
+            Node::Field(field) => self.hir(|map| {
+                self.lower_ty(field.ty, || {
+                    let instance_id = map.get_instance_of_field(field.def_id);
+                    self.def_type_of(instance_id)
+                })
+            }),
+
+            any => panic!("Can't express type for {any:?}"),
+        })
+    }
+
+    pub fn lower_ty<F>(&'sess self, ty: &node::Ty<'_>, method_self: F) -> Ty<'sess>
+    where
+        F: FnOnce() -> Ty<'sess>,
+    {
+        let tykind = match ty.kind {
+            node::TyKind::MethodSelf => return method_self(),
+            node::TyKind::Array(array_ty) => TyKind::Array(self.lower_ty(array_ty, method_self)),
+            node::TyKind::Path(path) => match path.res {
+                Resolved::Prim(prim) => match prim {
+                    PrimTy::Uint(size) => TyKind::Uint(size),
+                    PrimTy::Int(size) => TyKind::Int(size),
+                    PrimTy::Double => TyKind::Double,
+                    PrimTy::Float => TyKind::Float,
+                    PrimTy::Nil => TyKind::Nil,
+                    PrimTy::Bool => TyKind::Bool,
+                },
+
+                Resolved::Def(def_id, def_ty) => match def_ty {
+                    DefType::Instance => return self.def_type_of(def_id),
+                    any => panic!("Can't type: {any:?}"),
+                },
+
+                Resolved::Err => panic!("Tried to resolve a `Resolved::Err`"),
+                Resolved::Local(..) => {
+                    panic!("Tried to lower type with a local inside of it's path")
+                }
+            },
+        };
+
+        self.intern_ty(tykind)
+    }
+
+    fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {
+        InstanceDef {
+            fields: IdxSlice::new(self.arena().alloc_from_iter(fields.iter().map(|field| {
+                FieldDef {
+                    def_id: field.def_id,
+                    name: field.name.interned,
+                    mutable: field.mutability,
+                }
+            }))),
+            name,
+        }
+    }
+}
+
+macro_rules! type_fns {
+    ($($name:ident -> $kind:expr),*) => {
+        $(
+            pub fn $name(&'ty self) -> Ty<'ty> {
+                self.intern_ty($kind)
+            }
+        )*
+    };
+}
+
+impl<'ty> Session<'ty> {
+    type_fns!(
+        u8 -> TyKind::Uint(IntTy::N8),
+        u16 -> TyKind::Uint(IntTy::N16),
+        u32 -> TyKind::Uint(IntTy::N32),
+        u64 -> TyKind::Uint(IntTy::N64),
+        i8 -> TyKind::Int(IntTy::N8),
+        i16 -> TyKind::Int(IntTy::N16),
+        i32 -> TyKind::Int(IntTy::N32),
+        i64 -> TyKind::Int(IntTy::N64),
+        f32 -> TyKind::Float,
+        f64 -> TyKind::Double,
+        nil -> TyKind::Nil,
+
+        bool -> TyKind::Bool
+    );
 }

@@ -1,7 +1,7 @@
 use crate::{
     ast::{AssignMode, BinOp, Name, UnaryOp},
     hir::{
-        def::{BodyId, Resolved},
+        def::{BodyId, DefId, Resolved},
         lowering_ast::HirId,
     },
     lexer::Span,
@@ -420,6 +420,7 @@ pub struct Field<'h> {
     pub name: Name,
     pub span: Span,
     pub hir_id: HirId,
+    pub def_id: DefId,
     pub ty: &'h Ty<'h>,
 }
 
@@ -429,10 +430,12 @@ impl<'h> Field<'h> {
         span: Span,
         hir_id: HirId,
         name: Name,
+        def_id: DefId,
         ty: &'h Ty<'h>,
     ) -> Self {
         Self {
             mutability,
+            def_id,
 
             name,
             span,

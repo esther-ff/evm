@@ -10,11 +10,61 @@ use crate::ast::Visitor;
 use crate::hir::node::Universe;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
+use crate::ty::TyKind;
+use crate::{maybe_visit, try_visit, visit_iter};
 
-pub fn lower_universe<'hir>(
-    sess: &'hir Session<'hir>,
-    ast: &crate::ast::Universe,
-) -> &'hir Universe<'hir> {
+pub struct TyTest<'a> {
+    s: &'a Session<'a>,
+}
+
+impl visitor::HirVisitor<'_> for TyTest<'_> {
+    type Result = ();
+
+    fn visit_ty(&mut self, ty: &node::Ty<'_>) {
+        let ty = self.s.lower_ty(ty, || panic!());
+        dbg!(ty);
+
+        if let TyKind::Instance(def) = *ty {
+            println!("Field type!");
+            for field in def.fields {
+                let ty = self.s.def_type_of(field.def_id);
+                println!("field ty: {ty:#?}");
+            }
+        }
+    }
+
+    fn visit_local(&mut self, local: &node::Local<'_>) -> Self::Result {
+        let node::Local {
+            mutability: _,
+            name: _,
+            init,
+            ty,
+            hir_id: _,
+        } = local;
+
+        let _ = init.map(|expr| self.visit_expr(expr));
+        self.visit_ty(ty);
+    }
+
+    fn visit_fn_sig(&mut self, fn_sig: &node::FnSig<'_>) -> Self::Result {
+        let node::FnSig {
+            span: _,
+            return_type,
+            arguments,
+            body,
+        } = fn_sig;
+
+        self.visit_ty(return_type);
+
+        for param in *arguments {
+            self.visit_param(param);
+        }
+
+        self.visit_expr(self.s.hir(|x| x.get_body(*body)));
+    }
+}
+
+pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Universe) {
     let mut first_pass = ThingDefResolver::new();
     for decl in &ast.thingies {
         first_pass.visit_thing(decl);
@@ -33,21 +83,23 @@ pub fn lower_universe<'hir>(
         println!("{id:?} resolves to: {res:?}");
     }
 
-    let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
+    let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, &sess);
 
     let hir_universe = ast_lowerer.lower_universe(ast);
-    sess.hir(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
+    sess.hir_mut(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
     println!("hir: \n{hir_universe:#?}");
-    println!("hir bodies:\n");
-    sess.hir(|map| {
-        for (ix, body) in map.bodies().iter().enumerate() {
-            println!("body({ix}): {body:#?}");
-        }
+    // println!("hir bodies:\n");
+    // sess.hir(|map| {
+    //     for (ix, body) in map.bodies().iter().enumerate() {
+    //         println!("body({ix}): {body:#?}");
+    //     }
 
-        for (ix, node) in map.nodes().into_iter().enumerate() {
-            println!("node({ix}): \n{node:#?}")
-        }
-    });
+    //     for (ix, node) in map.nodes().into_iter().enumerate() {
+    //         println!("node({ix}): \n{node:#?}");
+    //     }
+    // });
 
-    hir_universe
+    let mut test = TyTest { s: sess };
+
+    test.visit_universe(hir_universe);
 }

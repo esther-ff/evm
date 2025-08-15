@@ -47,8 +47,8 @@ impl<T: FileManager> Compiler<T> {
         let lexemes = self.lex(&src);
         let ast = self.parse_to_ast(lexemes);
 
-        session.enter(|session| {
-            hir::lower_universe(session, &ast);
+        session.enter(|_session| {
+            // hir::lower_universe(session, &ast);
 
             emit_errors(&src).unwrap();
         });

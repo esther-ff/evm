@@ -97,29 +97,50 @@ impl Mappings {
 
 pub struct HirMap<'hir> {
     nodes: HirIdMap<Node<'hir>>,
-    child_to_parent: HirIdMap<HirId>,
 
     def_id_to_hir_id: DefMap<HirId>,
-    hir_id_to_def_id: DefMap<HirId>,
 
     bodies: BodyVec<&'hir node::Expr<'hir>>,
     node_to_body: DefMap<BodyId>,
 
-    thing_to_associated: HirIdMap<&'hir [HirId]>,
+    field_to_instance: HashMap<DefId, DefId>,
 }
 
 impl<'hir> HirMap<'hir> {
     pub fn new() -> Self {
         Self {
             nodes: HashMap::new(),
-            thing_to_associated: HashMap::new(),
-            child_to_parent: HashMap::new(),
 
             def_id_to_hir_id: HashMap::new(),
-            hir_id_to_def_id: HashMap::new(),
             bodies: IdxVec::new(),
             node_to_body: HashMap::new(),
+            field_to_instance: HashMap::new(),
         }
+    }
+
+    pub fn map_def_id_to_hir(&mut self, def_id: DefId, hir_id: HirId) {
+        let dbg = self.def_id_to_hir_id.insert(def_id, hir_id);
+        assert!(dbg.is_none(), "{def_id:?} already mapped to a HirId!");
+    }
+
+    pub fn map_field_to_instance(&mut self, instance: DefId, field: DefId) {
+        self.field_to_instance.insert(field, instance);
+    }
+
+    pub fn get_instance_of_field(&self, field: DefId) -> DefId {
+        self.field_to_instance
+            .get(&field)
+            .copied()
+            .expect("Field's DefId wasn't mapped to any instance")
+    }
+
+    pub fn get_def(&'hir self, def_id: DefId) -> &'hir Node<'hir> {
+        self.get_node(
+            self.def_id_to_hir_id
+                .get(&def_id)
+                .copied()
+                .expect("DefId wasn't mapped to any HirId"),
+        )
     }
 
     pub fn insert_node(&mut self, node: node::Node<'hir>, hir_id: HirId) {
@@ -136,17 +157,6 @@ impl<'hir> HirMap<'hir> {
             Some(node) => node,
         }
     }
-
-    pub fn associate_parent(&mut self, parent: HirId, child: HirId) {
-        self.child_to_parent.insert(child, parent);
-    }
-
-    pub fn get_parent_of(&mut self, child: HirId) {
-        self.child_to_parent
-            .get(&child)
-            .expect("HirId wasn't mapped to any parent");
-    }
-
     pub fn insert_body_of(&mut self, body: &'hir node::Expr<'hir>, body_owner: DefId) -> BodyId {
         let body_id = self.bodies.push(body);
         self.node_to_body.insert(body_owner, body_id);
@@ -159,10 +169,7 @@ impl<'hir> HirMap<'hir> {
 
     pub fn get_body(&self, body: BodyId) -> &'hir node::Expr<'hir> {
         let Some(expr_body) = self.bodies.get(body).copied() else {
-            panic!(
-                "Invalid `BodyId` given ({:#?}), no function body mapped to it!",
-                body
-            )
+            panic!("Invalid `BodyId` given ({body:#?}), no function body mapped to it!",)
         };
 
         expr_body
@@ -178,14 +185,13 @@ pub enum DesugarLoop {
 pub struct AstLowerer<'hir> {
     session: &'hir Session<'hir>,
 
-    current_parent: HirId,
     map: Mappings,
 
     hir_id_counter: u32,
 
     ast_id_to_hir_id: AstIdMap<HirId>,
 
-    current_instance: Option<HirId>,
+    current_instance: Option<DefId>,
 }
 
 impl<'hir> AstLowerer<'hir> {
@@ -194,7 +200,6 @@ impl<'hir> AstLowerer<'hir> {
             map,
             current_instance: None,
             session,
-            current_parent: HirId::DUMMY,
 
             hir_id_counter: 0,
             ast_id_to_hir_id: HashMap::new(),
@@ -616,7 +621,7 @@ impl<'hir> AstLowerer<'hir> {
 
                 let sig = self.lower_fn_sig(
                     &fn_decl.sig,
-                    self.session.hir(|map| map.insert_body_of(body, def_id)),
+                    self.session.hir_mut(|map| map.insert_body_of(body, def_id)),
                 );
 
                 (node::BindItemKind::Fun { sig }, fn_decl.id, fn_decl.span)
@@ -641,7 +646,7 @@ impl<'hir> AstLowerer<'hir> {
                 name: fn_decl.sig.name,
                 sig: self.lower_fn_sig(
                     &fn_decl.sig,
-                    self.session.hir(|map| map.insert_body_of(body, def_id)),
+                    self.session.hir_mut(|map| map.insert_body_of(body, def_id)),
                 ),
             },
             fn_decl.span,
@@ -685,6 +690,11 @@ impl<'hir> AstLowerer<'hir> {
         } = inst;
 
         let hir_id = self.next_hir_id(*id);
+        let def_id = self.map.def_id_of(*id);
+
+        self.session
+            .hir_mut(|x| x.def_id_to_hir_id.insert(def_id, hir_id));
+        self.current_instance.replace(def_id);
 
         let kind = node::ThingKind::Instance {
             fields: self
@@ -694,30 +704,31 @@ impl<'hir> AstLowerer<'hir> {
             name: *name,
         };
 
+        self.current_instance.take();
+
         node::Thing::new(kind, *span, hir_id)
     }
 
     pub fn lower_field(&mut self, field: &Field) -> node::Field<'hir> {
-        let Field {
-            constant,
-            name,
-            ty,
-            span,
-            id,
-        } = field;
+        let def_id = self.map.def_id_of(field.id);
+        let current_instance = self
+            .current_instance
+            .expect("Visiting field outside an instance?");
 
-        let mutability = if *constant {
-            Constant::Yes
-        } else {
-            Constant::No
-        };
+        let hir_id = self.next_hir_id(field.id);
+
+        self.session.hir_mut(|x| {
+            x.field_to_instance.insert(def_id, current_instance);
+            x.map_def_id_to_hir(def_id, hir_id);
+        });
 
         node::Field::new(
-            mutability,
-            *span,
-            self.next_hir_id(*id),
-            *name,
-            self.lower_ty(ty),
+            [Constant::No, Constant::Yes][usize::from(field.constant)],
+            field.span,
+            hir_id,
+            field.name,
+            def_id,
+            self.lower_ty(&field.ty),
         )
     }
 

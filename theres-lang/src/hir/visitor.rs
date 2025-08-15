@@ -106,6 +106,7 @@ pub trait HirVisitor<'hir> {
             name: _,
             span: _,
             hir_id: _,
+            def_id: _,
             ty,
         } = field;
 
