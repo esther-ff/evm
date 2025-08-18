@@ -7,6 +7,7 @@ pub mod visitor;
 pub use name_resolution::{LateResolver, ThingDefResolver};
 
 use crate::ast::Visitor;
+use crate::hir::node::Universe;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
 use crate::ty::TyKind;
@@ -20,13 +21,12 @@ impl visitor::HirVisitor<'_> for TyTest<'_> {
 
     fn visit_ty(&mut self, ty: &node::Ty<'_>) {
         let ty = self.s.lower_ty(ty, || panic!());
-        dbg!(ty);
+        println!("ty: {}", self.s.stringify_ty(ty));
 
         if let TyKind::Instance(def) = *ty {
-            println!("Field type!");
             for field in def.fields {
                 let ty = self.s.def_type_of(field.def_id);
-                println!("field ty: {ty:#?}");
+                println!("   field ty: {}", self.s.stringify_ty(ty));
             }
         }
     }
@@ -62,7 +62,10 @@ impl visitor::HirVisitor<'_> for TyTest<'_> {
     }
 }
 
-pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Universe) {
+pub fn lower_universe<'hir>(
+    sess: &'hir Session<'hir>,
+    ast: &crate::ast::Universe,
+) -> &'hir Universe<'hir> {
     let mut first_pass = ThingDefResolver::new();
     for decl in &ast.thingies {
         first_pass.visit_thing(decl);
@@ -101,4 +104,6 @@ pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Univers
     let mut test = TyTest { s: sess };
 
     test.visit_universe(hir_universe);
+
+    hir_universe
 }

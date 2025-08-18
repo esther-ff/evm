@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, panic::Location};
+use std::{borrow::Cow, cmp::Ordering, collections::HashMap, panic::Location};
 
 use crate::{
     errors::TheresError,
@@ -10,6 +10,7 @@ use crate::{
             StmtKind, Thing, ThingKind, Universe,
         },
     },
+    lexer::Span,
     session::{Pooled, Session, SymbolId},
 };
 
@@ -75,31 +76,28 @@ pub struct FieldDef {
 
 #[derive(Debug, Clone)]
 pub enum TypingError {
-    TypeMismatch {
-        expected: String,
-        got: String,
-    },
+    TypeMismatch(Cow<'static, str>, Cow<'static, str>),
 
     NoIndexOp {
-        on: String,
+        on: Cow<'static, str>,
     },
 
     NoUnaryOp {
-        on: String,
+        on: Cow<'static, str>,
     },
 
     NoBinaryOp {
-        lhs: String,
-        rhs: String,
+        lhs: Cow<'static, str>,
+        rhs: Cow<'static, str>,
     },
 
     CallingNotFn {
-        offender: String,
+        offender: Cow<'static, str>,
     },
 
     WrongArgumentTy {
-        expected: String,
-        got: String,
+        expected: Cow<'static, str>,
+        got: Cow<'static, str>,
         arg_idx: usize,
     },
 
@@ -108,12 +106,12 @@ pub enum TypingError {
     },
 
     NoField {
-        on: String,
+        on: Cow<'static, str>,
         field_name: SymbolId,
     },
 
     NotInstance {
-        got: String,
+        got: Cow<'static, str>,
     },
 }
 
@@ -122,11 +120,12 @@ impl TheresError for TypingError {
         "typing"
     }
 
-    fn span(&self) -> crate::lexer::Span {
-        unimplemented!()
+    #[track_caller]
+    fn span(&self) -> Span {
+        unimplemented!("loc: {}", Location::caller())
     }
 
-    fn message(&self) -> std::borrow::Cow<'static, str> {
+    fn message(&self) -> Cow<'static, str> {
         "type mismatch".into()
     }
 
@@ -197,7 +196,13 @@ impl<'ty> TypeEnv<'ty> {
                 let expr_ty = self.typeck_expr(init);
 
                 if decl_ty == expr_ty {
-                    todo!("type in declared global is wrong")
+                    self.sess.diag().emit_err(
+                        TypingError::TypeMismatch(
+                            self.sess.stringify_ty(decl_ty),
+                            self.sess.stringify_ty(decl_ty),
+                        ),
+                        ty.span,
+                    );
                 }
             }
 
@@ -218,7 +223,13 @@ impl<'ty> TypeEnv<'ty> {
                     let expr_ty = self.typeck_expr(expr);
 
                     if expr_ty != const_decl_ty {
-                        todo!("type mismatch")
+                        self.sess.diag().emit_err(
+                            TypingError::TypeMismatch(
+                                self.sess.stringify_ty(const_decl_ty),
+                                self.sess.stringify_ty(expr_ty),
+                            ),
+                            ty.span,
+                        );
                     }
                 }
             }
@@ -231,8 +242,14 @@ impl<'ty> TypeEnv<'ty> {
 
         let ty = self.typeck_expr(body);
 
+        let left = self.sess.stringify_ty(ty);
+        let right = self.sess.stringify_ty(return_type);
+
         if return_type != ty {
-            todo!("fn ret type doesn't unify with body ty")
+            dbg!(return_type, ty, return_type == ty);
+            self.sess
+                .diag()
+                .emit_err(TypingError::TypeMismatch(left, right), sig.span);
         }
     }
 
@@ -260,34 +277,61 @@ impl<'ty> TypeEnv<'ty> {
                 HirLiteral::Float(_float) => self.sess.f64(),
             },
 
-            ExprKind::Binary { lhs, rhs, op } => {
+            ExprKind::Binary { lhs, rhs, op: _ } => {
                 let ty_lhs = self.typeck_expr(lhs);
                 let ty_rhs = self.typeck_expr(rhs);
 
+                #[allow(clippy::match_same_arms)] // todo
                 match (*ty_lhs, *ty_rhs) {
                     (TyKind::Uint(int_l), TyKind::Uint(int_r)) if int_l == int_r => ty_lhs,
-                    (TyKind::Int(..), TyKind::Int(..)) => todo!(),
-                    (TyKind::Float, TyKind::Float) => todo!(),
-                    (TyKind::Double, TyKind::Double) => todo!(),
-                    (left, right) => todo!("No binary op ({op:?}) for {left:?} and {right:?}"),
+                    (TyKind::Int(int_l), TyKind::Int(int_r)) if int_l == int_r => ty_lhs,
+                    (TyKind::Float, TyKind::Float) => ty_lhs,
+                    (TyKind::Double, TyKind::Double) => ty_lhs,
+                    (_, _) => {
+                        self.sess.diag().emit_err(
+                            TypingError::NoBinaryOp {
+                                lhs: self.sess.stringify_ty(ty_lhs),
+                                rhs: self.sess.stringify_ty(ty_rhs),
+                            },
+                            Span::between(lhs.span, rhs.span),
+                        );
+
+                        self.sess.ty_err()
+                    }
                 }
             }
 
-            ExprKind::Unary { target, op } => {
+            ExprKind::Unary { target, op: _ } => {
                 let ty = self.typeck_expr(target);
 
                 if let TyKind::Bool | TyKind::Uint(..) | TyKind::Int(..) = *ty {
                     return ty;
                 }
 
-                todo!("no unary op ({op:?}) for {ty:?}");
+                self.sess.diag().emit_err(
+                    TypingError::NoUnaryOp {
+                        on: self.sess.stringify_ty(ty),
+                    },
+                    target.span,
+                );
+
+                self.sess.ty_err()
             }
 
             ExprKind::Paren { inner } => self.typeck_expr(inner),
 
             ExprKind::Assign { variable, value } => {
-                if self.typeck_expr(variable) != self.typeck_expr(value) {
-                    todo!("can't assign {value:?} to {variable:?}")
+                let variable_ty = self.typeck_expr(variable);
+                let value_ty = self.typeck_expr(value);
+
+                if variable_ty != value_ty {
+                    self.sess.diag().emit_err(
+                        TypingError::TypeMismatch(
+                            self.sess.stringify_ty(variable_ty),
+                            self.sess.stringify_ty(value_ty),
+                        ),
+                        Span::between(variable.span, value.span),
+                    );
                 }
 
                 self.sess.nil()
@@ -299,26 +343,52 @@ impl<'ty> TypeEnv<'ty> {
                 else_ifs,
                 otherwise,
             } => {
-                if *self.typeck_expr(condition) != TyKind::Bool {
-                    todo!("if cond can only be bool")
+                let cond_ty = self.typeck_expr(condition);
+                if *cond_ty != TyKind::Bool {
+                    self.type_mismatch_err(self.sess.bool(), cond_ty, condition.span);
                 }
 
                 let ret_ty = self.typeck_block(block);
 
                 for (block, elsif) in else_ifs {
-                    if self.typeck_block(block) != ret_ty {
-                        todo!("else if block has invalid type compared to {ret_ty:?}")
+                    let block_ty = self.typeck_block(block);
+                    if block_ty != ret_ty {
+                        self.sess.diag().emit_err(
+                            TypingError::TypeMismatch(
+                                self.sess.stringify_ty(block_ty),
+                                self.sess.stringify_ty(ret_ty),
+                            ),
+                            Span::between(block.span, elsif.span),
+                        );
                     }
 
-                    if *self.typeck_expr(elsif) != TyKind::Bool {
-                        todo!("else if in if cond can only be bool")
+                    let elsif_ty = self.typeck_expr(elsif);
+
+                    if *elsif_ty != TyKind::Bool {
+                        self.sess.diag().emit_err(
+                            TypingError::TypeMismatch(
+                                "bool".into(),
+                                self.sess.stringify_ty(elsif_ty),
+                            ),
+                            elsif.span,
+                        );
                     }
                 }
 
                 if let Some(otherwise_block) = otherwise
                     && self.typeck_block(otherwise_block) != ret_ty
                 {
-                    todo!("otherwise block has diff type than original block")
+                    let block_ty = self.typeck_block(otherwise_block);
+
+                    if ret_ty != block_ty {
+                        self.sess.diag().emit_err(
+                            TypingError::TypeMismatch(
+                                self.sess.stringify_ty(block_ty),
+                                self.sess.stringify_ty(ret_ty),
+                            ),
+                            otherwise_block.span,
+                        );
+                    }
                 }
 
                 ret_ty
@@ -328,7 +398,14 @@ impl<'ty> TypeEnv<'ty> {
                 let callable = self.typeck_expr(function);
 
                 let TyKind::FnDef(def_id) = callable.0 else {
-                    todo!("calling not a function")
+                    self.sess.diag().emit_err(
+                        TypingError::CallingNotFn {
+                            offender: "".into(), // not sure?
+                        },
+                        expr.span,
+                    );
+
+                    return self.sess.ty_err();
                 };
 
                 let hir = self.sess.hir_ref();
@@ -349,15 +426,15 @@ impl<'ty> TypeEnv<'ty> {
                 self.sess.lower_ty(sig.return_type, || self.get_self_ty())
             }
 
-            ExprKind::Return { expr } => {
-                let ty = expr.map_or(self.sess.nil(), |elm| self.typeck_expr(elm));
+            ExprKind::Return { expr: ret_expr } => {
+                let ty = ret_expr.map_or(self.sess.nil(), |elm| self.typeck_expr(elm));
 
                 let ret_ty = self
                     .current_fn_ret_ty
                     .expect("return should only be present in function");
 
                 if ret_ty != ty {
-                    todo!("return expr's ty is wrong compared to function ret ty")
+                    self.type_mismatch_err(ret_ty, ty, ret_expr.map_or(expr.span, |s| s.span));
                 }
 
                 self.sess.ty_diverge()
@@ -408,11 +485,20 @@ impl<'ty> TypeEnv<'ty> {
                 let src_ty = self.typeck_expr(indexed_thing);
 
                 let TyKind::Array(inner_ty) = src_ty.0 else {
-                    todo!("indexed thing is not an array!")
+                    self.sess.diag().emit_err(
+                        TypingError::NoIndexOp {
+                            on: self.sess.stringify_ty(src_ty),
+                        },
+                        expr.span,
+                    );
+
+                    return self.sess.ty_err();
                 };
 
-                if self.sess.u64() != self.typeck_expr(index) {
-                    todo!("index only by u64")
+                let index_ty = self.typeck_expr(index);
+
+                if self.sess.u64() != index_ty {
+                    self.type_mismatch_err(self.sess.u64(), index_ty, expr.span);
                 }
 
                 *inner_ty
@@ -433,7 +519,7 @@ impl<'ty> TypeEnv<'ty> {
 
                     Resolved::Def(def_id, DefType::Const) => self.sess.def_type_of(def_id),
 
-                    any => todo!("what the fuck? {any:?}"),
+                    any => unreachable!("what the fuck? {any:?}"),
                 }
             }
 
@@ -480,28 +566,42 @@ impl<'ty> TypeEnv<'ty> {
                         .iter()
                         .map(|param| self.sess.lower_ty(param.ty, || self_ty));
 
-                    let mut call_tys = args.iter().map(|expr| self.typeck_expr(expr));
+                    let mut call_tys = args.iter();
 
                     let amount_of_args = res_sig.arguments.len();
                     let given_args = args.len();
 
+                    #[allow(clippy::match_same_arms)] // todo
                     match amount_of_args.cmp(&given_args) {
-                        Ordering::Less => todo!("function call has less arguments than needed"),
-                        Ordering::Greater => todo!("function call has more arguments than needed"),
+                        Ordering::Less => self.sess.diag().emit_err(
+                            TypingError::WrongArgumentAmnt { amount: given_args },
+                            expr.span,
+                        ),
+                        Ordering::Greater => self.sess.diag().emit_err(
+                            TypingError::WrongArgumentAmnt { amount: given_args },
+                            expr.span,
+                        ),
                         Ordering::Equal => (),
                     }
 
                     let mut ix = 1;
                     loop {
-                        match (sigs.next(), call_tys.next()) {
+                        match (
+                            sigs.next(),
+                            call_tys.next().map(|expr| self.typeck_expr(expr)),
+                        ) {
                             (Some(sig_ty), Some(call_ty)) => {
                                 if sig_ty != call_ty {
-                                    todo!("argument {ix} had wrong type")
+                                    self.type_mismatch_err(sig_ty, call_ty, expr.span);
                                 }
 
                                 ix += 1;
                             }
                             (Some(..), None) | (None, Some(..)) => {
+                                self.sess.diag().emit_err(
+                                    TypingError::WrongArgumentAmnt { amount: ix },
+                                    expr.span,
+                                );
                                 ix += 1;
                                 continue;
                             }
@@ -513,7 +613,7 @@ impl<'ty> TypeEnv<'ty> {
 
                     ret_ty = self
                         .sess
-                        .lower_ty(res_sig.return_type, || todo!("method self"));
+                        .lower_ty(res_sig.return_type, || self.get_self_ty());
                 });
 
                 ret_ty
@@ -524,8 +624,9 @@ impl<'ty> TypeEnv<'ty> {
                 init,
                 size,
             } => {
-                if self.sess.u64() != self.typeck_expr(size) {
-                    todo!("type for array size isn't u64")
+                let size_ty = self.typeck_expr(size);
+                if self.sess.u64() != size_ty {
+                    self.type_mismatch_err(self.sess.u64(), size_ty, expr.span);
                 }
 
                 let array_ty = self.sess.lower_ty(ty_of_array, || self.get_self_ty());
@@ -534,7 +635,7 @@ impl<'ty> TypeEnv<'ty> {
                     let expr_ty = self.typeck_expr(expr);
 
                     if expr_ty != array_ty {
-                        todo!("ty: {expr_ty:?} is incompatible with {array_ty:?}")
+                        self.type_mismatch_err(array_ty, expr_ty, expr.span);
                     }
                 }
 
@@ -572,11 +673,29 @@ impl<'ty> TypeEnv<'ty> {
         if let Some(ty) = init_ty
             && ty != local_decl_ty
         {
-            todo!("ty is wrong")
+            self.type_mismatch_err(ty, local_decl_ty, local.ty.span);
         }
 
         init_ty.unwrap_or(local_decl_ty)
     }
+
+    fn type_mismatch_err(&self, expected: Ty<'ty>, got: Ty<'ty>, span: Span) {
+        self.sess.diag().emit_err(
+            TypingError::TypeMismatch(
+                self.sess.stringify_ty(expected),
+                self.sess.stringify_ty(got),
+            ),
+            span,
+        );
+    }
+}
+
+pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) -> TypeEnv<'a> {
+    let mut env = TypeEnv::new(session);
+
+    env.typeck_universe(universe);
+
+    env
 }
 
 #[allow(clippy::checked_conversions, clippy::cast_lossless)]

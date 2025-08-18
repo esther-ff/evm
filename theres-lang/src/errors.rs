@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cell::RefCell,
     cmp,
     io::{self, BufWriter, Stderr, Write},
 };
@@ -7,7 +8,7 @@ use std::{
 use crate::{
     lexer::{LexError, Span},
     parser::{ParseError, ParseErrorKind},
-    sources::{SourceFile, Sources},
+    sources::{SourceFile, SourceId, Sources},
 };
 
 pub trait TheresError {
@@ -127,13 +128,36 @@ impl<'a> ErrorLine<'a> {
 }
 
 pub struct DiagEmitter<'a> {
+    inner: RefCell<DiagEmitterInner<'a>>,
+}
+
+impl<'a> DiagEmitter<'a> {
+    pub fn new(srcs: &'a Sources) -> Self {
+        Self {
+            inner: RefCell::new(DiagEmitterInner::new(srcs)),
+        }
+    }
+
+    pub fn emit_err(&self, err: impl TheresError, span: Span) {
+        self.inner
+            .borrow_mut()
+            .emit_err(err, span)
+            .expect("writing to `stderr` failed!");
+    }
+
+    pub fn errors_emitted(&self) -> bool {
+        self.inner.borrow().err_amount > 0
+    }
+}
+
+pub struct DiagEmitterInner<'a> {
     stderr: BufWriter<Stderr>,
     err_amount: usize,
     srcs: &'a Sources,
 }
 
-impl<'a> DiagEmitter<'a> {
-    pub fn new(srcs: &'a Sources) -> Self {
+impl<'a> DiagEmitterInner<'a> {
+    fn new(srcs: &'a Sources) -> Self {
         Self {
             stderr: BufWriter::new(std::io::stderr()),
             err_amount: 0,
@@ -142,42 +166,47 @@ impl<'a> DiagEmitter<'a> {
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    pub fn emit<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
-        let origin = err.span().line as usize;
-        let Some(lines) = self
-            .srcs
-            .get_by_source_id(span.sourceid)
-            .get_lines_above_below(origin, T::amount_of_extra_lines())
-        else {
-            panic!("cannot print out error in `print_one`, span is not present in the error")
-        };
-
-        let indent = longest_line_number_from_origin(origin, T::amount_of_extra_lines());
+    fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
+        let origin = span.line as usize;
+        let extra_lines = T::amount_of_extra_lines();
+        let line_nr_offset = origin.saturating_sub(extra_lines);
+        let lines = self.get_lines(span.sourceid, origin, extra_lines);
+        let indent = longest_line_number_from_origin(origin, extra_lines) as usize;
 
         writeln!(self.stderr, "error during {}:", T::phase())?;
-        for (ix, line) in lines.iter().enumerate().map(|(ix, line)| {
-            (
-                ix + (origin.saturating_sub(T::amount_of_extra_lines())),
-                line,
-            )
-        }) {
-            let msg = if ix == origin {
-                let msg = Message {
-                    msg: err.message(),
-                    attached_to: span,
-                };
 
-                Some(msg)
-            } else {
-                None
-            };
+        for (ix, line) in lines.iter().enumerate() {
+            let line_number = ix + line_nr_offset;
+            if line_number == origin {
+                print_to(
+                    line_number,
+                    line,
+                    indent,
+                    &mut self.stderr,
+                    Some(Message {
+                        msg: err.message(),
+                        attached_to: span,
+                    }),
+                )
+                .expect("writing to writer failed!");
 
-            let errline = ErrorLine::new(msg, line, ix);
+                continue;
+            }
 
-            errline.print_to(indent as usize, &mut self.stderr)?;
+            print_to(line_number, line, indent, &mut self.stderr, None)
+                .expect("writing to writer failed!");
         }
 
+        self.err_amount += 1;
+
         Ok(())
+    }
+
+    fn get_lines(&self, id: SourceId, line_origin: usize, extra: usize) -> Vec<&'a str> {
+        self.srcs
+            .get_by_source_id(id)
+            .get_lines_above_below(line_origin, extra)
+            .expect("Given line number isn't present in the source file")
     }
 }
 
@@ -213,8 +242,6 @@ where
 
         let indent = longest_line_number_from_origin(origin, T::amount_of_extra_lines());
 
-        dbg!(indent);
-        dbg!(origin);
         writeln!(self.writer, "error during {}:", T::phase())?;
         for (ix, line) in lines.iter().enumerate().map(|(ix, line)| {
             (
@@ -233,9 +260,8 @@ where
                 None
             };
 
-            let errline = ErrorLine::new(msg, line, ix);
-
-            errline.print_to(indent as usize, self.writer)?;
+            // this is going to be removed anyway so yeah
+            let _ = print_to(ix, line, indent as usize, &mut self.writer, msg);
         }
 
         Ok(())
@@ -250,8 +276,6 @@ fn longest_line_number_from_origin(origin: usize, jump: usize) -> u32 {
         up = cmp::max(up, tmp);
     }
 
-    dbg!(up);
-
     let mut down = origin;
 
     for _ in 0..jump {
@@ -259,9 +283,23 @@ fn longest_line_number_from_origin(origin: usize, jump: usize) -> u32 {
         down = cmp::max(up, tmp);
     }
 
-    dbg!(down);
     let len_upper = up.checked_ilog10().unwrap_or(2) + 1;
     let down_upper = down.checked_ilog10().unwrap_or(2) + 1;
 
     cmp::max(len_upper, down_upper)
+}
+
+fn print_to<O>(
+    line_nr: usize,
+    content: &str,
+    indent: usize,
+    writer: &mut O,
+    msg: Option<Message>,
+) -> io::Result<()>
+where
+    O: io::Write,
+{
+    writeln!(writer, "{line_nr:<indent$}| {content}",)?;
+
+    msg.map_or(Ok(()), |m| m.print_to(indent, writer))
 }

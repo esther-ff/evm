@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     io::{self, stdout},
     path::Path,
 };
@@ -12,7 +12,8 @@ use crate::{
     lexer::{Lexemes, Lexer},
     parser::Parser,
     session::{DIAG_CTXT, Session},
-    sources::{FileManager, SourceFile, Sources},
+    sources::{FileManager, SourceFile, SourceId, Sources},
+    ty::typeck_universe,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -44,21 +45,22 @@ impl Compiler {
             .open(main.as_ref())
             .expect("failed to open main file");
 
-        let diags = RefCell::new(DiagEmitter::new(&self.sources));
+        let diags = DiagEmitter::new(&self.sources);
         let session = Session::new(&diags);
-        let lexemes = self.lex(&src);
+        let lexemes = self.lex(src);
         let ast = self.parse_to_ast(lexemes);
 
         session.enter(|session| {
-            hir::lower_universe(session, &ast);
+            let uni = hir::lower_universe(session, &ast);
+            typeck_universe(session, uni);
 
-            emit_errors(&src).unwrap();
+            // emit_errors(&src).unwrap();
         });
     }
 
-    fn lex(&self, src: &SourceFile) -> Lexemes {
+    fn lex(&self, src: SourceId) -> Lexemes {
         let lexemes = {
-            let lexer = Lexer::new(src.data(), src.source_id());
+            let lexer = Lexer::new(self.sources.get_by_source_id(src).data(), src);
             lexer.lex()
         };
 

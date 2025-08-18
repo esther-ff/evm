@@ -156,8 +156,14 @@ impl Span {
     pub fn start(&self) -> usize {
         self.start
     }
+
     pub fn end(&self) -> usize {
         self.end
+    }
+
+    pub fn between(left: Self, right: Self) -> Span {
+        debug_assert!(left.sourceid == right.sourceid);
+        Span::new(left.start, right.end, right.line, right.sourceid)
     }
 }
 

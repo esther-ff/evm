@@ -1,5 +1,7 @@
 use std::{
+    borrow::Cow,
     cell::{Ref, RefCell},
+    fmt::Write,
     hash::Hash,
     ops::Deref,
     ptr,
@@ -14,7 +16,7 @@ use crate::{
     hir::{
         def::{DefId, DefType, IntTy, PrimTy, Resolved},
         lowering_ast::HirMap,
-        node::{self, Field, Node, ThingKind},
+        node::{self, Field, Node, Param, ThingKind},
     },
     id::{IdxSlice, IdxVec},
     lexer::LexError,
@@ -228,11 +230,11 @@ pub struct Session<'sess> {
     types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
 
-    diags: &'sess RefCell<DiagEmitter<'sess>>,
+    diags: &'sess DiagEmitter<'sess>,
 }
 
 impl<'sess> Session<'sess> {
-    pub fn new(diags: &'sess RefCell<DiagEmitter<'sess>>) -> Self {
+    pub fn new(diags: &'sess DiagEmitter<'sess>) -> Self {
         Self {
             arena: Arena::new(),
             hir_map: RefCell::new(HirMap::new()),
@@ -249,11 +251,8 @@ impl<'sess> Session<'sess> {
         work(self)
     }
 
-    pub fn diags<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut DiagEmitter<'_>) -> R,
-    {
-        f(&mut self.diags.borrow_mut())
+    pub fn diag(&self) -> &'sess DiagEmitter<'_> {
+        self.diags
     }
 
     pub fn hir_mut<F, R>(&'sess self, f: F) -> R
@@ -270,25 +269,13 @@ impl<'sess> Session<'sess> {
         f(&self.hir_map.borrow())
     }
 
-    pub fn hir_ref(&'sess self) -> Ref<'sess, HirMap<'sess>> {
+    pub fn hir_ref(&self) -> Ref<'_, HirMap<'sess>> {
         self.hir_map.borrow()
     }
 
     pub fn arena(&self) -> &Arena {
         &self.arena
     }
-
-    // pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
-    //     self.types
-    //         .borrow_mut()
-    //         .intern(ty, |item| Pooled(self.arena().alloc(item)))
-    // }
-
-    // pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
-    //     self.instances
-    //         .borrow_mut()
-    //         .intern(def, |item| Pooled(self.arena().alloc(item)))
-    // }
 
     pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
         match self.types.borrow_mut().get(&ty) {
@@ -346,9 +333,10 @@ impl<'sess> Session<'sess> {
         )
     }
 
-    pub fn lower_ty<F>(&'sess self, ty: &node::Ty<'_>, method_self: F) -> Ty<'sess>
+    pub fn lower_ty<'a, F>(&'sess self, ty: &node::Ty<'a>, method_self: F) -> Ty<'sess>
     where
         F: FnOnce() -> Ty<'sess>,
+        'sess: 'a,
     {
         let tykind = match ty.kind {
             node::TyKind::MethodSelf => return method_self(),
@@ -378,8 +366,112 @@ impl<'sess> Session<'sess> {
         self.intern_ty(tykind)
     }
 
-    pub fn stringify_ty(&'sess self, ty: Ty<'sess>) -> String {
-        todo!()
+    pub fn stringify_ty(&'sess self, ty: Ty<'sess>) -> Cow<'static, str> {
+        let mut buf = String::new();
+
+        match ty.0 {
+            TyKind::Bool => Cow::Borrowed("bool"),
+            TyKind::Uint(size) => match size {
+                IntTy::N8 => Cow::Borrowed("u8"),
+                IntTy::N16 => Cow::Borrowed("u16"),
+                IntTy::N32 => Cow::Borrowed("u32"),
+                IntTy::N64 => Cow::Borrowed("u64"),
+            },
+            TyKind::Int(size) => match size {
+                IntTy::N8 => Cow::Borrowed("i8"),
+                IntTy::N16 => Cow::Borrowed("i16"),
+                IntTy::N32 => Cow::Borrowed("i32"),
+                IntTy::N64 => Cow::Borrowed("i64"),
+            },
+            TyKind::Float => Cow::Borrowed("f32"),
+            TyKind::Double => Cow::Borrowed("f64"),
+            TyKind::Nil => Cow::Borrowed("Nil"),
+            TyKind::Error => Cow::Borrowed("error!"),
+
+            TyKind::Diverges => Cow::Borrowed("Diverges"),
+
+            any => {
+                self.stringfy_string_helper(&mut buf, *any);
+                Cow::Owned(buf)
+            }
+        }
+    }
+
+    fn stringfy_string_helper(&'sess self, buf: &mut String, ty: TyKind<'sess>) {
+        let push = match ty {
+            TyKind::Bool => "bool",
+            TyKind::Uint(size) => match size {
+                IntTy::N8 => "u8",
+                IntTy::N16 => "u16",
+                IntTy::N32 => "u32",
+                IntTy::N64 => "u64",
+            },
+            TyKind::Int(size) => match size {
+                IntTy::N8 => "i8",
+                IntTy::N16 => "i16",
+                IntTy::N32 => "i32",
+                IntTy::N64 => "i64",
+            },
+            TyKind::Float => "f32",
+            TyKind::Double => "f64",
+            TyKind::Nil => "Nil",
+
+            TyKind::Diverges => "Diverges",
+
+            TyKind::Array(ty) => {
+                buf.push('[');
+                self.stringfy_string_helper(buf, *ty);
+                buf.push(']');
+                return;
+            }
+
+            TyKind::Fn { inputs, output } => {
+                buf.push_str("fun(");
+                for (ix, i) in inputs.iter().enumerate() {
+                    self.stringfy_string_helper(buf, **i);
+
+                    if ix != inputs.len() {
+                        buf.push_str(", ");
+                    }
+                }
+                buf.push(')');
+                buf.push_str("=> ");
+                self.stringfy_string_helper(buf, *output);
+
+                return;
+            }
+
+            TyKind::Instance(def) => {
+                buf.push_str(def.name.get_interned());
+                return;
+            }
+
+            TyKind::FnDef(def_id) => {
+                let hir = self.hir_ref();
+                let (sig, name) = hir.expect_fn(def_id);
+                let _ = write!(buf, "fun {}(", name.interned.get_interned());
+
+                for (ix, param) in sig.arguments.iter().enumerate() {
+                    // i'll handle this later ok!
+                    let ty = self.lower_ty(param.ty, || self.ty_err());
+                    self.stringfy_string_helper(buf, *ty);
+
+                    if ix != sig.arguments.len() {
+                        buf.push_str(", ");
+                    }
+                }
+
+                buf.push(')');
+                buf.push_str("=> ");
+                self.stringfy_string_helper(buf, *self.lower_ty(sig.return_type, || self.ty_err()));
+
+                return;
+            }
+
+            TyKind::Error => "error",
+        };
+
+        buf.push_str(push);
     }
 
     fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {
