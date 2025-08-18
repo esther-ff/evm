@@ -1,17 +1,16 @@
 use std::{
-    borrow::Borrow,
-    cell::RefCell,
+    cell::{Ref, RefCell},
     hash::Hash,
     ops::Deref,
     ptr,
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, MutexGuard},
 };
 
 use hashbrown::HashMap;
-use hashbrown::hash_map::EntryRef;
 
 use crate::{
     arena::Arena,
+    errors::DiagEmitter,
     hir::{
         def::{DefId, DefType, IntTy, PrimTy, Resolved},
         lowering_ast::HirMap,
@@ -59,6 +58,13 @@ impl DiagnosticCtxt {
     }
 }
 
+pub fn diag<F, R>(f: F) -> R
+where
+    F: for<'a> FnOnce(MutexGuard<'a, DiagnosticCtxt>) -> R,
+{
+    f(DIAG_CTXT.lock().expect("diag ctxt already locked"))
+}
+
 pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =
     LazyLock::new(|| Mutex::new(GlobalInterner::new()));
 
@@ -90,7 +96,6 @@ impl GlobalInterner {
     }
 
     pub fn intern(&mut self, str: &str) -> SymbolId {
-        println!("interning: {:#?}", str);
         if let Some(present) = self.map.get(str) {
             return *present;
         }
@@ -98,14 +103,10 @@ impl GlobalInterner {
         #[allow(clippy::ref_as_ptr)]
         let new_str: &'static str = unsafe { &*(self.arena.alloc_string(str) as *const str) };
 
-        println!("interned: {new_str:#?}");
-
         let id = self.storage.future_id();
 
         self.map.insert(new_str, id);
         self.storage.push(new_str);
-
-        dbg!(&self.storage);
 
         id
     }
@@ -155,7 +156,7 @@ impl SymbolId {
 }
 
 #[derive(Debug, PartialOrd, Eq, Ord, Hash)]
-pub struct Pooled<'a, T>(&'a T);
+pub struct Pooled<'a, T>(pub &'a T);
 
 impl<T> Copy for Pooled<'_, T> {}
 
@@ -168,7 +169,7 @@ impl<T> Clone for Pooled<'_, T> {
 unsafe impl<T: Sync> Sync for Pooled<'_, T> {}
 unsafe impl<T: Send> Send for Pooled<'_, T> {}
 
-impl<'a, T> Deref for Pooled<'a, T> {
+impl<T> Deref for Pooled<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -226,15 +227,18 @@ pub struct Session<'sess> {
 
     types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
+
+    diags: &'sess RefCell<DiagEmitter<'sess>>,
 }
 
 impl<'sess> Session<'sess> {
-    pub fn new() -> Self {
+    pub fn new(diags: &'sess RefCell<DiagEmitter<'sess>>) -> Self {
         Self {
             arena: Arena::new(),
             hir_map: RefCell::new(HirMap::new()),
             types: RefCell::new(Pool::new()),
             instances: RefCell::new(Pool::new()),
+            diags,
         }
     }
 
@@ -243,6 +247,13 @@ impl<'sess> Session<'sess> {
         F: FnOnce(&'sess Self) -> R,
     {
         work(self)
+    }
+
+    pub fn diags<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut DiagEmitter<'_>) -> R,
+    {
+        f(&mut self.diags.borrow_mut())
     }
 
     pub fn hir_mut<F, R>(&'sess self, f: F) -> R
@@ -257,6 +268,10 @@ impl<'sess> Session<'sess> {
         F: FnOnce(&HirMap<'sess>) -> R,
     {
         f(&self.hir_map.borrow())
+    }
+
+    pub fn hir_ref(&'sess self) -> Ref<'sess, HirMap<'sess>> {
+        self.hir_map.borrow()
     }
 
     pub fn arena(&self) -> &Arena {
@@ -316,6 +331,21 @@ impl<'sess> Session<'sess> {
         })
     }
 
+    pub fn binds_for_ty<F, R>(&'sess self, ty: Ty<'sess>, work: F) -> R
+    where
+        F: FnOnce(Vec<node::Bind<'_>>) -> R,
+    {
+        let hir = self.hir_ref();
+        work(
+            hir.nodes()
+                .into_iter()
+                .filter_map(node::Node::get_thing)
+                .filter_map(node::Thing::get_bind)
+                .filter(|b| self.lower_ty(b.with, || unreachable!("self type in bind")) == ty)
+                .collect(),
+        )
+    }
+
     pub fn lower_ty<F>(&'sess self, ty: &node::Ty<'_>, method_self: F) -> Ty<'sess>
     where
         F: FnOnce() -> Ty<'sess>,
@@ -346,6 +376,10 @@ impl<'sess> Session<'sess> {
         };
 
         self.intern_ty(tykind)
+    }
+
+    pub fn stringify_ty(&'sess self, ty: Ty<'sess>) -> String {
+        todo!()
     }
 
     fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {
@@ -385,6 +419,8 @@ impl<'ty> Session<'ty> {
         f32 -> TyKind::Float,
         f64 -> TyKind::Double,
         nil -> TyKind::Nil,
+        ty_err -> TyKind::Error,
+        ty_diverge -> TyKind::Diverges,
 
         bool -> TyKind::Bool
     );

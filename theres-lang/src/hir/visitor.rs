@@ -4,8 +4,8 @@ use crate::{
         def::Resolved,
         lowering_ast::HirId,
         node::{
-            BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Local, Param, Path, Stmt,
-            StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
+            self, BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Local, Param, Path,
+            Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
         },
     },
     maybe_visit, try_visit, visit_iter,
@@ -49,11 +49,11 @@ pub trait HirVisitor<'hir> {
                 try_visit!(self.visit_ty(ty));
                 self.visit_expr(init)
             }
-            ThingKind::Bind {
+            ThingKind::Bind(node::Bind {
                 with,
-                items,
                 mask: _,
-            } => {
+                items,
+            }) => {
                 try_visit!(self.visit_ty(with));
                 visit_iter!(v: self, m: visit_bind_item, *items)
             }
@@ -70,7 +70,7 @@ pub trait HirVisitor<'hir> {
         } = bind_item;
 
         match kind {
-            BindItemKind::Fun { sig } => self.visit_fn_sig(sig),
+            BindItemKind::Fun { sig, name: _ } => self.visit_fn_sig(sig),
             BindItemKind::Const { ty, expr, sym: _ } => {
                 try_visit!(self.visit_ty(ty));
                 self.visit_expr(expr)

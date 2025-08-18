@@ -1,9 +1,13 @@
 use crate::hir::lowering_ast::HirMap;
+use crate::hir::node::{
+    self, Expr, ExprKind, Field, FnSig, Node, Param, Path, Stmt, StmtKind, Thing, ThingKind, Ty,
+    TyKind, Universe,
+};
 use crate::hir::visitor::HirVisitor;
 
 use crate::ast::VisitorResult;
-use crate::hir::node::*;
 use crate::{maybe_visit, try_visit, visit_iter};
+
 pub struct MapBuilder<'map, 'hir>
 where
     'hir: 'map,
@@ -54,11 +58,11 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
                 init,
                 ty,
             } => try_visit!(self.visit_ty(ty), self.visit_expr(init)),
-            ThingKind::Bind {
+            ThingKind::Bind(node::Bind {
                 with,
                 items,
                 mask: _,
-            } => try_visit!(
+            }) => try_visit!(
                 self.visit_ty(with),
                 visit_iter!(v: self, m: visit_bind_item, *items)
             ),
@@ -107,7 +111,7 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
 
         match kind {
             ExprKind::Binary { lhs, rhs, op: _ } => {
-                try_visit!(self.visit_expr(lhs), self.visit_expr(rhs))
+                try_visit!(self.visit_expr(lhs), self.visit_expr(rhs));
             }
 
             ExprKind::Unary { target, op: _ } => self.visit_expr(target),
@@ -120,14 +124,14 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
                 value,
                 op: _,
             } => {
-                try_visit!(self.visit_expr(variable), self.visit_expr(value))
+                try_visit!(self.visit_expr(variable), self.visit_expr(value));
             }
 
             ExprKind::Call { function, args } => {
                 try_visit!(
                     self.visit_expr(function),
                     visit_iter!(v: self, m: visit_expr, *args)
-                )
+                );
             }
 
             ExprKind::MethodCall {
@@ -154,7 +158,7 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
                     self.visit_expr(expr);
                 }
 
-                maybe_visit!(v: self, m: visit_block, otherwise)
+                maybe_visit!(v: self, m: visit_block, otherwise);
             }
 
             ExprKind::Return { expr } => maybe_visit!(v: self, m: visit_expr, expr),
@@ -172,7 +176,7 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
                     self.visit_ty(ty_of_array),
                     visit_iter!(v: self, m: visit_expr, *init),
                     self.visit_expr(size)
-                )
+                );
             }
 
             ExprKind::Index {
@@ -185,6 +189,16 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
             ExprKind::Path(path) => self.visit_path(path),
 
             ExprKind::Literal(..) | ExprKind::Break => Self::Result::normal(),
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &'hir Stmt<'hir>) -> Self::Result {
+        self.m.insert_node(Node::Stmt(stmt), stmt.hir_id);
+
+        match stmt.kind {
+            StmtKind::Local(local) => self.visit_local(local),
+            StmtKind::Expr(expr) => self.visit_expr(expr),
+            StmtKind::Thing(thing) => self.visit_thing(thing),
         }
     }
 }

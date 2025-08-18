@@ -21,6 +21,20 @@ pub enum Node<'h> {
     FnParam(&'h Param<'h>),
 }
 
+impl<'h> Node<'h> {
+    pub fn is_thing(&self) -> bool {
+        matches!(self, Self::Thing(..))
+    }
+
+    pub fn get_thing(&'h self) -> Option<&'h Thing<'h>> {
+        if let Node::Thing(t) = self {
+            return Some(t);
+        }
+
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Universe<'h> {
     pub hir_id: HirId,
@@ -279,6 +293,14 @@ impl<'h> Thing<'h> {
             kind,
         }
     }
+
+    pub fn get_bind(&self) -> Option<Bind<'h>> {
+        if let ThingKind::Bind(b) = self.kind {
+            return Some(b);
+        }
+
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -305,11 +327,14 @@ pub enum ThingKind<'h> {
         ty: &'h Ty<'h>,
     },
 
-    Bind {
-        with: &'h Ty<'h>,
-        items: &'h [BindItem<'h>],
-        mask: Option<&'h Path<'h>>, // for now should be None
-    },
+    Bind(Bind<'h>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Bind<'h> {
+    pub with: &'h Ty<'h>,
+    pub items: &'h [BindItem<'h>],
+    pub mask: Option<&'h Path<'h>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -329,6 +354,7 @@ impl<'h> BindItem<'h> {
 pub enum BindItemKind<'h> {
     Fun {
         sig: &'h FnSig<'h>,
+        name: SymbolId,
     },
 
     Const {
@@ -435,11 +461,13 @@ impl<'h> Field<'h> {
     ) -> Self {
         Self {
             mutability,
-            def_id,
 
             name,
+
             span,
             hir_id,
+            def_id,
+
             ty,
         }
     }

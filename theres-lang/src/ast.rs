@@ -3,48 +3,6 @@ pub use crate::parser::AstId;
 use crate::session::SymbolId;
 use core::ops::ControlFlow;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum NotFoundCulprit {
-    Ty,
-    Realm,
-    Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AstErrorKind {
-    // todo: the name
-    // refers to the situation when
-    // the block associated with the visited
-    // instance contains something more than
-    // function decls or const declarations
-    OverfilledInstanceBlock {
-        instance: String,
-        span_of_instance: Span,
-    },
-
-    NotConstInInstance {
-        instance: String,
-        span_of_const: Span,
-    },
-
-    NotFound {
-        offender: SymbolId,
-        culprit: NotFoundCulprit,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AstError {
-    span: Span,
-    kind: AstErrorKind,
-}
-
-impl AstError {
-    pub fn new(kind: AstErrorKind, span: Span) -> Self {
-        Self { span, kind }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum BinOp {
     Add,
@@ -922,7 +880,7 @@ pub trait Visitor<'a> {
         let Expr { ty, span: _, id: _ } = val;
 
         match ty {
-            ExprType::Break => Self::Result::normal(),
+            ExprType::Break | ExprType::Constant(..) => Self::Result::normal(),
 
             ExprType::BinaryExpr { lhs, rhs, op: _ } => {
                 try_visit!(self.visit_expr(lhs), self.visit_expr(rhs));
@@ -931,8 +889,6 @@ pub trait Visitor<'a> {
             }
 
             ExprType::UnaryExpr { op: _, target } => self.visit_expr(target),
-
-            ExprType::Constant(..) => Self::Result::normal(),
 
             ExprType::Group(e) => self.visit_expr(e),
 

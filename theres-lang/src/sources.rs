@@ -112,13 +112,13 @@ pub trait FileManager {
     fn open_file(&mut self, path: &Path) -> io::Result<Vec<u8>>;
 }
 
-pub struct Sources<Io> {
+pub struct Sources {
     files: SourceVec<SourceFile>,
-    io: Io,
+    io: Box<dyn FileManager>,
 }
 
-impl<Io> Sources<Io> {
-    pub fn new(io: Io) -> Self {
+impl Sources {
+    pub fn new(io: Box<dyn FileManager>) -> Self {
         Self {
             io,
             files: IdxVec::new(),
@@ -126,7 +126,7 @@ impl<Io> Sources<Io> {
     }
 }
 
-impl<Io: FileManager> Sources<Io> {
+impl Sources {
     pub fn open<A>(&mut self, filepath: A) -> io::Result<SourceFile>
     where
         A: AsRef<Path>,

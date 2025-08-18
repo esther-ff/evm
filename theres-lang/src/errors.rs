@@ -1,9 +1,13 @@
-use std::{borrow::Cow, cmp, io};
+use std::{
+    borrow::Cow,
+    cmp,
+    io::{self, BufWriter, Stderr, Write},
+};
 
 use crate::{
     lexer::{LexError, Span},
     parser::{ParseError, ParseErrorKind},
-    sources::SourceFile,
+    sources::{SourceFile, Sources},
 };
 
 pub trait TheresError {
@@ -116,6 +120,61 @@ impl<'a> ErrorLine<'a> {
 
         if let Some(ref msg) = self.msg {
             msg.print_to(indent, writer)?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct DiagEmitter<'a> {
+    stderr: BufWriter<Stderr>,
+    err_amount: usize,
+    srcs: &'a Sources,
+}
+
+impl<'a> DiagEmitter<'a> {
+    pub fn new(srcs: &'a Sources) -> Self {
+        Self {
+            stderr: BufWriter::new(std::io::stderr()),
+            err_amount: 0,
+            srcs,
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn emit<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
+        let origin = err.span().line as usize;
+        let Some(lines) = self
+            .srcs
+            .get_by_source_id(span.sourceid)
+            .get_lines_above_below(origin, T::amount_of_extra_lines())
+        else {
+            panic!("cannot print out error in `print_one`, span is not present in the error")
+        };
+
+        let indent = longest_line_number_from_origin(origin, T::amount_of_extra_lines());
+
+        writeln!(self.stderr, "error during {}:", T::phase())?;
+        for (ix, line) in lines.iter().enumerate().map(|(ix, line)| {
+            (
+                ix + (origin.saturating_sub(T::amount_of_extra_lines())),
+                line,
+            )
+        }) {
+            let msg = if ix == origin {
+                let msg = Message {
+                    msg: err.message(),
+                    attached_to: span,
+                };
+
+                Some(msg)
+            } else {
+                None
+            };
+
+            let errline = ErrorLine::new(msg, line, ix);
+
+            errline.print_to(indent as usize, &mut self.stderr)?;
         }
 
         Ok(())

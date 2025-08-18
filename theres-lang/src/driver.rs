@@ -1,4 +1,5 @@
 use std::{
+    cell::{Cell, RefCell},
     io::{self, stdout},
     path::Path,
 };
@@ -6,7 +7,7 @@ use std::{
 use crate::{
     ast::Universe,
     ast_pretty_printer::PrettyPrinter,
-    errors::Errors,
+    errors::{DiagEmitter, Errors},
     hir,
     lexer::{Lexemes, Lexer},
     parser::Parser,
@@ -20,17 +21,17 @@ pub enum Compilation {
     Ok,
 }
 
-pub struct Compiler<T: FileManager> {
-    sources: Sources<T>,
+pub struct Compiler {
+    sources: Sources,
 
-    state: Compilation,
+    state: Cell<Compilation>,
 }
 
-impl<T: FileManager> Compiler<T> {
-    pub fn new(manager: T) -> Self {
+impl Compiler {
+    pub fn new(manager: impl FileManager + 'static) -> Self {
         Self {
-            sources: Sources::new(manager),
-            state: Compilation::Ok,
+            sources: Sources::new(Box::new(manager)),
+            state: Cell::new(Compilation::Ok),
         }
     }
 
@@ -43,35 +44,36 @@ impl<T: FileManager> Compiler<T> {
             .open(main.as_ref())
             .expect("failed to open main file");
 
-        let session = Session::new();
+        let diags = RefCell::new(DiagEmitter::new(&self.sources));
+        let session = Session::new(&diags);
         let lexemes = self.lex(&src);
         let ast = self.parse_to_ast(lexemes);
 
-        session.enter(|_session| {
-            // hir::lower_universe(session, &ast);
+        session.enter(|session| {
+            hir::lower_universe(session, &ast);
 
             emit_errors(&src).unwrap();
         });
     }
 
-    fn lex(&mut self, src: &SourceFile) -> Lexemes {
+    fn lex(&self, src: &SourceFile) -> Lexemes {
         let lexemes = {
             let lexer = Lexer::new(src.data(), src.source_id());
             lexer.lex()
         };
 
         if DIAG_CTXT.lock().unwrap().errored() {
-            self.state = Compilation::Error;
+            self.state.set(Compilation::Error);
         }
 
         lexemes
     }
 
-    fn parse_to_ast(&mut self, lexemes: Lexemes) -> Universe {
+    fn parse_to_ast(&self, lexemes: Lexemes) -> Universe {
         let decls = Parser::new(lexemes).parse();
 
         if DIAG_CTXT.lock().unwrap().errored() {
-            self.state = Compilation::Error;
+            self.state.set(Compilation::Error);
         }
 
         let mut stdout = stdout();

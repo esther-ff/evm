@@ -13,8 +13,8 @@ pub struct IdxSlice<I, T> {
 }
 
 impl<I, T> IdxSlice<I, T> {
-    pub fn new<'a>(slice: &'a [T]) -> &'a Self {
-        unsafe { core::mem::transmute(slice) }
+    pub fn new(slice: &[T]) -> &Self {
+        unsafe { &*(core::ptr::from_ref(slice) as *const Self) }
     }
 }
 
@@ -47,7 +47,7 @@ impl<'lf, I, T> IntoIterator for &'lf IdxSlice<I, T> {
     type IntoIter = std::slice::Iter<'lf, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
+        self.inner.iter()
     }
 }
 
@@ -102,13 +102,13 @@ impl<I: IndexId, T> IdxVec<I, T> {
         self.inner.get_mut(id.idx())
     }
 
-    pub fn to_slice(&self) -> &IdxSlice<I, T> {
-        IdxSlice::new(self.inner.as_slice())
-    }
+    // pub fn to_slice(&self) -> &IdxSlice<I, T> {
+    //     IdxSlice::new(self.inner.as_slice())
+    // }
 
-    pub fn inner(&self) -> &[T] {
-        &self.inner
-    }
+    // pub fn inner(&self) -> &[T] {
+    //     &self.inner
+    // }
 
     // pub fn len(&self) -> usize {
     //     self.inner.len()

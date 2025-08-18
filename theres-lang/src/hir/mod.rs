@@ -7,11 +7,9 @@ pub mod visitor;
 pub use name_resolution::{LateResolver, ThingDefResolver};
 
 use crate::ast::Visitor;
-use crate::hir::node::Universe;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
 use crate::ty::TyKind;
-use crate::{maybe_visit, try_visit, visit_iter};
 
 pub struct TyTest<'a> {
     s: &'a Session<'a>,
@@ -83,11 +81,12 @@ pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &crate::ast::Univers
         println!("{id:?} resolves to: {res:?}");
     }
 
-    let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, &sess);
+    let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 
     let hir_universe = ast_lowerer.lower_universe(ast);
     sess.hir_mut(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
     println!("hir: \n{hir_universe:#?}");
+
     // println!("hir bodies:\n");
     // sess.hir(|map| {
     //     for (ix, body) in map.bodies().iter().enumerate() {
