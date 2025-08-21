@@ -20,7 +20,7 @@ impl visitor::HirVisitor<'_> for TyTest<'_> {
     type Result = ();
 
     fn visit_ty(&mut self, ty: &node::Ty<'_>) {
-        let ty = self.s.lower_ty(ty, || panic!());
+        let ty = self.s.lower_ty(ty);
         println!("ty: {}", self.s.stringify_ty(ty));
 
         if let TyKind::Instance(def) = *ty {
@@ -90,16 +90,12 @@ pub fn lower_universe<'hir>(
     sess.hir_mut(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
     println!("hir: \n{hir_universe:#?}");
 
-    // println!("hir bodies:\n");
-    // sess.hir(|map| {
-    //     for (ix, body) in map.bodies().iter().enumerate() {
-    //         println!("body({ix}): {body:#?}");
-    //     }
-
-    //     for (ix, node) in map.nodes().into_iter().enumerate() {
-    //         println!("node({ix}): \n{node:#?}");
-    //     }
-    // });
+    println!("hir bodies:\n");
+    sess.hir(|map| {
+        for (ix, body) in map.bodies().iter().enumerate() {
+            println!("body({ix}): {body:#?}");
+        }
+    });
 
     let mut test = TyTest { s: sess };
 

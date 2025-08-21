@@ -1,18 +1,18 @@
-use std::{borrow::Cow, cmp::Ordering, collections::HashMap, panic::Location};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::panic::Location;
 
-use crate::{
-    errors::TheresError,
-    hir::{
-        def::{DefId, DefType, IntTy, Resolved},
-        lowering_ast::HirId,
-        node::{
-            Bind, BindItemKind, Block, Constant, Expr, ExprKind, FnSig, HirLiteral, Local, Stmt,
-            StmtKind, Thing, ThingKind, Universe,
-        },
-    },
-    lexer::Span,
-    session::{Pooled, Session, SymbolId},
+use crate::errors::TheresError;
+use crate::hir::def::{DefId, DefType, IntTy, Resolved};
+use crate::hir::lowering_ast::HirId;
+use crate::hir::node::{
+    self, Bind, BindItemKind, Block, Constant, Expr, ExprKind, HirLiteral, Local, Stmt, StmtKind,
+    Thing, ThingKind, Universe,
 };
+use crate::hir::visitor::HirVisitor;
+use crate::lexer::Span;
+use crate::session::{Pooled, Session, SymbolId};
+crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
 
 /// Interned type.
 pub type Ty<'ty> = Pooled<'ty, TyKind<'ty>>;
@@ -20,7 +20,46 @@ pub type Ty<'ty> = Pooled<'ty, TyKind<'ty>>;
 /// Interned instance data.
 pub type Instance<'ty> = Pooled<'ty, InstanceDef<'ty>>;
 
-crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
+/// Interned Function signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FnSig<'ty> {
+    pub inputs: &'ty [Ty<'ty>],
+    pub output: Ty<'ty>,
+}
+
+pub struct FnSigLowerer<'a> {
+    sess: &'a Session<'a>,
+}
+
+impl<'vis> HirVisitor<'vis> for FnSigLowerer<'_> {
+    type Result = ();
+
+    fn visit_thing(&mut self, thing: &'vis Thing<'vis>) -> Self::Result {
+        match thing.kind {
+            ThingKind::Fn { name: _, sig } => {
+                self.sess.lower_fn_sig(*sig, thing.def_id);
+            }
+
+            ThingKind::Instance { fields: _, name: _ } => {
+                self.sess.instance_def(thing.def_id);
+            } // Nothing to do
+
+            ThingKind::Bind(bind) => {
+                for bind_item in bind.items {
+                    self.visit_bind_item(bind_item);
+                }
+            }
+
+            ThingKind::Realm { name: _, things } => {
+                for i in things {
+                    self.visit_thing(i);
+                }
+            }
+
+            ThingKind::Global { .. } => (),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TyKind<'ty> {
@@ -49,16 +88,11 @@ pub enum TyKind<'ty> {
     /// nil.
     Nil,
 
-    /// Diverging!
-    ///
-    /// Computation that never happens due to something
-    /// like an abort.
-    ///
-    /// Unifies with any type
-    Diverges,
-
     /// Type wasn't properly formed.
     Error,
+
+    /// Diverging computation
+    Diverges,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -102,7 +136,8 @@ pub enum TypingError {
     },
 
     WrongArgumentAmnt {
-        amount: usize,
+        amount_given: usize,
+        amount_req: usize,
     },
 
     NoField {
@@ -112,6 +147,11 @@ pub enum TypingError {
 
     NotInstance {
         got: Cow<'static, str>,
+    },
+
+    MethodNotFound {
+        on_ty: Cow<'static, str>,
+        method_name: Cow<'static, str>,
     },
 }
 
@@ -126,7 +166,38 @@ impl TheresError for TypingError {
     }
 
     fn message(&self) -> Cow<'static, str> {
-        "type mismatch".into()
+        match self {
+            TypingError::TypeMismatch(expected, got) => {
+                format!("Expected type: {expected}, got: {got}")
+            }
+            TypingError::NoIndexOp { on } => format!("No index operation for type: {on}"),
+            TypingError::NoUnaryOp { on } => format!("No unary operation for type: {on}"),
+            TypingError::NoBinaryOp { lhs, rhs } => {
+                format!("No binary operation like that for type {lhs} and {rhs}")
+            }
+            TypingError::CallingNotFn { offender } => format!("Attempting to call type {offender}"),
+            TypingError::WrongArgumentTy {
+                expected,
+                got,
+                arg_idx,
+            } => format!("Argument {arg_idx} has type {got}, but expected type was: {expected}"),
+            TypingError::WrongArgumentAmnt {
+                amount_given,
+                amount_req,
+            } => {
+                format!("Invalid amount of arguments, got: {amount_given}, expected: {amount_req}")
+            }
+            TypingError::NotInstance { got } => {
+                format!("Attempted to access a field on type {got}")
+            }
+            TypingError::NoField { on, field_name } => {
+                format!("There is no field {field_name} on type {on}")
+            }
+            TypingError::MethodNotFound { on_ty, method_name } => {
+                format!("No method named {method_name} present on type {on_ty}")
+            }
+        }
+        .into()
     }
 
     fn amount_of_extra_lines() -> usize {
@@ -136,8 +207,7 @@ impl TheresError for TypingError {
 
 pub struct TypeEnv<'ty> {
     sess: &'ty Session<'ty>,
-    expr_to_ty: HashMap<&'ty Expr<'ty>, Ty<'ty>>,
-    hir_id_to_ty: HashMap<HirId, Ty<'ty>>,
+    expr_to_ty: HashMap<HirId, Ty<'ty>>,
     self_ty: Option<Ty<'ty>>,
 
     current_fn_ret_ty: Option<Ty<'ty>>,
@@ -149,7 +219,6 @@ impl<'ty> TypeEnv<'ty> {
             sess,
             current_fn_ret_ty: None,
             expr_to_ty: HashMap::new(),
-            hir_id_to_ty: HashMap::new(),
             self_ty: None,
         }
     }
@@ -174,6 +243,16 @@ impl<'ty> TypeEnv<'ty> {
         }
     }
 
+    pub fn type_of(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
+        if let Some(ty) = self.expr_to_ty.get(&expr.hir_id) {
+            return *ty;
+        }
+
+        let expr_ty = self.typeck_expr(expr);
+        self.expr_to_ty.insert(expr.hir_id, expr_ty);
+        expr_ty
+    }
+
     pub fn typeck_thing(&mut self, thing: &Thing<'_>) {
         match thing.kind {
             ThingKind::Fn { name: _, sig } => self.typeck_fn(sig),
@@ -190,10 +269,8 @@ impl<'ty> TypeEnv<'ty> {
                 init,
                 ty,
             } => {
-                let decl_ty = self
-                    .sess
-                    .lower_ty(ty, || unreachable!("no method self in globals"));
-                let expr_ty = self.typeck_expr(init);
+                let decl_ty = self.sess.lower_ty(ty);
+                let expr_ty = self.type_of(init);
 
                 if decl_ty == expr_ty {
                     self.sess.diag().emit_err(
@@ -211,7 +288,7 @@ impl<'ty> TypeEnv<'ty> {
     }
 
     pub fn typeck_bind(&mut self, bind: &Bind<'_>) {
-        let bind_self_ty = self.sess.lower_ty(bind.with, || self.get_self_ty());
+        let bind_self_ty = self.sess.lower_ty(bind.with);
         self.self_ty.replace(bind_self_ty);
 
         for item in bind.items {
@@ -219,7 +296,7 @@ impl<'ty> TypeEnv<'ty> {
                 BindItemKind::Fun { sig, name: _ } => self.typeck_fn(sig),
 
                 BindItemKind::Const { ty, expr, sym: _ } => {
-                    let const_decl_ty = self.sess.lower_ty(ty, || self.get_self_ty());
+                    let const_decl_ty = self.sess.lower_ty(ty);
                     let expr_ty = self.typeck_expr(expr);
 
                     if expr_ty != const_decl_ty {
@@ -236,17 +313,16 @@ impl<'ty> TypeEnv<'ty> {
         }
     }
 
-    pub fn typeck_fn(&mut self, sig: &FnSig<'_>) {
+    pub fn typeck_fn(&mut self, sig: &node::FnSig<'_>) {
         let body = self.sess.hir(|h| h.get_body(sig.body));
-        let return_type = self.sess.lower_ty(sig.return_type, || self.get_self_ty());
+        let return_type = self.sess.lower_ty(sig.return_type);
 
         let ty = self.typeck_expr(body);
 
-        let left = self.sess.stringify_ty(ty);
-        let right = self.sess.stringify_ty(return_type);
+        let left = self.sess.stringify_ty(return_type);
+        let right = self.sess.stringify_ty(ty);
 
         if return_type != ty {
-            dbg!(return_type, ty, return_type == ty);
             self.sess
                 .diag()
                 .emit_err(TypingError::TypeMismatch(left, right), sig.span);
@@ -258,28 +334,16 @@ impl<'ty> TypeEnv<'ty> {
         match expr.kind {
             ExprKind::Literal(lit) => match lit {
                 HirLiteral::Bool(..) => self.sess.bool(),
-                HirLiteral::Uint(num) => match num_to_int_ty(num) {
-                    IntTy::N8 => self.sess.u8(),
-                    IntTy::N16 => self.sess.u16(),
-                    IntTy::N32 => self.sess.u32(),
-                    IntTy::N64 => self.sess.u64(),
-                },
-
-                HirLiteral::Int(num) => match num_to_int_ty(num.cast_unsigned()) {
-                    IntTy::N8 => self.sess.i8(),
-                    IntTy::N16 => self.sess.i16(),
-                    IntTy::N32 => self.sess.i32(),
-                    IntTy::N64 => self.sess.i64(),
-                },
+                HirLiteral::Uint(..) | HirLiteral::Int(..) => todo!(),
 
                 HirLiteral::Str(_sym) => todo!("idk how to type strings yet Ok!"),
 
-                HirLiteral::Float(_float) => self.sess.f64(),
+                HirLiteral::Float(..) => self.sess.f64(),
             },
 
             ExprKind::Binary { lhs, rhs, op: _ } => {
-                let ty_lhs = self.typeck_expr(lhs);
-                let ty_rhs = self.typeck_expr(rhs);
+                let ty_lhs = self.type_of(lhs);
+                let ty_rhs = self.type_of(rhs);
 
                 #[allow(clippy::match_same_arms)] // todo
                 match (*ty_lhs, *ty_rhs) {
@@ -302,7 +366,7 @@ impl<'ty> TypeEnv<'ty> {
             }
 
             ExprKind::Unary { target, op: _ } => {
-                let ty = self.typeck_expr(target);
+                let ty = self.type_of(target);
 
                 if let TyKind::Bool | TyKind::Uint(..) | TyKind::Int(..) = *ty {
                     return ty;
@@ -318,11 +382,11 @@ impl<'ty> TypeEnv<'ty> {
                 self.sess.ty_err()
             }
 
-            ExprKind::Paren { inner } => self.typeck_expr(inner),
+            ExprKind::Paren { inner } => self.type_of(inner),
 
             ExprKind::Assign { variable, value } => {
-                let variable_ty = self.typeck_expr(variable);
-                let value_ty = self.typeck_expr(value);
+                let variable_ty = self.type_of(variable);
+                let value_ty = self.type_of(value);
 
                 if variable_ty != value_ty {
                     self.sess.diag().emit_err(
@@ -343,7 +407,7 @@ impl<'ty> TypeEnv<'ty> {
                 else_ifs,
                 otherwise,
             } => {
-                let cond_ty = self.typeck_expr(condition);
+                let cond_ty = self.type_of(condition);
                 if *cond_ty != TyKind::Bool {
                     self.type_mismatch_err(self.sess.bool(), cond_ty, condition.span);
                 }
@@ -362,7 +426,7 @@ impl<'ty> TypeEnv<'ty> {
                         );
                     }
 
-                    let elsif_ty = self.typeck_expr(elsif);
+                    let elsif_ty = self.type_of(elsif);
 
                     if *elsif_ty != TyKind::Bool {
                         self.sess.diag().emit_err(
@@ -395,9 +459,9 @@ impl<'ty> TypeEnv<'ty> {
             }
 
             ExprKind::Call { function, args } => {
-                let callable = self.typeck_expr(function);
+                let callable = self.type_of(function);
 
-                let TyKind::FnDef(def_id) = callable.0 else {
+                let TyKind::FnDef(def_id) = *callable.0 else {
                     self.sess.diag().emit_err(
                         TypingError::CallingNotFn {
                             offender: "".into(), // not sure?
@@ -408,26 +472,11 @@ impl<'ty> TypeEnv<'ty> {
                     return self.sess.ty_err();
                 };
 
-                let hir = self.sess.hir_ref();
-                let (sig, name) = hir.expect_fn(*def_id);
-
-                for (param, arg) in sig.arguments.iter().zip(args.iter()) {
-                    let param_ty = self.sess.lower_ty(param.ty, || self.get_self_ty());
-                    let arg_ty = self.typeck_expr(arg);
-
-                    if param_ty != arg_ty {
-                        todo!(
-                            "parameter has wrong type in fn: {}",
-                            name.interned.get_interned()
-                        )
-                    }
-                }
-
-                self.sess.lower_ty(sig.return_type, || self.get_self_ty())
+                self.verify_arguments_for_call(def_id, args, expr.span)
             }
 
             ExprKind::Return { expr: ret_expr } => {
-                let ty = ret_expr.map_or(self.sess.nil(), |elm| self.typeck_expr(elm));
+                let ty = ret_expr.map_or(self.sess.nil(), |elm| self.type_of(elm));
 
                 let ret_ty = self
                     .current_fn_ret_ty
@@ -445,8 +494,8 @@ impl<'ty> TypeEnv<'ty> {
                 value,
                 op,
             } => {
-                let variable_ty = self.typeck_expr(variable);
-                let expr_ty = self.typeck_expr(value);
+                let variable_ty = self.type_of(variable);
+                let expr_ty = self.type_of(value);
 
                 match (*variable_ty, *expr_ty) {
                     (TyKind::Uint(int_l), TyKind::Uint(int_r)) if int_l == int_r => expr_ty,
@@ -460,21 +509,34 @@ impl<'ty> TypeEnv<'ty> {
                 self.sess.nil()
             }
 
-            ExprKind::Field { src, field } => {
-                let src_ty = self.typeck_expr(src);
-
-                if let TyKind::Instance(def) = src_ty.0 {
-                    if let Some(found) = def.fields.iter().find(|f| f.name == field) {
+            ExprKind::Field {
+                src,
+                field: field_name,
+            } => {
+                let src_ty = self.type_of(src);
+                let err = if let TyKind::Instance(def) = src_ty.0 {
+                    if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
                         return self.sess.def_type_of(found.def_id);
                     }
 
-                    todo!("error: field named like {} not found", field.get_interned())
+                    TypingError::NoField {
+                        on: self.sess.stringify_ty(src_ty),
+                        field_name,
+                    }
                 } else {
-                    todo!("src was not an instance but: {src:#?}")
-                }
+                    TypingError::NotInstance {
+                        got: self.sess.stringify_ty(src_ty),
+                    }
+                };
+
+                self.sess.diag().emit_err(err, src.span);
+                self.sess.ty_err()
             }
 
-            ExprKind::Loop { .. } => self.sess.nil(),
+            ExprKind::Loop { body, reason: _ } => {
+                self.typeck_block(body);
+                self.sess.nil()
+            }
 
             ExprKind::Block(block) => self.typeck_block(block),
 
@@ -482,7 +544,7 @@ impl<'ty> TypeEnv<'ty> {
                 index,
                 indexed_thing,
             } => {
-                let src_ty = self.typeck_expr(indexed_thing);
+                let src_ty = self.type_of(indexed_thing);
 
                 let TyKind::Array(inner_ty) = src_ty.0 else {
                     self.sess.diag().emit_err(
@@ -495,7 +557,7 @@ impl<'ty> TypeEnv<'ty> {
                     return self.sess.ty_err();
                 };
 
-                let index_ty = self.typeck_expr(index);
+                let index_ty = self.type_of(index);
 
                 if self.sess.u64() != index_ty {
                     self.type_mismatch_err(self.sess.u64(), index_ty, expr.span);
@@ -527,9 +589,9 @@ impl<'ty> TypeEnv<'ty> {
                 .iter()
                 .fold(None, |state, expr| {
                     if state.is_none() {
-                        return Some(self.typeck_expr(expr));
+                        return Some(self.type_of(expr));
                     }
-                    self.typeck_expr(expr);
+                    self.type_of(expr);
                     state
                 })
                 .expect("cannot fail as comma'd exprs have >1 exprs!"),
@@ -541,79 +603,33 @@ impl<'ty> TypeEnv<'ty> {
                 method,
                 args,
             } => {
-                let recv_ty = self.typeck_expr(receiver);
+                let recv_ty = self.type_of(receiver);
                 let mut ret_ty = self.sess.ty_err();
 
                 self.sess.binds_for_ty(recv_ty, |binds| {
-                    let Some((res_sig, _res_name)) = binds
+                    let Some((def_id, _, span)) = binds
                         .iter()
                         .flat_map(|x| x.items.iter())
                         .filter_map(|item| {
-                            let BindItemKind::Fun { sig, name } = item.kind else {
+                            let BindItemKind::Fun { sig: _, name } = item.kind else {
                                 return None;
                             };
 
-                            Some((sig, name))
+                            Some((item.def_id, name, item.span))
                         })
-                        .find(|(_, name)| name == &method)
+                        .find(|(_, name, _)| name == &method)
                     else {
+                        self.sess.diag().emit_err(
+                            TypingError::MethodNotFound {
+                                on_ty: self.sess.stringify_ty(recv_ty),
+                                method_name: method.get_interned().to_string().into(),
+                            },
+                            receiver.span,
+                        );
                         return;
                     };
 
-                    let self_ty = self.get_self_ty();
-                    let mut sigs = res_sig
-                        .arguments
-                        .iter()
-                        .map(|param| self.sess.lower_ty(param.ty, || self_ty));
-
-                    let mut call_tys = args.iter();
-
-                    let amount_of_args = res_sig.arguments.len();
-                    let given_args = args.len();
-
-                    #[allow(clippy::match_same_arms)] // todo
-                    match amount_of_args.cmp(&given_args) {
-                        Ordering::Less => self.sess.diag().emit_err(
-                            TypingError::WrongArgumentAmnt { amount: given_args },
-                            expr.span,
-                        ),
-                        Ordering::Greater => self.sess.diag().emit_err(
-                            TypingError::WrongArgumentAmnt { amount: given_args },
-                            expr.span,
-                        ),
-                        Ordering::Equal => (),
-                    }
-
-                    let mut ix = 1;
-                    loop {
-                        match (
-                            sigs.next(),
-                            call_tys.next().map(|expr| self.typeck_expr(expr)),
-                        ) {
-                            (Some(sig_ty), Some(call_ty)) => {
-                                if sig_ty != call_ty {
-                                    self.type_mismatch_err(sig_ty, call_ty, expr.span);
-                                }
-
-                                ix += 1;
-                            }
-                            (Some(..), None) | (None, Some(..)) => {
-                                self.sess.diag().emit_err(
-                                    TypingError::WrongArgumentAmnt { amount: ix },
-                                    expr.span,
-                                );
-                                ix += 1;
-                                continue;
-                            }
-                            (None, None) => break,
-                        }
-
-                        ix += 1;
-                    }
-
-                    ret_ty = self
-                        .sess
-                        .lower_ty(res_sig.return_type, || self.get_self_ty());
+                    ret_ty = self.verify_arguments_for_call(def_id, args, span);
                 });
 
                 ret_ty
@@ -624,15 +640,15 @@ impl<'ty> TypeEnv<'ty> {
                 init,
                 size,
             } => {
-                let size_ty = self.typeck_expr(size);
+                let size_ty = self.type_of(size);
                 if self.sess.u64() != size_ty {
                     self.type_mismatch_err(self.sess.u64(), size_ty, expr.span);
                 }
 
-                let array_ty = self.sess.lower_ty(ty_of_array, || self.get_self_ty());
+                let array_ty = self.sess.lower_ty(ty_of_array);
 
                 for expr in init {
-                    let expr_ty = self.typeck_expr(expr);
+                    let expr_ty = self.type_of(expr);
 
                     if expr_ty != array_ty {
                         self.type_mismatch_err(array_ty, expr_ty, expr.span);
@@ -651,7 +667,7 @@ impl<'ty> TypeEnv<'ty> {
 
         block
             .expr
-            .map_or(self.sess.nil(), |expr| self.typeck_expr(expr))
+            .map_or(self.sess.nil(), |expr| self.type_of(expr))
     }
 
     pub fn typeck_stmt(&mut self, stmt: &Stmt<'_>) {
@@ -668,15 +684,15 @@ impl<'ty> TypeEnv<'ty> {
 
     pub fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
         let init_ty = local.init.map(|expr| self.typeck_expr(expr));
-        let local_decl_ty = self.sess.lower_ty(local.ty, || self.get_self_ty());
+        let local_decl_ty = self.sess.lower_ty(local.ty);
 
         if let Some(ty) = init_ty
             && ty != local_decl_ty
         {
-            self.type_mismatch_err(ty, local_decl_ty, local.ty.span);
+            self.type_mismatch_err(local_decl_ty, ty, local.ty.span);
         }
 
-        init_ty.unwrap_or(local_decl_ty)
+        local_decl_ty
     }
 
     fn type_mismatch_err(&self, expected: Ty<'ty>, got: Ty<'ty>, span: Span) {
@@ -688,9 +704,55 @@ impl<'ty> TypeEnv<'ty> {
             span,
         );
     }
+
+    fn verify_arguments_for_call(
+        &mut self,
+        def_id: DefId,
+        args: &[Expr<'_>],
+        span: Span,
+    ) -> Ty<'ty> {
+        let sig = self.sess.fn_sig_for(def_id);
+
+        let amount_of_args = sig.inputs.len();
+        let given_args = args.len();
+
+        let mut sig_tys = self.sess.fn_sig_for(def_id).inputs.iter().copied();
+
+        let mut call_tys = args.iter();
+
+        if amount_of_args != given_args {
+            self.sess.diag().emit_err(
+                TypingError::WrongArgumentAmnt {
+                    amount_given: given_args,
+                    amount_req: amount_of_args,
+                },
+                span,
+            );
+        }
+
+        loop {
+            match (
+                sig_tys.next(),
+                call_tys.next().map(|expr| self.typeck_expr(expr)),
+            ) {
+                (Some(sig_ty), Some(call_ty)) => {
+                    if sig_ty != call_ty {
+                        self.type_mismatch_err(sig_ty, call_ty, span);
+                    }
+                }
+                (Some(..), None) | (None, Some(..)) => {}
+                (None, None) => break,
+            }
+        }
+
+        sig.output
+    }
 }
 
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) -> TypeEnv<'a> {
+    let mut collector = FnSigLowerer { sess: session };
+    collector.visit_universe(universe);
+
     let mut env = TypeEnv::new(session);
 
     env.typeck_universe(universe);

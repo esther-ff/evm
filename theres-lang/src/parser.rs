@@ -468,15 +468,18 @@ impl Parser {
     }
 
     fn bind_item(&mut self) -> Result<BindItem> {
-        let item = match self.lexemes.peek_token().kind {
-            TokenKind::Function => BindItem::Fun(self.function_declaration()?),
+        let kind = match self.lexemes.peek_token().kind {
+            TokenKind::Function => BindItemKind::Fun(self.function_declaration()?),
             TokenKind::Const => {
-                BindItem::Const(self.local_variable_stmt(VariableReq::ConstAndInit)?)
+                BindItemKind::Const(self.local_variable_stmt(VariableReq::ConstAndInit)?)
             }
             _ => todo!(),
         };
 
-        Ok(item)
+        Ok(BindItem {
+            kind,
+            id: self.new_id(),
+        })
     }
 
     fn instance_decl(&mut self) -> Result<ThingKind> {

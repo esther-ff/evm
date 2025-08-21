@@ -15,7 +15,10 @@ arg            → IDENT ":" type ;
 globalDecl     → "global" ( "const" )? 
   				 IDENT ":" IDENT ("=" expression)? ";" ;
 
-instanceDecl   → "instance" IDENT genericParams "{" ( instanceField )* "}" ( "with" block )? ;
+bindDecl       → "bind" ty "with" path? "(" bindItems* ")" ;
+bindItems      → ( funDecl | ("const" IDENT ":" type "=" expression) )* ;
+
+instanceDecl   → "instance" IDENT genericParams "{" ( instanceField )* "}";
 instanceField  → "const"? IDENT ":" type ";" ;
 
 interfaceDecl  → "interface" IDENT "{" interfaceField* "}" ;

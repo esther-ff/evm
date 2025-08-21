@@ -42,6 +42,7 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
             kind,
             span: _,
             hir_id,
+            def_id: _,
         } = thing;
 
         self.m.insert_node(Node::Thing(thing), *hir_id);
@@ -66,6 +67,19 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
                 self.visit_ty(with),
                 visit_iter!(v: self, m: visit_bind_item, *items)
             ),
+        }
+    }
+
+    fn visit_bind_item(&mut self, bind_item: &'hir node::BindItem<'hir>) -> Self::Result {
+        self.m
+            .insert_node(Node::BindItem(bind_item), bind_item.hir_id);
+
+        match bind_item.kind {
+            node::BindItemKind::Fun { sig, name: _ } => self.visit_fn_sig(sig),
+            node::BindItemKind::Const { ty, expr, sym: _ } => {
+                self.visit_ty(ty);
+                self.visit_expr(expr);
+            }
         }
     }
 
@@ -199,6 +213,15 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
             StmtKind::Local(local) => self.visit_local(local),
             StmtKind::Expr(expr) => self.visit_expr(expr),
             StmtKind::Thing(thing) => self.visit_thing(thing),
+        }
+    }
+
+    fn visit_local(&mut self, local: &'hir node::Local<'hir>) -> Self::Result {
+        self.m.insert_node(Node::Local(local), local.hir_id);
+
+        self.visit_ty(local.ty);
+        if let Some(expr) = local.init {
+            self.visit_expr(expr);
         }
     }
 }

@@ -576,7 +576,13 @@ pub struct Bind {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub enum BindItem {
+pub struct BindItem {
+    pub kind: BindItemKind,
+    pub id: AstId,
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub enum BindItemKind {
     Const(VariableStmt),
     Fun(FnDecl),
 }
@@ -859,9 +865,11 @@ pub trait Visitor<'a> {
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
-        match val {
-            BindItem::Const(var) => self.visit_var_stmt(var),
-            BindItem::Fun(f) => self.visit_fn_decl(f),
+        let BindItem { kind, id: _ } = val;
+
+        match kind {
+            BindItemKind::Const(var) => self.visit_var_stmt(var),
+            BindItemKind::Fun(f) => self.visit_fn_decl(f),
         }
     }
 

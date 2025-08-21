@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     cell::{Ref, RefCell},
+    collections::HashMap,
     fmt::Write,
     hash::Hash,
     ops::Deref,
@@ -8,20 +9,18 @@ use std::{
     sync::{LazyLock, Mutex, MutexGuard},
 };
 
-use hashbrown::HashMap;
-
 use crate::{
     arena::Arena,
     errors::DiagEmitter,
     hir::{
         def::{DefId, DefType, IntTy, PrimTy, Resolved},
         lowering_ast::HirMap,
-        node::{self, Field, Node, Param, ThingKind},
+        node::{self, Field, Node, ThingKind},
     },
     id::{IdxSlice, IdxVec},
     lexer::LexError,
     parser::ParseError,
-    ty::{FieldDef, Instance, InstanceDef, Ty, TyKind},
+    ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind},
 };
 
 pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
@@ -230,6 +229,10 @@ pub struct Session<'sess> {
     types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
 
+    def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
+
+    fn_sigs: RefCell<HashMap<DefId, FnSig<'sess>>>,
+
     diags: &'sess DiagEmitter<'sess>,
 }
 
@@ -237,9 +240,11 @@ impl<'sess> Session<'sess> {
     pub fn new(diags: &'sess DiagEmitter<'sess>) -> Self {
         Self {
             arena: Arena::new(),
+            def_id_to_instance_interned: RefCell::new(HashMap::new()),
             hir_map: RefCell::new(HirMap::new()),
             types: RefCell::new(Pool::new()),
             instances: RefCell::new(Pool::new()),
+            fn_sigs: RefCell::new(HashMap::new()),
             diags,
         }
     }
@@ -278,17 +283,25 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
-        match self.types.borrow_mut().get(&ty) {
-            Some(r) => *r,
-            None => Pooled(self.arena().alloc(ty)),
+        let mut tys = self.types.borrow_mut();
+        if let Some(pooled) = tys.get(&ty).copied() {
+            return pooled;
         }
+
+        let new = Pooled(self.arena().alloc(ty));
+        tys.insert(ty, new);
+        new
     }
 
     pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
-        match self.instances.borrow_mut().get(&def) {
-            Some(r) => *r,
-            None => Pooled(self.arena().alloc(def)),
+        let mut instances = self.instances.borrow_mut();
+        if let Some(pooled) = instances.get(&def).copied() {
+            return pooled;
         }
+
+        let new = Pooled(self.arena().alloc(def));
+        instances.insert(def, new);
+        new
     }
 
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
@@ -299,23 +312,41 @@ impl<'sess> Session<'sess> {
                     self.intern_instance_def(self.gen_instance_def(fields, name.interned)),
                 )),
 
-                ThingKind::Global { ty, .. } => {
-                    self.lower_ty(ty, || unreachable!("`Self` in global item"))
-                }
+                ThingKind::Global { ty, .. } => self.lower_ty(ty),
 
                 ThingKind::Realm { .. } => panic!("A realm doesn't have a type!"),
                 ThingKind::Bind { .. } => panic!("A bind doesn't have a type!"),
             },
 
-            Node::Field(field) => self.hir(|map| {
-                self.lower_ty(field.ty, || {
-                    let instance_id = map.get_instance_of_field(field.def_id);
-                    self.def_type_of(instance_id)
-                })
-            }),
+            Node::Field(field) => self.lower_ty(field.ty),
+
+            Node::BindItem(item) => match item.kind {
+                node::BindItemKind::Fun { .. } => self.intern_ty(TyKind::FnDef(def_id)),
+                node::BindItemKind::Const { ty, .. } => self.lower_ty(ty),
+            },
 
             any => panic!("Can't express type for {any:?}"),
         })
+    }
+
+    pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
+        self.fn_sigs
+            .borrow()
+            .get(&def_id)
+            .copied()
+            .unwrap_or_else(|| panic!("No fn sig for def id: {def_id}"))
+    }
+
+    pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
+        let sig = FnSig {
+            inputs: self
+                .arena()
+                .alloc_from_iter(sig.arguments.iter().map(|param| self.lower_ty(param.ty))),
+
+            output: self.lower_ty(sig.return_type),
+        };
+
+        self.fn_sigs.borrow_mut().insert(def_id, sig);
     }
 
     pub fn binds_for_ty<F, R>(&'sess self, ty: Ty<'sess>, work: F) -> R
@@ -328,19 +359,47 @@ impl<'sess> Session<'sess> {
                 .into_iter()
                 .filter_map(node::Node::get_thing)
                 .filter_map(node::Thing::get_bind)
-                .filter(|b| self.lower_ty(b.with, || unreachable!("self type in bind")) == ty)
+                .filter(|b| self.lower_ty(b.with) == ty)
                 .collect(),
         )
     }
 
-    pub fn lower_ty<'a, F>(&'sess self, ty: &node::Ty<'a>, method_self: F) -> Ty<'sess>
+    pub fn instance_def(&'sess self, def_id: DefId) -> Instance<'sess> {
+        if let Some(v) = self.def_id_to_instance_interned.borrow().get(&def_id) {
+            return *v;
+        }
+
+        let hir = self.hir_ref();
+        let (fields, name) = hir.expect_instance(def_id);
+
+        let instance_def = InstanceDef {
+            fields: IdxSlice::new(self.arena().alloc_from_iter(fields.iter().map(|field| {
+                FieldDef {
+                    def_id: field.def_id,
+                    name: field.name.interned,
+                    mutable: field.mutability,
+                }
+            }))),
+            name: name.interned,
+        };
+
+        let mut instances = self.instances.borrow_mut();
+        if let Some(pooled) = instances.get(&instance_def).copied() {
+            return pooled;
+        }
+
+        let new = Pooled(self.arena().alloc(instance_def));
+        instances.insert(instance_def, new);
+        new
+    }
+
+    pub fn lower_ty<'a>(&'sess self, ty: &node::Ty<'a>) -> Ty<'sess>
     where
-        F: FnOnce() -> Ty<'sess>,
         'sess: 'a,
     {
         let tykind = match ty.kind {
-            node::TyKind::MethodSelf => return method_self(),
-            node::TyKind::Array(array_ty) => TyKind::Array(self.lower_ty(array_ty, method_self)),
+            node::TyKind::MethodSelf => todo!("get rid of this"),
+            node::TyKind::Array(array_ty) => TyKind::Array(self.lower_ty(array_ty)),
             node::TyKind::Path(path) => match path.res {
                 Resolved::Prim(prim) => match prim {
                     PrimTy::Uint(size) => TyKind::Uint(size),
@@ -453,7 +512,7 @@ impl<'sess> Session<'sess> {
 
                 for (ix, param) in sig.arguments.iter().enumerate() {
                     // i'll handle this later ok!
-                    let ty = self.lower_ty(param.ty, || self.ty_err());
+                    let ty = self.lower_ty(param.ty);
                     self.stringfy_string_helper(buf, *ty);
 
                     if ix != sig.arguments.len() {
@@ -463,7 +522,7 @@ impl<'sess> Session<'sess> {
 
                 buf.push(')');
                 buf.push_str("=> ");
-                self.stringfy_string_helper(buf, *self.lower_ty(sig.return_type, || self.ty_err()));
+                self.stringfy_string_helper(buf, *self.lower_ty(sig.return_type));
 
                 return;
             }

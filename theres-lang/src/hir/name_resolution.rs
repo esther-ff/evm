@@ -1,7 +1,7 @@
 use super::def::{DefId, DefMap, DefType, Definitions, IntTy, PrimTy, Resolved};
 use crate::ast::{
-    AstId, Bind, BindItem, Block, Expr, ExprType, Field, FnDecl, FnSig, Instance, Name, Path,
-    Realm, Stmt, StmtKind, Ty, TyKind, Universe, VariableStmt, Visitor,
+    AstId, Bind, BindItem, BindItemKind, Block, Expr, ExprType, Field, FnDecl, FnSig, Instance,
+    Name, Path, Realm, Stmt, StmtKind, Ty, TyKind, Universe, VariableStmt, Visitor,
 };
 
 use crate::hir::lowering_ast::Mappings;
@@ -125,11 +125,12 @@ where
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
-        match val {
-            BindItem::Const(stmt) => {
+        self.register_defn(val.id, DefType::Bind, Name::DUMMY);
+        match val.kind {
+            BindItemKind::Const(ref stmt) => {
                 self.register_defn(stmt.id, DefType::Const, stmt.name);
             }
-            BindItem::Fun(f) => self.visit_fn_decl(f),
+            BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
     }
 
@@ -471,8 +472,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
-        match val {
-            BindItem::Const(var_stmt) => {
+        match val.kind {
+            BindItemKind::Const(ref var_stmt) => {
                 let def_id = self.get_def_id(var_stmt.id);
                 self.with_current_scope_mut(|scope| {
                     scope.add(
@@ -484,7 +485,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 self.visit_var_stmt(var_stmt);
             }
 
-            BindItem::Fun(f) => self.visit_fn_decl(f),
+            BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
     }
 

@@ -11,7 +11,7 @@ use crate::{
     hir,
     lexer::{Lexemes, Lexer},
     parser::Parser,
-    session::{DIAG_CTXT, Session},
+    session::{Session, DIAG_CTXT},
     sources::{FileManager, SourceFile, SourceId, Sources},
     ty::typeck_universe,
 };

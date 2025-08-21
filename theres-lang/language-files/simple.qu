@@ -1,8 +1,10 @@
-instance Simple {
+instance Simple (
 	field: nil
-} with {
+) 
+
+bind Simple with (
 	const SimpleConst: Simple = 1;
-}
+)
 
 realm RealmOne {
 	fun meow() => nil {
@@ -18,11 +20,16 @@ fun main() => i32 {
 
 	let varA: i32 = 1;
 	let bindA: i32 = varA + 1; # a is symbol 11
-	let function: u32 = d();
+	let function: u32 = d(1, 2, 3);
 
 	let realmRef: nil = RealmOne::meow();
 
 	let ConstToVar: u32 = Simple::SimpleConst;
+	let cond: bool = true;
+
+	while cond {
+		d(1);
+	}
 }
 
 fun d() => u32 {

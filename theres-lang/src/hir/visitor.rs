@@ -33,6 +33,7 @@ pub trait HirVisitor<'hir> {
             kind,
             span: _,
             hir_id: _,
+            def_id: _,
         } = thing;
         match kind {
             ThingKind::Fn { name: _, sig } => self.visit_fn_sig(sig),
@@ -67,6 +68,7 @@ pub trait HirVisitor<'hir> {
             hir_id: _,
             span: _,
             kind,
+            def_id: _,
         } = bind_item;
 
         match kind {

@@ -1,13 +1,15 @@
-instance MyInstance {
+instance MyInstance (
     const field: type,
     fieldA: type,
-} with {
+)
+
+bind MyInstance with (
     const InstanceConst: type = 2;
     
     fun method(self, arg1: type) => type {
         
     };
-}
+)
 
 interface A {
     const Constant: type = 1

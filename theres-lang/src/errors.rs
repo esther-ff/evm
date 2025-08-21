@@ -89,7 +89,9 @@ impl Message {
         let msg_indent = self.attached_to.end() - self.attached_to.start();
         writeln!(writer, "{:<indent$}| ", " ")?;
         write!(writer, "{:<indent$}| ", " ")?;
-        writeln!(writer, "{msg:>msg_indent$}", msg = self.msg)
+        writeln!(writer, "{msg:>msg_indent$}", msg = self.msg)?;
+
+        writeln!(writer, "{:<indent$}| ", " ")
     }
 }
 
@@ -173,7 +175,7 @@ impl<'a> DiagEmitterInner<'a> {
         let lines = self.get_lines(span.sourceid, origin, extra_lines);
         let indent = longest_line_number_from_origin(origin, extra_lines) as usize;
 
-        writeln!(self.stderr, "error during {}:", T::phase())?;
+        writeln!(self.stderr, "{} error! aaaah!", T::phase())?;
 
         for (ix, line) in lines.iter().enumerate() {
             let line_number = ix + line_nr_offset;
@@ -198,6 +200,8 @@ impl<'a> DiagEmitterInner<'a> {
         }
 
         self.err_amount += 1;
+
+        writeln!(self.stderr).unwrap();
 
         Ok(())
     }

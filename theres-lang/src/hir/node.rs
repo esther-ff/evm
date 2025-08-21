@@ -10,6 +10,9 @@ use crate::{
 
 #[derive(Debug, Clone, Copy)]
 pub enum Node<'h> {
+    Local(&'h Local<'h>),
+
+    BindItem(&'h BindItem<'h>),
     Thing(&'h Thing<'h>),
     Expr(&'h Expr<'h>),
     Block(&'h Block<'h>),
@@ -283,14 +286,17 @@ pub struct Thing<'h> {
     pub kind: ThingKind<'h>,
     pub span: Span,
     pub hir_id: HirId,
+    pub def_id: DefId,
 }
 
 impl<'h> Thing<'h> {
-    pub fn new(kind: ThingKind<'h>, span: Span, id: HirId) -> Self {
+    pub fn new(kind: ThingKind<'h>, span: Span, id: HirId, def_id: DefId) -> Self {
         Self {
-            hir_id: id,
             span,
             kind,
+
+            hir_id: id,
+            def_id,
         }
     }
 
@@ -340,13 +346,19 @@ pub struct Bind<'h> {
 #[derive(Debug, Clone, Copy)]
 pub struct BindItem<'h> {
     pub hir_id: HirId,
+    pub def_id: DefId,
     pub span: Span,
     pub kind: BindItemKind<'h>,
 }
 
 impl<'h> BindItem<'h> {
-    pub fn new(hir_id: HirId, span: Span, kind: BindItemKind<'h>) -> Self {
-        Self { hir_id, span, kind }
+    pub fn new(hir_id: HirId, def_id: DefId, span: Span, kind: BindItemKind<'h>) -> Self {
+        Self {
+            hir_id,
+            def_id,
+            span,
+            kind,
+        }
     }
 }
 

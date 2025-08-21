@@ -118,9 +118,15 @@ impl<'hir> HirMap<'hir> {
         }
     }
 
+    #[track_caller]
     pub fn map_def_id_to_hir(&mut self, def_id: DefId, hir_id: HirId) {
+        dbg!(def_id, hir_id);
         let dbg = self.def_id_to_hir_id.insert(def_id, hir_id);
-        assert!(dbg.is_none(), "{def_id:?} already mapped to a HirId!");
+        assert!(
+            dbg.is_none(),
+            "{def_id:?} already mapped to a HirId!, loc: {}",
+            Location::caller()
+        );
     }
 
     pub fn map_field_to_instance(&mut self, instance: DefId, field: DefId) {
@@ -156,13 +162,10 @@ impl<'hir> HirMap<'hir> {
         thing
     }
 
+    #[track_caller]
     pub fn get_local(&'hir self, hir_id: HirId) -> &'hir node::Local<'hir> {
-        let node::Node::Stmt(stmt) = self.get_node(hir_id) else {
-            panic!("hir id doesn't point to a stmt")
-        };
-
-        let node::StmtKind::Local(local) = stmt.kind else {
-            panic!("hir id doesn't point to a local")
+        let node::Node::Local(local) = self.get_node(hir_id) else {
+            panic!("hir id doesn't point to a stmt",)
         };
 
         local
@@ -176,9 +179,13 @@ impl<'hir> HirMap<'hir> {
         self.nodes.values()
     }
 
+    #[track_caller]
     pub fn get_node(&'hir self, hir_id: HirId) -> &'hir Node<'hir> {
         match self.nodes.get(&hir_id) {
-            None => panic!("Invalid `HirId` ({hir_id:?}) given to `get_node`!"),
+            None => panic!(
+                "Invalid `HirId` ({hir_id:?}) given to `get_node`! loc: {}",
+                Location::caller()
+            ),
             Some(node) => node,
         }
     }
@@ -266,6 +273,11 @@ impl<'hir> AstLowerer<'hir> {
             ret.unwrap(),
             Location::caller()
         );
+
+        if let Some(def_id) = self.map.ast_id_to_def_id.get(&ast_id) {
+            self.session
+                .hir_mut(|map| map.map_def_id_to_hir(*def_id, hir_id));
+        }
 
         hir_id
     }
@@ -573,9 +585,9 @@ impl<'hir> AstLowerer<'hir> {
             VarMode::Const => Constant::Yes,
         };
 
-        // let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
+        let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
         let ty = self.lower_ty(&var.ty);
-        let local = node::Local::new(mutability, var.name, self.next_hir_id(var.id), ty, None);
+        let local = node::Local::new(mutability, var.name, self.next_hir_id(var.id), ty, init);
 
         self.session.arena().alloc(local)
     }
@@ -618,7 +630,12 @@ impl<'hir> AstLowerer<'hir> {
             _ => todo!("other parts "),
         };
 
-        node::Thing::new(kind, thing.kind.span(), self.new_hir_id())
+        node::Thing::new(
+            kind,
+            thing.kind.span(),
+            self.new_hir_id(),
+            self.map.def_id_of(thing.id),
+        )
     }
 
     pub fn lower_bind(&mut self, bind: &Bind) -> node::Thing<'hir> {
@@ -633,12 +650,13 @@ impl<'hir> AstLowerer<'hir> {
             }),
             bind.span,
             self.next_hir_id(bind.id),
+            self.map.def_id_of(bind.id),
         )
     }
 
     pub fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'hir> {
-        let (lowered_kind, ast_id, span) = match kind {
-            BindItem::Const(variable) => (
+        let (lowered_kind, ast_id, span) = match &kind.kind {
+            BindItemKind::Const(variable) => (
                 node::BindItemKind::Const {
                     ty: self.lower_ty(&variable.ty),
                     expr: self.lower_expr(
@@ -653,7 +671,7 @@ impl<'hir> AstLowerer<'hir> {
                 variable.name.span,
             ),
 
-            BindItem::Fun(fn_decl) => {
+            BindItemKind::Fun(fn_decl) => {
                 let body = self.session.arena().alloc(node::Expr::new(
                     node::ExprKind::Block(self.lower_block(&fn_decl.block)),
                     fn_decl.span,
@@ -677,7 +695,12 @@ impl<'hir> AstLowerer<'hir> {
             }
         };
 
-        node::BindItem::new(self.next_hir_id(ast_id), span, lowered_kind)
+        node::BindItem::new(
+            self.next_hir_id(ast_id),
+            self.map.def_id_of(ast_id),
+            span,
+            lowered_kind,
+        )
     }
 
     pub fn lower_fn_decl(&mut self, fn_decl: &FnDecl) -> node::Thing<'hir> {
@@ -700,6 +723,7 @@ impl<'hir> AstLowerer<'hir> {
             },
             fn_decl.span,
             self.next_hir_id(fn_decl.id),
+            def_id,
         )
     }
 
@@ -755,7 +779,7 @@ impl<'hir> AstLowerer<'hir> {
 
         self.current_instance.take();
 
-        node::Thing::new(kind, *span, hir_id)
+        node::Thing::new(kind, *span, hir_id, def_id)
     }
 
     pub fn lower_field(&mut self, field: &Field) -> node::Field<'hir> {
@@ -768,7 +792,7 @@ impl<'hir> AstLowerer<'hir> {
 
         self.session.hir_mut(|x| {
             x.field_to_instance.insert(def_id, current_instance);
-            x.map_def_id_to_hir(def_id, hir_id);
+            // x.map_def_id_to_hir(def_id, hir_id);
         });
 
         node::Field::new(
