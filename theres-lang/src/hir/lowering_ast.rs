@@ -69,6 +69,7 @@ impl Mappings {
         }
     }
 
+    #[track_caller]
     pub fn def_id_of(&self, id: AstId) -> DefId {
         match self.ast_id_to_def_id.get(&id) {
             Some(id) => *id,
@@ -621,37 +622,33 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     pub fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'hir> {
+        let def_id = self.map.def_id_of(thing.id);
+        let hir_id = self.next_hir_id(thing.id);
+
+        self.session
+            .hir_mut(|x| x.def_id_to_hir_id.insert(def_id, hir_id));
+
         let kind = match &thing.kind {
-            ThingKind::Function(decl) => return self.lower_fn_decl(decl),
-            ThingKind::Instance(inst) => return self.lower_instance(inst),
-            ThingKind::Bind(bind) => return self.lower_bind(bind),
+            ThingKind::Function(decl) => self.lower_fn_decl(decl, def_id),
+            ThingKind::Instance(inst) => self.lower_instance(inst, def_id),
+            ThingKind::Bind(bind) => self.lower_bind(bind),
             ThingKind::Realm(realm) => self.lower_realm(realm),
 
             _ => todo!("other parts "),
         };
 
-        node::Thing::new(
-            kind,
-            thing.kind.span(),
-            self.new_hir_id(),
-            self.map.def_id_of(thing.id),
-        )
+        node::Thing::new(kind, thing.kind.span(), hir_id, def_id)
     }
 
-    pub fn lower_bind(&mut self, bind: &Bind) -> node::Thing<'hir> {
-        node::Thing::new(
-            node::ThingKind::Bind(node::Bind {
-                with: self.lower_ty(&bind.victim),
-                items: self
-                    .session
-                    .arena()
-                    .alloc_from_iter(bind.items.iter().map(|item| self.lower_bind_item(item))),
-                mask: None,
-            }),
-            bind.span,
-            self.next_hir_id(bind.id),
-            self.map.def_id_of(bind.id),
-        )
+    pub fn lower_bind(&mut self, bind: &Bind) -> node::ThingKind<'hir> {
+        node::ThingKind::Bind(node::Bind {
+            with: self.lower_ty(&bind.victim),
+            items: self
+                .session
+                .arena()
+                .alloc_from_iter(bind.items.iter().map(|item| self.lower_bind_item(item))),
+            mask: None,
+        })
     }
 
     pub fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'hir> {
@@ -703,7 +700,7 @@ impl<'hir> AstLowerer<'hir> {
         )
     }
 
-    pub fn lower_fn_decl(&mut self, fn_decl: &FnDecl) -> node::Thing<'hir> {
+    pub fn lower_fn_decl(&mut self, fn_decl: &FnDecl, def_id: DefId) -> node::ThingKind<'hir> {
         let expr_body = node::Expr::new(
             node::ExprKind::Block(self.lower_block(&fn_decl.block)),
             fn_decl.span,
@@ -711,20 +708,14 @@ impl<'hir> AstLowerer<'hir> {
         );
 
         let body = self.session.arena().alloc(expr_body);
-        let def_id = self.map.def_id_of(fn_decl.id);
 
-        node::Thing::new(
-            node::ThingKind::Fn {
-                name: fn_decl.sig.name,
-                sig: self.lower_fn_sig(
-                    &fn_decl.sig,
-                    self.session.hir_mut(|map| map.insert_body_of(body, def_id)),
-                ),
-            },
-            fn_decl.span,
-            self.next_hir_id(fn_decl.id),
-            def_id,
-        )
+        node::ThingKind::Fn {
+            name: fn_decl.sig.name,
+            sig: self.lower_fn_sig(
+                &fn_decl.sig,
+                self.session.hir_mut(|map| map.insert_body_of(body, def_id)),
+            ),
+        }
     }
 
     pub fn lower_fn_sig(&mut self, sig: &FnSig, body_id: BodyId) -> &'hir node::FnSig<'hir> {
@@ -753,46 +744,30 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     #[track_caller]
-    pub fn lower_instance(&mut self, inst: &Instance) -> node::Thing<'hir> {
-        let Instance {
-            name,
-            span,
-            fields,
-            generics: _,
-            id,
-        } = inst;
-
-        let hir_id = self.next_hir_id(*id);
-        let def_id = self.map.def_id_of(*id);
-
-        self.session
-            .hir_mut(|x| x.def_id_to_hir_id.insert(def_id, hir_id));
+    pub fn lower_instance(&mut self, inst: &Instance, def_id: DefId) -> node::ThingKind<'hir> {
         self.current_instance.replace(def_id);
 
         let kind = node::ThingKind::Instance {
-            fields: self
-                .session
-                .arena()
-                .alloc_from_iter(fields.iter().map(|f| self.lower_field(f))),
-            name: *name,
+            fields: self.session.arena().alloc_from_iter(
+                inst.fields
+                    .iter()
+                    .map(|ast_field| self.lower_field(ast_field, def_id)),
+            ),
+            name: inst.name,
         };
 
         self.current_instance.take();
 
-        node::Thing::new(kind, *span, hir_id, def_id)
+        kind
     }
 
-    pub fn lower_field(&mut self, field: &Field) -> node::Field<'hir> {
+    pub fn lower_field(&mut self, field: &Field, current_instance: DefId) -> node::Field<'hir> {
         let def_id = self.map.def_id_of(field.id);
-        let current_instance = self
-            .current_instance
-            .expect("Visiting field outside an instance?");
 
         let hir_id = self.next_hir_id(field.id);
 
         self.session.hir_mut(|x| {
             x.field_to_instance.insert(def_id, current_instance);
-            // x.map_def_id_to_hir(def_id, hir_id);
         });
 
         node::Field::new(

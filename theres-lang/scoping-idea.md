@@ -1,5 +1,7 @@
-scope #0
+# Weird idea how to handle privacy in blocks and realms alike.
+
 ```rs
+// scope #0
 fn main() {
     // scope #1 (anchor: #0)
 
@@ -16,25 +18,43 @@ fn main() {
 ```
 
 Path undertaken: #0 -> #1 -> #2 -> #1 -> #3 -> #0
+
 The idea is to build a scope map and a scope path
-so we'd build a path like that to basically traverse the scopes later for resolving stuff like local variables
-This would allow me to first record the existence of items (like fns)
-How would the path work?
-I think something like
+so we'd build a path like that to basically traverse the scopes later for resolving stuff like local variables.
+
+This would allow me to first record the existence of items which allows us to function like a modern compiler.
+
+How would the path look?
+I think something like 
 #0 -> #1 -> #2 -> #1 -> #3 -> #0
-Enter scope 0 -> resolve -> enter scope 1 -> resolve from it's anchor (#0)
-then, enter scope #2 and resolve from it's anchor (#1 -> #0), after that
-go to scope #1 again and enter scope #3 and resolve from it's anchor (#1 -> #0)
-then exit that scope, resolve further the rest of the scope and exit.
-The "exiting" for a scope like from #3 to #1 would basically be a closure callback
-because of how we traverse the AST
-This can be adapted to scope stacks so i can switch out a scope stack for realm
-The anchors provide a pathway of resolution, basically
-if im in scope #3 which has anchor #1, i have the access to all items in #1 and it's anchors recursively, so i have access to #1 and #0
 
-How to create such a path though?
-For this function we could work it out like this!
+The steps taken would be roughly:
+- Enter scope #0 -> resolve
+- Enter scope #1 -> resolve
+- Enter scope #2 -> resolve
+- Enter scope #1 -> continue resolving
+- Enter scope #3 -> resolve
+- Enter scope #1 -> continue resolving
+- Enter scope #0 -> continue resolving
+- End
 
+The "path" could be stored alongside my `ScopeStack` struct to allow switching between scopes for `realm`s
+
+The entire switching of scopes could be elegantly handled by a higher-order function in a fashion like:
+```rs
+fun path_forward(&mut self, work: F) -> R
+where
+    F: FnOnce(&mut Self) -> R
+{
+    self.path_idx += 1;
+    let ret = work(self);
+    self.path_idx -= 1;
+    ret      
+}
+```
+ 
+
+Example of creating a path for a function (in the Rust language due to highlighting :3)
 ```rs
 // current scope: #0 -> no anchor <> path: [#0]
 fn function() -> i32 {
@@ -59,15 +79,17 @@ fn function() -> i32 {
 path: [#0, #1, #2, #1, #0]
 
 We are in scope #0
-so we enter the function body and start another scope of #1
-Then, we hit a block so we create a scope (#2) with an anchor of #1
-we save that scope #2 has a definition `b` and exit
-nothing further for us to care about so we exit.
-In the second phase of resolution, we take the path and set our scopes following the path
-disregarding the actual flow, which should be the same
+so we enter the function body and start another scope (#1).
+Then, we hit a block so we create another scope (#2) with an anchor set to #1
+we save that scope #2 has a definition `b` and since there is 
+nothing further for us to care about, we exit that scope.
 
-path: [#0, #1, #2, #1, #0]
-Start of the path at scope #0, so index: 0
+
+In the second phase of resolution, we take the path and set our scopes following the path
+disregarding the actual flow, which will be the same
+
+Recorded path: `[#0, #1, #2, #1, #0]`
+Index starts at `0` since we start from the top scope of `#0`
 
 ```rs
 fn function() -> i32 {

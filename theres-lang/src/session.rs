@@ -1,27 +1,21 @@
-use std::{
-    borrow::Cow,
-    cell::{Ref, RefCell},
-    collections::HashMap,
-    fmt::Write,
-    hash::Hash,
-    ops::Deref,
-    ptr,
-    sync::{LazyLock, Mutex, MutexGuard},
-};
+use std::borrow::Cow;
+use std::cell::{Ref, RefCell};
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::ops::Deref;
+use std::panic::Location;
+use std::ptr;
+use std::sync::{LazyLock, Mutex};
 
-use crate::{
-    arena::Arena,
-    errors::DiagEmitter,
-    hir::{
-        def::{DefId, DefType, IntTy, PrimTy, Resolved},
-        lowering_ast::HirMap,
-        node::{self, Field, Node, ThingKind},
-    },
-    id::{IdxSlice, IdxVec},
-    lexer::LexError,
-    parser::ParseError,
-    ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind},
-};
+use crate::arena::Arena;
+use crate::errors::DiagEmitter;
+use crate::hir::def::{DefId, DefType, IntTy, PrimTy, Resolved};
+use crate::hir::lowering_ast::HirMap;
+use crate::hir::node::{self, BindItemKind, Field, Node, ThingKind};
+use crate::id::{IdxSlice, IdxVec};
+use crate::lexer::LexError;
+use crate::parser::ParseError;
+use crate::ty::{FieldDef, FnSig, InferKind, Instance, InstanceDef, Ty, TyKind};
 
 pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
     LazyLock::new(|| Mutex::new(DiagnosticCtxt::new()));
@@ -57,13 +51,6 @@ impl DiagnosticCtxt {
     pub fn lex_errors(&self) -> &[LexError] {
         &self.lex_errors
     }
-}
-
-pub fn diag<F, R>(f: F) -> R
-where
-    F: for<'a> FnOnce(MutexGuard<'a, DiagnosticCtxt>) -> R,
-{
-    f(DIAG_CTXT.lock().expect("diag ctxt already locked"))
 }
 
 pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =
@@ -321,20 +308,22 @@ impl<'sess> Session<'sess> {
             Node::Field(field) => self.lower_ty(field.ty),
 
             Node::BindItem(item) => match item.kind {
-                node::BindItemKind::Fun { .. } => self.intern_ty(TyKind::FnDef(def_id)),
-                node::BindItemKind::Const { ty, .. } => self.lower_ty(ty),
+                BindItemKind::Fun { .. } => self.intern_ty(TyKind::FnDef(def_id)),
+                BindItemKind::Const { ty, .. } => self.lower_ty(ty),
             },
 
             any => panic!("Can't express type for {any:?}"),
         })
     }
 
+    #[track_caller]
     pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
+        dbg!(Location::caller());
         self.fn_sigs
             .borrow()
             .get(&def_id)
             .copied()
-            .unwrap_or_else(|| panic!("No fn sig for def id: {def_id}"))
+            .unwrap_or_else(|| panic!("No fn sig for def id: {def_id} {}", Location::caller()))
     }
 
     pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
@@ -528,6 +517,17 @@ impl<'sess> Session<'sess> {
             }
 
             TyKind::Error => "error",
+
+            TyKind::InferTy(infer) => {
+                return match infer.kind {
+                    InferKind::Float => write!(buf, "{{float: {}?}}", infer.vid.to_usize()),
+                    InferKind::Integer => {
+                        write!(buf, "{{integer: {}?}}", infer.vid.to_usize())
+                    }
+                    InferKind::Regular => write!(buf, "{}?", infer.vid.to_usize()),
+                }
+                .expect("writing to a `String` never fails");
+            }
         };
 
         buf.push_str(push);

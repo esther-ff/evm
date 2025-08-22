@@ -1,7 +1,8 @@
 use super::def::{DefId, DefMap, DefType, Definitions, IntTy, PrimTy, Resolved};
 use crate::ast::{
     AstId, Bind, BindItem, BindItemKind, Block, Expr, ExprType, Field, FnDecl, FnSig, Instance,
-    Name, Path, Realm, Stmt, StmtKind, Ty, TyKind, Universe, VariableStmt, Visitor,
+    Name, Path, Realm, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe, VariableStmt,
+    Visitor,
 };
 
 use crate::hir::lowering_ast::Mappings;
@@ -77,6 +78,7 @@ impl Scope {
 }
 
 pub struct ThingDefResolver<'a> {
+    thing_ast_id: Option<AstId>,
     // mapping names to definitions,
     definitions: Definitions<'a>,
 
@@ -88,6 +90,7 @@ pub struct ThingDefResolver<'a> {
 impl ThingDefResolver<'_> {
     pub fn new() -> Self {
         Self {
+            thing_ast_id: None,
             definitions: Definitions::new(),
             ast_id_to_def_id: HashMap::new(),
             def_id_to_ast_id: HashMap::new(),
@@ -109,15 +112,37 @@ where
 {
     type Result = ();
 
+    fn visit_thing(&mut self, val: &'a Thing) -> Self::Result {
+        self.thing_ast_id = Some(val.id);
+        match &val.kind {
+            ThingKind::Function(fndecl) => self.visit_fn_decl(fndecl),
+            ThingKind::Global(global) => self.visit_global(global),
+            ThingKind::Realm(realm) => self.visit_realm(realm),
+            ThingKind::Instance(instance) => self.visit_instance(instance),
+
+            ThingKind::Interface(..) => unimplemented!(),
+
+            ThingKind::Bind(bind) => self.visit_bind(bind),
+        }
+    }
+
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
-        self.register_defn(val.id, DefType::Realm, val.name);
+        self.register_defn(
+            self.thing_ast_id.as_ref().copied().unwrap(),
+            DefType::Realm,
+            val.name,
+        );
         for thing in &val.items {
             self.visit_thing(thing);
         }
     }
 
     fn visit_bind(&mut self, val: &'a Bind) -> Self::Result {
-        self.register_defn(val.id, DefType::Bind, Name::DUMMY);
+        self.register_defn(
+            self.thing_ast_id.as_ref().copied().unwrap(),
+            DefType::Bind,
+            Name::DUMMY,
+        );
 
         for item in &val.items {
             self.visit_bind_item(item);
@@ -125,7 +150,11 @@ where
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
-        self.register_defn(val.id, DefType::Bind, Name::DUMMY);
+        self.register_defn(
+            self.thing_ast_id.as_ref().copied().unwrap(),
+            DefType::Bind,
+            Name::DUMMY,
+        );
         match val.kind {
             BindItemKind::Const(ref stmt) => {
                 self.register_defn(stmt.id, DefType::Const, stmt.name);
@@ -135,13 +164,21 @@ where
     }
 
     fn visit_fn_decl(&mut self, val: &'a FnDecl) -> Self::Result {
-        self.register_defn(val.id, DefType::Fun, val.sig.name);
+        self.register_defn(
+            self.thing_ast_id.as_ref().copied().unwrap(),
+            DefType::Fun,
+            val.sig.name,
+        );
 
         self.visit_block(&val.block);
     }
 
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
-        self.register_defn(val.id, DefType::Instance, val.name);
+        self.register_defn(
+            self.thing_ast_id.as_ref().copied().unwrap(),
+            DefType::Instance,
+            val.name,
+        );
 
         for field in &val.fields {
             self.visit_field(field);
@@ -207,6 +244,8 @@ impl ScopeStack {
 }
 
 pub struct LateResolver<'a> {
+    current_item: Option<AstId>,
+
     // ast id -> scope stack
     current_scope: AstId,
     module_scopes: AstIdMap<ScopeStack>,
@@ -225,6 +264,7 @@ pub struct LateResolver<'a> {
 impl<'a> LateResolver<'a> {
     pub fn new(old: ThingDefResolver<'a>, root: &Universe) -> Self {
         Self {
+            current_item: None,
             current_instance: None,
             current_scope: root.id,
             module_scopes: HashMap::from([(root.id, ScopeStack::new_with_prims())]),
@@ -241,6 +281,7 @@ impl<'a> LateResolver<'a> {
         self.maps
     }
 
+    #[track_caller]
     fn current_scope_stack(&self) -> &ScopeStack {
         self.module_scopes
             .get(&self.current_scope)
@@ -289,6 +330,7 @@ impl<'a> LateResolver<'a> {
         f(self.current_scope_stack_mut().get_scope_mut(id))
     }
 
+    #[track_caller]
     fn with_current_scope<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Scope) -> R,
@@ -304,6 +346,7 @@ impl<'a> LateResolver<'a> {
         self.with_current_scope_mut(|scope| scope.add(&name, local, Space::Values));
     }
 
+    #[track_caller]
     fn get_name(&self, symbol: SymbolId, ns: Space) -> Resolved<AstId> {
         let f = |s: &Scope| {
             if let Some(ret) = s.get(symbol, ns) {
@@ -322,6 +365,7 @@ impl<'a> LateResolver<'a> {
         }
     }
 
+    #[track_caller]
     fn bind_to_scope(&self, ast_id: AstId) -> ScopeId {
         self.bind_to_scope
             .get(&ast_id)
@@ -329,6 +373,7 @@ impl<'a> LateResolver<'a> {
             .expect("AstId -> bind decl mapping is wrong")
     }
 
+    #[track_caller]
     fn resolve_path(&mut self, arg_path: &Path, last_space: Space) -> Resolved<AstId> {
         let amount_of_segments = arg_path.path.len().saturating_sub(1);
         let old_scope = self.current_scope;
@@ -342,38 +387,7 @@ impl<'a> LateResolver<'a> {
             }
 
             ret = match self.get_name(name, Space::Types) {
-                Resolved::Def(id, DefType::Instance) => {
-                    let Some(bind_ids) = self.maps.instance_to_bind(id) else {
-                        return Resolved::Err;
-                    };
-
-                    let Some(val_name) = arg_path.path.get(ix + 1) else {
-                        return Resolved::Err;
-                    };
-
-                    if ix + 1 != amount_of_segments {
-                        todo!(
-                            "somehow error out due to trying to access an assoc item as a module"
-                        );
-                    }
-
-                    let mut bind_ret = Resolved::Err;
-                    for id in bind_ids {
-                        let scope_id = self.bind_to_scope(*id);
-
-                        let target = val_name.name.interned;
-                        if let Some(resolved) = self
-                            .current_scope_stack()
-                            .get_scope(scope_id)
-                            .get(target, Space::Values)
-                        {
-                            bind_ret = resolved;
-                            break;
-                        }
-                    }
-
-                    bind_ret
-                }
+                cap @ Resolved::Def(.., DefType::Instance) => cap,
 
                 Resolved::Def(id, DefType::Realm) => {
                     self.current_scope = self.maps.ast_id_of(id);
@@ -388,6 +402,7 @@ impl<'a> LateResolver<'a> {
         ret
     }
 
+    #[track_caller]
     fn get_def_id(&self, ast_id: AstId) -> DefId {
         self.maps.def_id_of(ast_id)
     }
@@ -415,6 +430,20 @@ fn traverse_scopes(
 impl<'a> Visitor<'a> for LateResolver<'_> {
     type Result = ();
 
+    fn visit_thing(&mut self, val: &'a Thing) -> Self::Result {
+        let old = self.current_item.replace(val.id);
+        match &val.kind {
+            ThingKind::Function(f) => self.visit_fn_decl(f),
+            ThingKind::Realm(r) => self.visit_realm(r),
+            ThingKind::Global(g) => self.visit_global(g),
+            ThingKind::Instance(i) => self.visit_instance(i),
+            ThingKind::Bind(a) => self.visit_bind(a),
+            ThingKind::Interface(..) => unimplemented!(),
+        }
+
+        self.current_item = old;
+    }
+
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
         let Realm {
             items,
@@ -423,8 +452,15 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             name,
         } = val;
 
-        let old_stack = mem::replace(&mut self.current_scope, *id);
-        self.module_scopes.insert(*id, ScopeStack::new_with_prims());
+        let old_stack = mem::replace(
+            &mut self.current_scope,
+            self.current_item.expect("realm not inside of an item"),
+        );
+
+        self.module_scopes.insert(
+            self.current_item.expect("realm not inside of an item"),
+            ScopeStack::new_with_prims(),
+        );
 
         for thing in items {
             self.visit_thing(thing);
@@ -453,7 +489,10 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             let resolved = self.resolve_path(path, Space::Types);
 
             if let Resolved::Def(def_id, DefType::Instance) = resolved {
-                self.maps.insert_instance_to_bind(def_id, bind.id);
+                self.maps.insert_instance_to_bind(
+                    def_id,
+                    self.current_item.expect("bind not inside of an item"),
+                );
             }
         }
 
@@ -508,7 +547,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         self.visit_ty(ret_type);
 
-        let def_id = self.get_def_id(val.id);
+        let def_id = self.get_def_id(self.current_item.expect("fun not inside of an item"));
 
         self.with_current_scope_mut(|s| {
             s.add(name, Resolved::Def(def_id, DefType::Fun), Space::Values);
@@ -518,7 +557,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     }
 
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
-        let instance_def_id = self.get_def_id(val.id);
+        let instance_def_id =
+            self.get_def_id(self.current_item.expect("instance not inside of an item"));
 
         self.current_instance.replace(val.id);
 

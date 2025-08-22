@@ -183,6 +183,11 @@ macro_rules! newtyped_index {
             fn new_usize(i: usize) -> Self {
                 Self::new(i.try_into().expect("id overflow"))
             }
+
+            #[allow(dead_code)]
+            pub fn to_usize(self) -> usize {
+                self.private as usize
+            }
         }
 
         impl $crate::id::IndexId for $name {
