@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::panic::Location;
 
 use crate::errors::TheresError;
+use crate::hir;
 use crate::hir::def::{BodyId, DefId, DefType, IntTy, Resolved};
 use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
@@ -45,7 +46,7 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
     type Result = ();
 
     fn visit_thing(&mut self, thing: &'vis Thing<'vis>) -> Self::Result {
-        dbg!(thing.def_id);
+        println!("ItemGatherer `visit_thing` {}", thing.def_id);
         match thing.kind {
             ThingKind::Fn { name: _, sig } => {
                 self.sess.lower_fn_sig(*sig, thing.def_id);
@@ -474,6 +475,8 @@ impl<'ty> FunCx<'ty> {
             ExprKind::Call { function, args } => {
                 let callable = self.type_of(function);
 
+                dbg!(function, callable);
+
                 let TyKind::FnDef(def_id) = *callable.0 else {
                     self.s.diag().emit_err(
                         TypingError::CallingNotFn {
@@ -484,6 +487,8 @@ impl<'ty> FunCx<'ty> {
 
                     return self.s.ty_err();
                 };
+
+                dbg!(def_id);
 
                 self.verify_arguments_for_call(def_id, args, expr.span)
             }
@@ -578,7 +583,9 @@ impl<'ty> FunCx<'ty> {
                 let res = path.res;
 
                 match res {
-                    Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
+                    Resolved::Def(def_id, DefType::Fun) => {
+                        self.s.intern_ty(dbg!(TyKind::FnDef(def_id)))
+                    }
 
                     Resolved::Local(hir_id) => {
                         let hir = self.s.hir_ref();
@@ -684,6 +691,7 @@ impl<'ty> FunCx<'ty> {
         expr_ty
     }
 
+    #[track_caller]
     fn verify_arguments_for_call(
         &mut self,
         def_id: DefId,
@@ -1256,13 +1264,22 @@ impl<'ty> TypeEnv<'ty> {
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) -> TypeEnv<'a> {
     ItemGatherer::new(session).visit_universe(universe);
 
+    session.hir(|map| {
+        println!("DEFID 8");
+        dbg!(map.get_def(hir::def::def_id(8)));
+        //
+    });
+
     // let mut env = TypeEnv::new(session);
 
     // env.typeck_universe(universe);
 
     for thing in universe.things {
+        println!("item: {}", thing.def_id);
+    }
+
+    for thing in universe.things {
         if let ThingKind::Fn { name: _, sig } = thing.kind {
-            dbg!((thing.kind, thing.def_id));
             let mut cx = FunCx::new(session);
 
             cx.start(session.fn_sig_for(thing.def_id), sig.body);
@@ -1270,17 +1287,4 @@ pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>)
     }
 
     todo!()
-}
-
-#[allow(clippy::checked_conversions, clippy::cast_lossless)]
-fn num_to_int_ty(num: u64) -> IntTy {
-    if num <= u8::MAX as u64 {
-        IntTy::N8
-    } else if num <= u16::MAX as u64 {
-        IntTy::N16
-    } else if num <= u32::MAX as u64 {
-        IntTy::N32
-    } else {
-        IntTy::N64
-    }
 }

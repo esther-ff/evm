@@ -88,14 +88,14 @@ pub fn lower_universe<'hir>(
 
     let hir_universe = ast_lowerer.lower_universe(ast);
     sess.hir_mut(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
-    println!("hir: \n{hir_universe:#?}");
+    // println!("hir: \n{hir_universe:#?}");
 
-    println!("hir bodies:\n");
-    sess.hir(|map| {
-        for (ix, body) in map.bodies().iter().enumerate() {
-            println!("body({ix}): {body:#?}");
-        }
-    });
+    // println!("hir bodies:\n");
+    // sess.hir(|map| {
+    //     for (ix, body) in map.bodies().iter().enumerate() {
+    //         println!("body({ix}): {body:#?}");
+    //     }
+    // });
 
     let mut test = TyTest { s: sess };
 

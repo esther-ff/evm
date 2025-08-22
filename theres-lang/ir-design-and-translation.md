@@ -16,14 +16,15 @@ fun func(arg: i32) -> i32 {
 }
 ```
 
-The IR for this could look like: ```
+The IR for this could look like: 
+```
 fun func(arg: i32) -> i32:
   _0: i32; // return place
-  _1: i32; // our `a`
-  _2: i32; // our `b`
+  _1: i32; // our a
+  _2: i32; // our b
   _3: i32; // intermediate for the math ops
   _4: bool; // intermediate for the comparison
-  _5: i32 // our `arg`
+  _5: i32 // our arg
 
 
   bb0:
@@ -67,8 +68,8 @@ The IR for that could roughly look like (not-SSA):
 ```
 fun branching(num: u8) => i32:
   _0: i32 // return
-  _1: i32 // `a`
-  _2: u8  // `num`
+  _1: i32 // a
+  _2: u8  // num
 
   bb0:
     exit: switch _2
@@ -99,8 +100,8 @@ fun branching(num: u8) => i32:
 with SSA it would be:
 ```
 fun branching(num: u8) => i32:
-  _1: i32 // `a`
-  _2: u8  // `num`
+  _1: i32 // a
+  _2: u8  // num
 
   bb0:
     exit: switch _2

@@ -318,7 +318,7 @@ impl<'sess> Session<'sess> {
 
     #[track_caller]
     pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
-        dbg!(Location::caller());
+        dbg!(Location::caller(), def_id);
         self.fn_sigs
             .borrow()
             .get(&def_id)
@@ -327,6 +327,7 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
+        println!("`lower_fn_sig`: {def_id}");
         let sig = FnSig {
             inputs: self
                 .arena()

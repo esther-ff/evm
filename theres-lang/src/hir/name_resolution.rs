@@ -10,6 +10,7 @@ use crate::parser::AstIdMap;
 use crate::session::{SymbolId, SymbolMap};
 use std::collections::HashMap;
 use std::mem;
+use std::panic::Location;
 
 type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
@@ -97,10 +98,13 @@ impl ThingDefResolver<'_> {
         }
     }
 
+    #[track_caller]
     fn register_defn(&mut self, id: AstId, kind: DefType, name: Name) -> DefId {
         let def_id = self.definitions.register_defn(kind, name.interned);
         self.ast_id_to_def_id.insert(id, def_id);
         self.def_id_to_ast_id.insert(def_id, id);
+
+        println!("def_id register defn: {def_id} loc: {}", Location::caller());
 
         def_id
     }
@@ -115,7 +119,10 @@ where
     fn visit_thing(&mut self, val: &'a Thing) -> Self::Result {
         self.thing_ast_id = Some(val.id);
         match &val.kind {
-            ThingKind::Function(fndecl) => self.visit_fn_decl(fndecl),
+            ThingKind::Function(fndecl) => {
+                dbg!(fndecl.sig.name.interned.get_interned());
+                self.visit_fn_decl(fndecl)
+            }
             ThingKind::Global(global) => self.visit_global(global),
             ThingKind::Realm(realm) => self.visit_realm(realm),
             ThingKind::Instance(instance) => self.visit_instance(instance),
@@ -124,6 +131,7 @@ where
 
             ThingKind::Bind(bind) => self.visit_bind(bind),
         }
+        self.thing_ast_id.take();
     }
 
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
@@ -163,6 +171,7 @@ where
         }
     }
 
+    #[track_caller]
     fn visit_fn_decl(&mut self, val: &'a FnDecl) -> Self::Result {
         self.register_defn(
             self.thing_ast_id.as_ref().copied().unwrap(),
