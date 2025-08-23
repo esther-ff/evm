@@ -149,6 +149,7 @@ macro_rules! newtyped_index {
     ($name:ident, $map:ident, $vec:ident, $slice:ident) => {
         $crate::newtyped_index!($name, $map, $vec);
 
+        #[allow(dead_code)]
         pub type $slice<T> = $crate::id::IdxSlice<$name, T>;
     };
 

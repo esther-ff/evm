@@ -123,7 +123,7 @@ pub trait HirVisitor<'hir> {
         } = ty;
 
         match kind {
-            TyKind::MethodSelf => Self::Result::normal(),
+            TyKind::MethodSelf | TyKind::Err => Self::Result::normal(),
             TyKind::Array(ty) => self.visit_ty(ty),
             TyKind::Path(path) => self.visit_path(path),
         }

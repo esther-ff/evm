@@ -431,6 +431,8 @@ pub enum TyKind<'h> {
     MethodSelf,
     Array(&'h Ty<'h>),
     Path(&'h Path<'h>),
+
+    Err,
 }
 
 #[derive(Debug, Clone, Copy)]

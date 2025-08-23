@@ -7,60 +7,11 @@ pub mod visitor;
 pub use name_resolution::{LateResolver, ThingDefResolver};
 
 use crate::ast::Visitor;
+use crate::driver::HirDump;
 use crate::hir::node::Universe;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
 use crate::ty::TyKind;
-
-pub struct TyTest<'a> {
-    s: &'a Session<'a>,
-}
-
-impl visitor::HirVisitor<'_> for TyTest<'_> {
-    type Result = ();
-
-    fn visit_ty(&mut self, ty: &node::Ty<'_>) {
-        let ty = self.s.lower_ty(ty);
-        println!("ty: {}", self.s.stringify_ty(ty));
-
-        if let TyKind::Instance(def) = *ty {
-            for field in def.fields {
-                let ty = self.s.def_type_of(field.def_id);
-                println!("   field ty: {}", self.s.stringify_ty(ty));
-            }
-        }
-    }
-
-    fn visit_local(&mut self, local: &node::Local<'_>) -> Self::Result {
-        let node::Local {
-            mutability: _,
-            name: _,
-            init,
-            ty,
-            hir_id: _,
-        } = local;
-
-        let _ = init.map(|expr| self.visit_expr(expr));
-        self.visit_ty(ty);
-    }
-
-    fn visit_fn_sig(&mut self, fn_sig: &node::FnSig<'_>) -> Self::Result {
-        let node::FnSig {
-            span: _,
-            return_type,
-            arguments,
-            body,
-        } = fn_sig;
-
-        self.visit_ty(return_type);
-
-        for param in *arguments {
-            self.visit_param(param);
-        }
-
-        self.visit_expr(self.s.hir(|x| x.get_body(*body)));
-    }
-}
 
 pub fn lower_universe<'hir>(
     sess: &'hir Session<'hir>,
@@ -76,30 +27,38 @@ pub fn lower_universe<'hir>(
         inner.visit_thing(decl);
     }
 
-    // dbg!(ast);
-
     let mappings = inner.into_mappings();
 
+    #[cfg(debug_assertions)]
     for (id, res) in mappings.debug_resolutions() {
-        println!("{id:?} resolves to: {res:?}");
+        log::debug!("{id:?} resolves to: {res:?}");
     }
 
     let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 
     let hir_universe = ast_lowerer.lower_universe(ast);
     sess.hir_mut(|hir| map_builder::MapBuilder::new(hir).visit_universe(hir_universe));
-    // println!("hir: \n{hir_universe:#?}");
 
-    // println!("hir bodies:\n");
-    // sess.hir(|map| {
-    //     for (ix, body) in map.bodies().iter().enumerate() {
-    //         println!("body({ix}): {body:#?}");
-    //     }
-    // });
+    match sess.dump_hir_mode() {
+        HirDump::All => {
+            println!("--- HIR tree dump --- \n{hir_universe:#?}\n --- HIR tree dump ---\n",);
+            println!("--- HIR body dump ---");
 
-    let mut test = TyTest { s: sess };
+            sess.hir(|map| {
+                for (ix, body) in map.bodies().iter().enumerate() {
+                    println!("body({ix}): \n{body:#?}");
+                }
+            });
 
-    test.visit_universe(hir_universe);
+            println!("--- HIR body dump ---\n");
+        }
+
+        HirDump::OnlyItems => {
+            println!("--- HIR tree dump --- \n{hir_universe:#?}\n --- HIR tree dump ---\n",);
+        }
+
+        HirDump::None => {}
+    }
 
     hir_universe
 }

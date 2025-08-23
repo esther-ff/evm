@@ -10,7 +10,6 @@ use crate::parser::AstIdMap;
 use crate::session::{SymbolId, SymbolMap};
 use std::collections::HashMap;
 use std::mem;
-use std::panic::Location;
 
 type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
@@ -98,13 +97,10 @@ impl ThingDefResolver<'_> {
         }
     }
 
-    #[track_caller]
     fn register_defn(&mut self, id: AstId, kind: DefType, name: Name) -> DefId {
         let def_id = self.definitions.register_defn(kind, name.interned);
         self.ast_id_to_def_id.insert(id, def_id);
         self.def_id_to_ast_id.insert(def_id, id);
-
-        println!("def_id register defn: {def_id} loc: {}", Location::caller());
 
         def_id
     }
@@ -120,8 +116,7 @@ where
         self.thing_ast_id = Some(val.id);
         match &val.kind {
             ThingKind::Function(fndecl) => {
-                dbg!(fndecl.sig.name.interned.get_interned());
-                self.visit_fn_decl(fndecl)
+                self.visit_fn_decl(fndecl);
             }
             ThingKind::Global(global) => self.visit_global(global),
             ThingKind::Realm(realm) => self.visit_realm(realm),
@@ -375,14 +370,6 @@ impl<'a> LateResolver<'a> {
     }
 
     #[track_caller]
-    fn bind_to_scope(&self, ast_id: AstId) -> ScopeId {
-        self.bind_to_scope
-            .get(&ast_id)
-            .copied()
-            .expect("AstId -> bind decl mapping is wrong")
-    }
-
-    #[track_caller]
     fn resolve_path(&mut self, arg_path: &Path, last_space: Space) -> Resolved<AstId> {
         let amount_of_segments = arg_path.path.len().saturating_sub(1);
         let old_scope = self.current_scope;
@@ -412,6 +399,13 @@ impl<'a> LateResolver<'a> {
     }
 
     #[track_caller]
+    #[inline]
+    fn current_item(&self) -> AstId {
+        self.current_item.expect("not inside of an item!")
+    }
+
+    #[track_caller]
+    #[inline]
     fn get_def_id(&self, ast_id: AstId) -> DefId {
         self.maps.def_id_of(ast_id)
     }
@@ -456,20 +450,16 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
         let Realm {
             items,
-            id,
+            id: _,
             span: _,
             name,
         } = val;
 
-        let old_stack = mem::replace(
-            &mut self.current_scope,
-            self.current_item.expect("realm not inside of an item"),
-        );
+        let current_item = self.current_item();
+        let old_stack = mem::replace(&mut self.current_scope, current_item);
 
-        self.module_scopes.insert(
-            self.current_item.expect("realm not inside of an item"),
-            ScopeStack::new_with_prims(),
-        );
+        self.module_scopes
+            .insert(current_item, ScopeStack::new_with_prims());
 
         for thing in items {
             self.visit_thing(thing);
@@ -498,10 +488,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             let resolved = self.resolve_path(path, Space::Types);
 
             if let Resolved::Def(def_id, DefType::Instance) = resolved {
-                self.maps.insert_instance_to_bind(
-                    def_id,
-                    self.current_item.expect("bind not inside of an item"),
-                );
+                self.maps
+                    .insert_instance_to_bind(def_id, self.current_item());
             }
         }
 
@@ -556,7 +544,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         self.visit_ty(ret_type);
 
-        let def_id = self.get_def_id(self.current_item.expect("fun not inside of an item"));
+        let def_id = self.get_def_id(self.current_item());
 
         self.with_current_scope_mut(|s| {
             s.add(name, Resolved::Def(def_id, DefType::Fun), Space::Values);
@@ -566,8 +554,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     }
 
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
-        let instance_def_id =
-            self.get_def_id(self.current_item.expect("instance not inside of an item"));
+        let instance_def_id = self.get_def_id(self.current_item());
 
         self.current_instance.replace(val.id);
 
@@ -598,6 +585,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         self.maps
             .insert_instance_field(current_instance_id, field_def_id);
+
         self.visit_ty(&field.ty);
     }
 
@@ -768,7 +756,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 self.maps.map_to_resolved(path.id, res);
             }
 
-            TyKind::MethodSelf => (), // explicit matching in case i add smth new
+            TyKind::MethodSelf | TyKind::Err => (), // explicit matching in case i add smth new
         }
     }
 

@@ -3,55 +3,17 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::ops::Deref;
-use std::panic::Location;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 
 use crate::arena::Arena;
+use crate::driver::{Flags, HirDump};
 use crate::errors::DiagEmitter;
 use crate::hir::def::{DefId, DefType, IntTy, PrimTy, Resolved};
 use crate::hir::lowering_ast::HirMap;
 use crate::hir::node::{self, BindItemKind, Field, Node, ThingKind};
 use crate::id::{IdxSlice, IdxVec};
-use crate::lexer::LexError;
-use crate::parser::ParseError;
 use crate::ty::{FieldDef, FnSig, InferKind, Instance, InstanceDef, Ty, TyKind};
-
-pub static DIAG_CTXT: LazyLock<Mutex<DiagnosticCtxt>> =
-    LazyLock::new(|| Mutex::new(DiagnosticCtxt::new()));
-
-pub struct DiagnosticCtxt {
-    lex_errors: Vec<LexError>,
-    parse_errors: Vec<ParseError>,
-}
-
-impl DiagnosticCtxt {
-    pub fn new() -> Self {
-        Self {
-            lex_errors: Vec::new(),
-            parse_errors: Vec::new(),
-        }
-    }
-    pub fn push_lex_error(&mut self, err: LexError) {
-        self.lex_errors.push(err);
-    }
-
-    pub fn push_parse_error(&mut self, err: ParseError) {
-        self.parse_errors.push(err);
-    }
-
-    pub fn errored(&self) -> bool {
-        !(self.parse_errors.is_empty() || self.lex_errors.is_empty())
-    }
-
-    pub fn parse_errors(&self) -> &[ParseError] {
-        &self.parse_errors
-    }
-
-    pub fn lex_errors(&self) -> &[LexError] {
-        &self.lex_errors
-    }
-}
 
 pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =
     LazyLock::new(|| Mutex::new(GlobalInterner::new()));
@@ -171,42 +133,7 @@ impl<T> PartialEq for Pooled<'_, T> {
     }
 }
 
-// pub struct Pool<'a, T> {
-//     map: HashMap<Pooled<'a, T>, ()>,
-// }
-
-// impl<T> Borrow<T> for Pooled<'_, T> {
-//     fn borrow(&self) -> &T {
-//         self.0
-//     }
-// }
-
-// impl<'a, T: Hash + Eq> Pool<'a, T> {
-//     #[allow(clippy::new_without_default)]
-//     pub fn new() -> Self {
-//         Self {
-//             map: HashMap::new(),
-//         }
-//     }
-
-//     pub fn intern<F>(&mut self, item: T, mk: F) -> Pooled<'a, T>
-//     where
-//         F: FnOnce(T) -> Pooled<'a, T>,
-//     {
-//         match self.map.entry_ref(&item) {
-//             EntryRef::Vacant(_vacant) => {
-//                 let interned = mk(item);
-//                 self.map.insert(interned, ());
-
-//                 interned
-//             }
-
-//             EntryRef::Occupied(occup) => Pooled(occup.key().0),
-//         }
-//     }
-// }
-
-type Pool<'a, T> = std::collections::HashMap<T, Pooled<'a, T>>;
+type Pool<'a, T> = HashMap<T, Pooled<'a, T>>;
 
 pub struct Session<'sess> {
     arena: Arena,
@@ -221,10 +148,12 @@ pub struct Session<'sess> {
     fn_sigs: RefCell<HashMap<DefId, FnSig<'sess>>>,
 
     diags: &'sess DiagEmitter<'sess>,
+
+    flags: Flags,
 }
 
 impl<'sess> Session<'sess> {
-    pub fn new(diags: &'sess DiagEmitter<'sess>) -> Self {
+    pub fn new(diags: &'sess DiagEmitter<'sess>, flags: Flags) -> Self {
         Self {
             arena: Arena::new(),
             def_id_to_instance_interned: RefCell::new(HashMap::new()),
@@ -233,7 +162,16 @@ impl<'sess> Session<'sess> {
             instances: RefCell::new(Pool::new()),
             fn_sigs: RefCell::new(HashMap::new()),
             diags,
+            flags,
         }
+    }
+
+    pub fn dump_hir_mode(&self) -> HirDump {
+        self.flags.dump_hir
+    }
+
+    pub fn should_dump_ast(&self) -> bool {
+        self.flags.dump_ast
     }
 
     pub fn enter<F, R>(&'sess self, work: F) -> R
@@ -316,18 +254,15 @@ impl<'sess> Session<'sess> {
         })
     }
 
-    #[track_caller]
     pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
-        dbg!(Location::caller(), def_id);
         self.fn_sigs
             .borrow()
             .get(&def_id)
             .copied()
-            .unwrap_or_else(|| panic!("No fn sig for def id: {def_id} {}", Location::caller()))
+            .unwrap_or_else(|| panic!("No fn sig for def id: {def_id}"))
     }
 
     pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
-        println!("`lower_fn_sig`: {def_id}");
         let sig = FnSig {
             inputs: self
                 .arena()
@@ -389,6 +324,7 @@ impl<'sess> Session<'sess> {
     {
         let tykind = match ty.kind {
             node::TyKind::MethodSelf => todo!("get rid of this"),
+            node::TyKind::Err => TyKind::Error,
             node::TyKind::Array(array_ty) => TyKind::Array(self.lower_ty(array_ty)),
             node::TyKind::Path(path) => match path.res {
                 Resolved::Prim(prim) => match prim {

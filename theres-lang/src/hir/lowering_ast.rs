@@ -121,7 +121,6 @@ impl<'hir> HirMap<'hir> {
 
     #[track_caller]
     pub fn map_def_id_to_hir(&mut self, def_id: DefId, hir_id: HirId) {
-        dbg!(def_id, hir_id);
         let dbg = self.def_id_to_hir_id.insert(def_id, hir_id);
         assert!(
             dbg.is_none(),
@@ -599,6 +598,7 @@ impl<'hir> AstLowerer<'hir> {
             TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(inner)),
             TyKind::MethodSelf => node::TyKind::MethodSelf,
             TyKind::Path(path) => node::TyKind::Path(self.lower_path(path)),
+            TyKind::Err => node::TyKind::Err,
         };
 
         let ty = node::Ty::new(ty.span, self.next_hir_id(ty.id), kind);

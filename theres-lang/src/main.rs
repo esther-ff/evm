@@ -4,6 +4,7 @@
 #![warn(clippy::perf)]
 #![warn(clippy::suspicious)]
 #![warn(clippy::correctness)]
+#![allow(dead_code)]
 
 mod arena;
 mod ast;
@@ -18,40 +19,125 @@ mod session;
 mod sources;
 mod ty;
 
-use std::{
-    fs::File,
-    io::{self, Read as _},
-};
+use std::fs::File;
+use std::io::{self, Read as _};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
-use crate::{driver::Compiler, sources::FileManager};
+use sap::Argument;
 
-fn main() {
-    println!("welcome to the theres compiler!");
-    println!("puppygirl :3");
+use crate::driver::{Compiler, Flags, HirDump};
+use crate::sources::FileManager;
 
-    let mut args = std::env::args().skip(1);
+fn main() -> sap::Result<()> {
+    println!("Evviva l'arte! Evviva l'arte! Evivva Theres!");
+    let (flags, path) = opts()?;
 
-    match args.next() {
-        None => {
-            println!("error: didn't provide the action");
-            println!("current actions are: `parse`");
-        }
+    parse(&path, flags, FileOpener);
 
-        Some(txt) => match txt.as_str() {
-            "parse" => {
-                let Some(filepath) = args.next() else {
-                    println!("error: no file path provided for parsing :(");
-                    return;
+    Ok(())
+}
+
+fn opts() -> sap::Result<(Flags, PathBuf)> {
+    let mut args = sap::Parser::from_env()?;
+
+    let mut path = None;
+
+    let mut flags = Flags {
+        dump_hir: HirDump::None,
+        dump_ast: false,
+        dump_types: false,
+        log_level: log::Level::Error,
+    };
+
+    while let Some(cmd_arg) = args.forward()? {
+        match cmd_arg {
+            Argument::Long("logging") => {
+                let Some(value) = args.value() else {
+                    flags.log_level = log::Level::Debug;
+                    continue;
                 };
 
-                parse(&filepath);
+                flags.log_level = match value.as_str() {
+                    "debug" => log::Level::Debug,
+                    "trace" => log::Level::Trace,
+                    "warn" => log::Level::Warn,
+                    "info" => log::Level::Info,
+                    "error" => log::Level::Error,
+
+                    _ => {
+                        let err = sap::ParsingError::UnexpectedArg {
+                            offender: String::from("logging"),
+                            value: Some(value),
+                            format: "",
+                            prefix: "--",
+                        };
+
+                        return Err(err);
+                    }
+                }
+            }
+            Argument::Long("dump") => {
+                let Some(value) = args.value() else {
+                    return Err(sap::ParsingError::InvalidOption {
+                        reason: "provided `--dump` with no arguments",
+                        offender: None,
+                    });
+                };
+
+                let options = value.split(',');
+
+                for dump_opt in options {
+                    match dump_opt {
+                        "hir_items" => flags.dump_hir = HirDump::OnlyItems,
+                        "hir" => flags.dump_hir = HirDump::All,
+                        "ast" => flags.dump_ast = true,
+                        "types" => flags.dump_types = true,
+
+                        any => {
+                            let err = sap::ParsingError::UnexpectedArg {
+                                offender: String::from("dump"),
+                                value: Some(any.into()),
+                                format: "",
+                                prefix: "--",
+                            };
+
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+
+            Argument::Long("file") => {
+                let Some(value) = args.value() else {
+                    return Err(sap::ParsingError::InvalidOption {
+                        reason: "provided `--file` with no arguments",
+                        offender: None,
+                    });
+                };
+
+                path = Some(value);
             }
 
             any => {
-                println!("error: invalid mode chosen: {any}");
+                return Err(any.into_error(None));
             }
-        },
+        }
     }
+
+    Ok((
+        flags,
+        path.map_or(
+            PathBuf::from_str("main.th").expect("infallible"),
+            Into::into,
+        ),
+    ))
+}
+
+fn parse(path: &Path, flags: Flags, opener: impl FileManager + 'static) {
+    let mut compiler = Compiler::new(opener, flags);
+
+    compiler.start(path);
 }
 
 pub struct FileOpener;
@@ -65,9 +151,4 @@ impl FileManager for FileOpener {
 
         Ok(vec)
     }
-}
-fn parse(path: &str) {
-    let mut compiler = Compiler::new(FileOpener);
-
-    compiler.start(path);
 }

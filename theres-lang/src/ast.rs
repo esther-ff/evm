@@ -263,6 +263,9 @@ pub enum TyKind {
     /// `self` argument
     /// in methods
     MethodSelf,
+
+    /// failed parsing
+    Err,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -429,18 +432,16 @@ pub struct Instance {
     pub name: Name,
     pub span: Span,
     pub fields: Vec<Field>,
-    pub generics: Generics,
     pub id: AstId,
 }
 
 impl Instance {
-    pub fn new(name: Name, span: Span, fields: Vec<Field>, generics: Generics, id: AstId) -> Self {
+    pub fn new(name: Name, span: Span, fields: Vec<Field>, id: AstId) -> Self {
         Self {
             name,
 
             span,
             fields,
-            generics,
 
             id,
         }
@@ -546,8 +547,8 @@ impl ThingKind {
         })
     }
 
-    pub fn instance(name: Name, span: Span, fields: Vec<Field>, gens: Generics, id: AstId) -> Self {
-        Self::Instance(Instance::new(name, span, fields, gens, id))
+    pub fn instance(name: Name, span: Span, fields: Vec<Field>, id: AstId) -> Self {
+        Self::Instance(Instance::new(name, span, fields, id))
     }
 
     pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
@@ -743,14 +744,11 @@ pub trait Visitor<'a> {
 
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
         let Instance {
-            name,
+            name: _,
             id: _,
             span: _,
             fields,
-            generics,
         } = val;
-
-        try_visit!(self.visit_name(name), self.visit_generics(generics));
 
         for field in fields {
             try_visit!(self.visit_field(field));
@@ -824,7 +822,7 @@ pub trait Visitor<'a> {
 
             TyKind::Path(p) => self.visit_path(p),
 
-            TyKind::MethodSelf => Self::Result::normal(),
+            TyKind::MethodSelf | TyKind::Err => Self::Result::normal(),
         }
     }
 

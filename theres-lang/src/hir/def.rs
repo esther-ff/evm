@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::ast::Name;
 use crate::hir::node;
 use crate::id::IdxVec;
 use crate::session::SymbolId;
@@ -8,6 +7,7 @@ use crate::session::SymbolId;
 crate::newtyped_index!(DefId, DefMap, DefVec);
 crate::newtyped_index!(BodyId, BodyMap, BodyVec);
 
+// debug dogshit
 pub fn def_id(i: u32) -> DefId {
     DefId { private: i }
 }

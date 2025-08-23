@@ -1,9 +1,11 @@
-#[allow(clippy::wildcard_imports)]
-use crate::ast::*;
+use crate::ast::{
+    AstId, Bind, BindItem, BindItemKind, Block, Expr, ExprType, Field, FnDecl, GlobalDecl,
+    Instance, Name, Path, Realm, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
+    VariableStmt, Visitor,
+};
 use crate::id::IndexId;
 use crate::lexer::Span;
 use crate::session::SymbolId;
-use crate::sources::SourceId;
 
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
@@ -48,11 +50,11 @@ impl<O> PrettyPrinter<'_, O>
 where
     O: Write,
 {
-    pub fn write_indent(&mut self) {
-        for _ in 0..self.indent {
-            self.write_arbitrary(" ");
-        }
-    }
+    // pub fn write_indent(&mut self) {
+    //     for _ in 0..self.indent {
+    //         self.write_arbitrary(" ");
+    //     }
+    // }
 
     pub fn write_span(&mut self, span: Span) {
         if span == Span::DUMMY {
@@ -341,6 +343,8 @@ fn ty_kind_to_string(kind: &TyKind) -> String {
         }
 
         TyKind::Array(ty) => ty_kind_to_string(&ty.kind),
+
+        TyKind::Err => "{type err}".to_string(),
     }
 }
 

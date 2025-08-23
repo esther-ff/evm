@@ -104,7 +104,7 @@ impl<'hir> HirVisitor<'hir> for MapBuilder<'_, 'hir> {
         self.m.insert_node(Node::Ty(ty), ty.hir_id);
 
         match ty.kind {
-            TyKind::MethodSelf => (),
+            TyKind::MethodSelf | TyKind::Err => (),
             TyKind::Array(ty) => self.visit_ty(ty),
             TyKind::Path(path) => self.visit_path(path),
         }

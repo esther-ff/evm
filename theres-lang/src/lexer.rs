@@ -1,8 +1,6 @@
-use crate::{
-    parser::{ParseError, ParseErrorKind},
-    session::{DIAG_CTXT, SymbolId},
-    sources::SourceId,
-};
+use std::fmt::Display;
+
+use crate::{errors::DiagEmitter, parser::ParseError, session::SymbolId, sources::SourceId};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum TokenKind {
@@ -103,6 +101,106 @@ pub enum TokenKind {
     Eof,
 }
 
+impl Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TokenKind::*;
+
+        let w = match self {
+            LeftParen => "(",
+            RightParen => ")",
+            LeftSqBracket => "[",
+            RightSqBracket => "]",
+            LeftArrowBracket => "<",
+            RightArrowBracket => ">",
+            LeftArrow => "<=",
+            RightArrow => "=>",
+            LeftCurlyBracket => "{",
+            Plus => "+",
+            Minus => "-",
+            Modulo => "%",
+            Star => "*",
+            Slash => "/",
+            Backslash => "\\",
+            Underscore => "_",
+            ShiftLeft => "<<",
+            ShiftRight => ">>",
+
+            Equals => "==",
+            NotEqual => "!=",
+
+            Assign => "=",
+            AddAssign => "+=",
+            SubAssign => "-=",
+            MulAssign => "*=",
+            DivAssign => "/=",
+            ShlAssign => "<<=",
+            ShrAssign => "=>>",
+            ModAssign => "%=",
+            BitAndAssign => "&=",
+            BitOrAssign => "|=",
+            BitXorAssign => "^=",
+
+            GtEq => ">=", // >=
+            LtEq => "=<", // =<
+
+            Xor => "^",    // ^
+            BitOr => "|",  // |
+            BitAnd => "&", // &
+
+            LogicalAnd => "&&", // &&
+            LogicalOr => "||",  // ||
+
+            Dot => ".",
+            ExclamationMark => "!",
+            QuestionMark => "?",
+
+            FloatLiteral(..) => "a float literal",
+            IntegerLiteral(..) => "an integer literal",
+            StringLiteral(sym) => return write!(f, "\"{}\"", sym.get_interned()),
+            Identifier(sym) => sym.get_interned(),
+
+            Semicolon => ";",
+            Comma => ",",
+            Colon => ":",
+            Path => "::", // '::'
+
+            // Keywords
+            Let => "let",
+            Instance => "instance",
+            Function => "fun",
+            Import => "import",
+            If => "if",
+            Else => "else",
+            Then => "then",
+            Inline => "inline",
+            Native => "native",
+            Const => "const",
+            Match => "match",
+            Default => "default",
+            True => "true",
+            False => "false",
+            Global => "global",
+            For => "for",
+            While => "while",
+            Until => "until",
+            Loop => "loop",
+            Return => "return",
+            SelfArg => "self",
+            In => "in",
+            With => "with",
+            Interface => "interface",
+            Apply => "apply",
+            Realm => "realm",
+            Bind => "bind",
+
+            Eof => "<eof>",
+            RightCurlyBracket => "}",
+        };
+
+        write!(f, "{w}")
+    }
+}
+
 macro_rules! operators {
     (Bitwise, $char:expr, $lexer:expr, $with_eq:ident, $not_eq:ident) => {{
         if $lexer.chars.next_char() == Some($char) {
@@ -187,12 +285,7 @@ impl Token {
             return Ok(self);
         }
 
-        let err = ParseError {
-            token_span: self.span,
-            kind: ParseErrorKind::EndOfFile,
-        };
-
-        Err(err)
+        Err(ParseError::EndOfFile)
     }
 }
 
@@ -234,19 +327,12 @@ impl<'a> Reader<'a> {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub enum LexErrorKind {
+pub enum LexError {
     InvalidFloatLiteral,
     InvalidHexLiteral,
     InvalidOctalLiteral,
     LackingEndForStringLiteral,
     UnknownChar(char),
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct LexError {
-    pub kind: LexErrorKind,
-    pub span: Span,
 }
 
 pub struct Lexemes {
@@ -315,15 +401,18 @@ pub struct Lexer<'a> {
     current_line: u32,
 
     sourceid: SourceId,
+
+    diag: &'a DiagEmitter<'a>,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(input: &'a [u8], sourceid: SourceId) -> Self {
+    pub fn new(input: &'a [u8], sourceid: SourceId, diag: &'a DiagEmitter<'a>) -> Self {
         Self {
             tokens: Vec::new(),
             chars: Reader::new(input),
             current_line: 1,
             sourceid,
+            diag,
         }
     }
 
@@ -446,9 +535,9 @@ impl<'a> Lexer<'a> {
         let start = self.chars.position - 1;
         self.skip_all_filter(|x| x == any);
 
-        add_error(
+        self.error(
             self.new_span(start, self.chars.position),
-            LexErrorKind::UnknownChar(any),
+            LexError::UnknownChar(any),
         );
     }
 
@@ -574,6 +663,7 @@ impl<'a> Lexer<'a> {
 
     fn string_literal(&mut self, quote: char) {
         debug_assert!((quote == '\'') | (quote == '"'));
+
         let mut finished_quote = false;
 
         let literal_start = self.chars.position;
@@ -589,7 +679,7 @@ impl<'a> Lexer<'a> {
 
         if !finished_quote {
             let span = self.new_span(literal_start, self.chars.position + 1);
-            add_error(span, LexErrorKind::LackingEndForStringLiteral);
+            self.error(span, LexError::LackingEndForStringLiteral);
             return;
         }
 
@@ -606,7 +696,7 @@ impl<'a> Lexer<'a> {
         while let Some(char) = self.chars.next_char() {
             if !char.is_ascii_digit() {
                 let span = self.new_span(start, self.chars.position + 1);
-                add_error(span, LexErrorKind::InvalidFloatLiteral);
+                self.error(span, LexError::InvalidFloatLiteral);
                 self.skip_all_filter(|x| !x.is_whitespace());
             }
         }
@@ -617,7 +707,7 @@ impl<'a> Lexer<'a> {
             .expect("couldn't retrieve the string");
 
         let Ok(float) = string.parse::<f64>() else {
-            add_error(span, LexErrorKind::InvalidFloatLiteral);
+            self.error(span, LexError::InvalidFloatLiteral);
             return;
         };
 
@@ -647,14 +737,14 @@ impl<'a> Lexer<'a> {
         self.add_token(span, TokenKind::IntegerLiteral(num));
     }
 
-    fn parse_literal_radix(&mut self, radix: u32, err_kind: LexErrorKind) {
+    fn parse_literal_radix(&mut self, radix: u32, err_kind: LexError) {
         let start = self.chars.position;
         self.skip_all_filter(|x| x.is_digit(radix));
 
         let literal = self.get_literal_str(start, self.chars.position).unwrap();
         let Ok(val) = i64::from_str_radix(literal, radix) else {
             let span = self.new_span(start, self.chars.position);
-            add_error(span, err_kind);
+            self.error(span, err_kind);
             return;
         };
 
@@ -665,11 +755,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn octal_literal(&mut self) {
-        self.parse_literal_radix(8, LexErrorKind::InvalidOctalLiteral);
+        self.parse_literal_radix(8, LexError::InvalidOctalLiteral);
     }
 
     fn hex_literal(&mut self) {
-        self.parse_literal_radix(16, LexErrorKind::InvalidHexLiteral);
+        self.parse_literal_radix(16, LexError::InvalidHexLiteral);
     }
 
     fn is_assign_op(&mut self) -> bool {
@@ -715,13 +805,10 @@ impl<'a> Lexer<'a> {
     fn get_literal_str(&self, start: usize, end: usize) -> Option<&str> {
         self.chars.get_str(start, end)
     }
-}
 
-fn add_error(span: Span, kind: LexErrorKind) {
-    DIAG_CTXT
-        .lock()
-        .unwrap()
-        .push_lex_error(LexError { kind, span });
+    fn error(&self, span: Span, err: LexError) {
+        self.diag.emit_err(err, span);
+    }
 }
 
 fn check_for_keyword(ident: &str) -> Option<TokenKind> {
@@ -763,24 +850,4 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
         _ => return None,
     }
     .into()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Lexer, TokenKind};
-    use crate::sources::SourceId;
-
-    #[test]
-    fn rust_like() {
-        let lexer = Lexer::new(b"let meow: i32 = 123", SourceId::DUMMY);
-
-        let mut lexer = lexer.lex();
-
-        assert_eq!(lexer.next_token().kind, TokenKind::Let);
-        assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(..)));
-        assert_eq!(lexer.next_token().kind, TokenKind::Colon);
-        assert!(matches!(lexer.next_token().kind, TokenKind::Identifier(..)));
-        assert_eq!(lexer.next_token().kind, TokenKind::Assign);
-        assert_eq!(lexer.next_token().kind, TokenKind::IntegerLiteral(123));
-    }
 }
