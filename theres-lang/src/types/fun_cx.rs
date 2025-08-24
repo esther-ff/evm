@@ -1,32 +1,20 @@
-use std::borrow::Cow;
-use std::collections::HashMap;
-
-use crate::errors::TheresError;
-use crate::hir::def::{BodyId, DefId, DefType, IntTy, Resolved};
+use crate::ast::VisitorResult;
+use crate::hir::def::{BodyId, DefId, DefType, Resolved};
 use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
-    BindItemKind, Block, Constant, Expr, ExprKind, HirLiteral, Local, Stmt, StmtKind, Thing,
-    ThingKind, Universe,
+    BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Stmt, StmtKind, Thing, ThingKind,
+    Universe,
 };
 use crate::hir::visitor::HirVisitor;
 use crate::lexer::Span;
-use crate::session::{Pooled, Session, SymbolId};
+use crate::session::Session;
+use crate::try_visit;
+use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
+use std::collections::HashMap;
+use std::panic::Location;
 
 crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
 crate::newtyped_index!(InferId, InferMap, InferVec, InferSlice);
-
-/// Interned type.
-pub type Ty<'ty> = Pooled<'ty, TyKind<'ty>>;
-
-/// Interned instance data.
-pub type Instance<'ty> = Pooled<'ty, InstanceDef<'ty>>;
-
-/// Interned Function signature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FnSig<'ty> {
-    pub inputs: &'ty [Ty<'ty>],
-    pub output: Ty<'ty>,
-}
 
 /// Gathers and interns stuff like
 /// function signatures, instance declarations
@@ -75,159 +63,9 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TyKind<'ty> {
-    Bool,
-    Uint(IntTy),
-    Int(IntTy),
-
-    Float,
-    Double,
-
-    /// Instances somehow idk lol !
-    Instance(Instance<'ty>),
-
-    /// fun(ty) -> ty
-    Fn {
-        inputs: &'ty [Ty<'ty>],
-        output: Ty<'ty>,
-    },
-
-    /// Anon type of function def
-    FnDef(DefId),
-
-    /// `[ty]`
-    Array(Ty<'ty>),
-
-    /// nil.
-    Nil,
-
-    /// Type wasn't properly formed.
-    Error,
-
-    /// Diverging computation
-    Diverges,
-
-    /// For inference
-    InferTy(InferTy),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InferTy {
-    pub vid: InferId,
-    pub kind: InferKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum InferKind {
-    Float,
-    Integer,
-    Regular,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InstanceDef<'ty> {
-    pub fields: &'ty FieldSlice<FieldDef>,
-    pub name: SymbolId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FieldDef {
-    pub mutable: Constant,
-    pub name: SymbolId,
-    pub def_id: DefId,
-}
-
-#[derive(Debug, Clone)]
-pub enum TypingError {
-    TypeMismatch(Cow<'static, str>, Cow<'static, str>),
-
-    NoIndexOp {
-        on: Cow<'static, str>,
-    },
-
-    NoUnaryOp {
-        on: Cow<'static, str>,
-    },
-
-    NoBinaryOp {
-        lhs: Cow<'static, str>,
-        rhs: Cow<'static, str>,
-    },
-
-    CallingNotFn {
-        offender: Cow<'static, str>,
-    },
-
-    WrongArgumentTy {
-        expected: Cow<'static, str>,
-        got: Cow<'static, str>,
-        arg_idx: usize,
-    },
-
-    WrongArgumentAmnt {
-        amount_given: usize,
-        amount_req: usize,
-    },
-
-    NoField {
-        on: Cow<'static, str>,
-        field_name: SymbolId,
-    },
-
-    NotInstance {
-        got: Cow<'static, str>,
-    },
-
-    MethodNotFound {
-        on_ty: Cow<'static, str>,
-        method_name: Cow<'static, str>,
-    },
-}
-
-impl TheresError for TypingError {
-    fn phase() -> &'static str {
-        "typing"
-    }
-
-    fn message(&self) -> Cow<'static, str> {
-        match self {
-            TypingError::TypeMismatch(expected, got) => {
-                format!("Expected type: {expected}, got: {got}")
-            }
-            TypingError::NoIndexOp { on } => format!("No index operation for type: {on}"),
-            TypingError::NoUnaryOp { on } => format!("No unary operation for type: {on}"),
-            TypingError::NoBinaryOp { lhs, rhs } => {
-                format!("No binary operation like that for type {lhs} and {rhs}")
-            }
-            TypingError::CallingNotFn { offender } => format!("Attempting to call type {offender}"),
-            TypingError::WrongArgumentTy {
-                expected,
-                got,
-                arg_idx,
-            } => format!("Argument {arg_idx} has type {got}, but expected type was: {expected}"),
-            TypingError::WrongArgumentAmnt {
-                amount_given,
-                amount_req,
-            } => {
-                format!("Invalid amount of arguments, got: {amount_given}, expected: {amount_req}")
-            }
-            TypingError::NotInstance { got } => {
-                format!("Attempted to access a field on type {got}")
-            }
-            TypingError::NoField { on, field_name } => {
-                format!("There is no field {field_name} on type {on}")
-            }
-            TypingError::MethodNotFound { on_ty, method_name } => {
-                format!("No method named {method_name} present on type {on_ty}")
-            }
-        }
-        .into()
-    }
-}
-
 pub struct FunCx<'ty> {
     s: &'ty Session<'ty>,
+
     fn_ret_ty: Option<Ty<'ty>>,
 
     node_type: HashMap<HirId, Ty<'ty>>,
@@ -235,22 +73,28 @@ pub struct FunCx<'ty> {
     ty_var_types: HashMap<InferId, Ty<'ty>>,
 
     infer_ty_counter: u32,
+
+    resolved_method_calls: HashMap<HirId, DefId>,
+
+    local_tys: HashMap<HirId, Ty<'ty>>,
 }
 
 pub struct UnifyError;
 
 impl<'ty> FunCx<'ty> {
-    fn new(s: &'ty Session<'ty>) -> Self {
+    pub fn new(s: &'ty Session<'ty>) -> Self {
         Self {
             s,
             ty_var_types: HashMap::new(),
             infer_ty_counter: 0,
             fn_ret_ty: None,
             node_type: HashMap::new(),
+            resolved_method_calls: HashMap::new(),
+            local_tys: HashMap::new(),
         }
     }
 
-    fn start(&mut self, sig_id: DefId, body: BodyId) {
+    pub fn start(&mut self, sig_id: DefId, body: BodyId) {
         let sig = self.s.fn_sig_for(sig_id);
         self.fn_ret_ty = Some(sig.output);
 
@@ -275,6 +119,7 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn unify(&mut self, expected: Ty<'ty>, got: Ty<'ty>) -> Result<(), UnifyError> {
+        log::trace!("entered `unify` expected={expected:?} got={got:?}");
         match (*expected, *got) {
             (TyKind::Bool, TyKind::Bool)
             | (TyKind::Float, TyKind::Float)
@@ -293,6 +138,7 @@ impl<'ty> FunCx<'ty> {
             (TyKind::Array(ty_left), TyKind::Array(ty_right)) => self.unify(ty_left, ty_right)?,
 
             (TyKind::InferTy(infer), concrete) | (concrete, TyKind::InferTy(infer)) => {
+                // log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
                 match self.ty_var_types.get(&infer.vid) {
                     None => {
                         self.ty_var_types
@@ -312,6 +158,21 @@ impl<'ty> FunCx<'ty> {
         Ok(())
     }
 
+    // probably might recurse REALLY DEEP!
+    fn ty_var_ty(&self, id: InferId) -> Option<Ty<'ty>> {
+        log::trace!("`ty_var_ty` enter");
+        let ret = match self.ty_var_types.get(&id) {
+            None => None,
+            Some(ty) => match **ty {
+                TyKind::InferTy(infer) => self.ty_var_ty(infer.vid),
+                _ => Some(*ty),
+            },
+        };
+
+        log::trace!("`ty_var_end`");
+        ret
+    }
+
     fn type_mismatch_err(&self, expected: Ty<'ty>, got: Ty<'ty>, span: Span) {
         self.s.diag().emit_err(
             TypingError::TypeMismatch(self.s.stringify_ty(expected), self.s.stringify_ty(got)),
@@ -319,7 +180,11 @@ impl<'ty> FunCx<'ty> {
         );
     }
 
-    pub fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
+    fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
+        if let Some(local_ty) = self.local_tys.get(&local.hir_id) {
+            return *local_ty;
+        }
+
         let init_ty = local.init.map(|expr| self.typeck_expr(expr));
         let local_decl_ty = self.s.lower_ty(local.ty);
 
@@ -329,10 +194,11 @@ impl<'ty> FunCx<'ty> {
             self.type_mismatch_err(local_decl_ty, ty, local.ty.span);
         }
 
+        self.local_tys.insert(local.hir_id, local_decl_ty);
         local_decl_ty
     }
 
-    pub fn typeck_stmt(&mut self, stmt: &Stmt<'_>) {
+    fn typeck_stmt(&mut self, stmt: &Stmt<'_>) {
         match stmt.kind {
             StmtKind::Local(local) => {
                 let _ = self.typeck_local(local);
@@ -345,12 +211,15 @@ impl<'ty> FunCx<'ty> {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn typeck_expr(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
-        match expr.kind {
+    fn typeck_expr(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
+        log::trace!("entering `typeck_expr`");
+        let ty = match expr.kind {
             ExprKind::Literal(lit) => match lit {
                 HirLiteral::Bool(..) => self.s.bool(),
                 HirLiteral::Uint(..) | HirLiteral::Int(..) => {
-                    self.new_infer_var(InferKind::Integer)
+                    let new = self.new_infer_var(InferKind::Integer);
+                    log::trace!("new infer ty for integer: {new:?}");
+                    new
                 }
 
                 HirLiteral::Str(_sym) => todo!("idk how to type strings yet Ok!"),
@@ -631,6 +500,8 @@ impl<'ty> FunCx<'ty> {
                         return;
                     };
 
+                    self.resolved_method_calls.insert(expr.hir_id, def_id);
+
                     ret_ty = self.verify_arguments_for_call(def_id, args, span);
                 });
 
@@ -659,10 +530,14 @@ impl<'ty> FunCx<'ty> {
 
                 self.s.intern_ty(TyKind::Array(array_ty))
             }
-        }
+        };
+
+        self.node_type.insert(expr.hir_id, ty);
+        ty
     }
 
-    pub fn typeck_block(&mut self, block: &Block<'_>) -> Ty<'ty> {
+    fn typeck_block(&mut self, block: &Block<'_>) -> Ty<'ty> {
+        log::trace!("typeck_block");
         for stmt in block.stmts {
             self.typeck_stmt(stmt);
         }
@@ -670,7 +545,7 @@ impl<'ty> FunCx<'ty> {
         block.expr.map_or(self.s.nil(), |expr| self.type_of(expr))
     }
 
-    pub fn type_of(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
+    fn type_of(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
         if let Some(ty) = self.node_type.get(&expr.hir_id) {
             return *ty;
         }
@@ -725,14 +600,185 @@ impl<'ty> FunCx<'ty> {
     }
 }
 
-pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
-    ItemGatherer::new(session).visit_universe(universe);
+#[derive(Debug)]
+pub struct TypeTable<'ty> {
+    map: HashMap<HirId, Ty<'ty>>,
+    resolved_method_calls: HashMap<HirId, DefId>,
+}
 
-    for thing in universe.things {
-        if let ThingKind::Fn { name: _, sig } = thing.kind {
-            let mut cx = FunCx::new(session);
-
-            cx.start(thing.def_id, sig.body);
+impl<'ty> TypeTable<'ty> {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            resolved_method_calls: HashMap::new(),
         }
     }
+
+    #[track_caller]
+    #[inline]
+    pub fn type_of(&self, expr: Expr<'_>) -> Ty<'ty> {
+        log::trace!("`type_of` executed");
+        self.map
+            .get(&expr.hir_id)
+            .copied()
+            .expect("expr given to `type_of` has no type assoc'd with it")
+    }
+}
+
+pub struct TyCollector<'ty> {
+    table: TypeTable<'ty>,
+    sess: &'ty Session<'ty>,
+    cx: FunCx<'ty>,
+}
+
+impl<'ty> TyCollector<'ty> {
+    pub fn new(cx: FunCx<'ty>, sess: &'ty Session<'ty>) -> Self {
+        Self {
+            table: TypeTable::new(),
+            cx,
+            sess,
+        }
+    }
+
+    pub fn visit(mut self, expr: &Expr<'_>) -> TypeTable<'ty> {
+        self.visit_expr(expr);
+
+        let _ = core::mem::replace(
+            &mut self.table.resolved_method_calls,
+            self.cx.resolved_method_calls,
+        );
+
+        self.table
+    }
+}
+
+impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
+    type Result = ();
+
+    fn visit_expr(&mut self, expr: &'vis Expr<'vis>) -> Self::Result {
+        let ty = self.cx.type_of(expr);
+
+        match *ty {
+            TyKind::InferTy(infer) => {
+                let Some(infer_resolved) = self.cx.ty_var_ty(infer.vid) else {
+                    let insert_ty = match infer.kind {
+                        InferKind::Float => self.sess.f64(),
+                        InferKind::Integer => self.sess.i32(),
+                        InferKind::Regular => todo!("regular variables aren't used yet"),
+                    };
+
+                    self.table.map.insert(expr.hir_id, insert_ty);
+                    return;
+                };
+
+                self.table.map.insert(expr.hir_id, infer_resolved);
+            }
+
+            _ => {
+                self.table.map.insert(expr.hir_id, ty);
+            }
+        }
+
+        match &expr.kind {
+            ExprKind::Binary { lhs, rhs, op: _ } => {
+                self.visit_expr(lhs);
+                self.visit_expr(rhs);
+            }
+
+            ExprKind::Unary { target, op: _ } => self.visit_expr(target),
+
+            ExprKind::Paren { inner } => self.visit_expr(inner),
+
+            ExprKind::Assign { variable, value }
+            | ExprKind::AssignWithOp {
+                variable,
+                value,
+                op: _,
+            } => {
+                self.visit_expr(variable);
+                self.visit_expr(value);
+            }
+
+            ExprKind::Call { function, args } => {
+                self.visit_expr(function);
+                crate::visit_iter!(v: self, m: visit_expr, *args);
+            }
+
+            ExprKind::MethodCall {
+                receiver,
+                method: _,
+                args,
+            } => try_visit!(
+                self.visit_expr(receiver),
+                crate::visit_iter!(v: self, m: visit_expr, *args)
+            ),
+
+            ExprKind::Block(block) => {
+                crate::visit_iter!(v: self, m: visit_stmt, block.stmts);
+                // log::debug!("block stmts: {:#?}", block.stmts);
+                crate::maybe_visit!(v: self, m: visit_expr, block.expr);
+            }
+
+            ExprKind::If {
+                condition,
+                block,
+                else_ifs,
+                otherwise,
+            } => {
+                self.visit_expr(condition);
+                self.visit_block(block);
+
+                for (block, expr) in *else_ifs {
+                    self.visit_block(block);
+                    self.visit_expr(expr);
+                }
+
+                crate::maybe_visit!(v: self, m: visit_block, otherwise);
+            }
+
+            ExprKind::Return { expr } => crate::maybe_visit!(v: self, m: visit_expr, expr),
+
+            ExprKind::Field { src, field: _ } => self.visit_expr(src),
+
+            ExprKind::Loop { body, reason: _ } => self.visit_block(body),
+
+            ExprKind::Array {
+                ty_of_array,
+                init,
+                size,
+            } => {
+                self.visit_ty(ty_of_array);
+                crate::visit_iter!(v: self, m: visit_expr, *init);
+                self.visit_expr(size);
+            }
+
+            ExprKind::Index {
+                index,
+                indexed_thing,
+            } => {
+                self.visit_expr(index);
+                self.visit_expr(indexed_thing);
+            }
+
+            ExprKind::CommaSep(exprs) => crate::visit_iter!(v: self, m: visit_expr, *exprs),
+
+            ExprKind::Path(path) => self.visit_path(path),
+
+            ExprKind::Literal(..) | ExprKind::Break => Self::Result::normal(),
+        }
+    }
+}
+
+pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
+    log::trace!("typeck_universe");
+    ItemGatherer::new(session).visit_universe(universe);
+    for thing in universe.things {
+        if let ThingKind::Fn { name, sig: _ } = thing.kind {
+            log::trace!("typeck'ing function: {}", name.interned.get_interned());
+            let table = session.typeck(thing.def_id);
+            dbg!(table);
+        }
+    }
+
+    log::trace!("typeck_universe exited");
 }

@@ -1,21 +1,17 @@
-use std::{
-    cell::Cell,
-    io::{Stderr, Write, stderr, stdout},
-    path::Path,
-    sync::RwLock,
-};
+use std::cell::Cell;
+use std::io::{Stderr, Write, stderr, stdout};
+use std::path::Path;
+use std::sync::{Mutex, RwLock};
 
-use crate::{
-    ast::Universe,
-    ast_pretty_printer::PrettyPrinter,
-    errors::DiagEmitter,
-    hir,
-    lexer::{Lexemes, Lexer},
-    parser::Parser,
-    session::Session,
-    sources::{FileManager, SourceId, Sources},
-    ty::typeck_universe,
-};
+use crate::ast::Universe;
+use crate::ast_pretty_printer::PrettyPrinter;
+use crate::errors::DiagEmitter;
+use crate::hir;
+use crate::lexer::{Lexemes, Lexer};
+use crate::parser::Parser;
+use crate::session::Session;
+use crate::sources::{FileManager, SourceId, Sources};
+use crate::types::fun_cx::typeck_universe;
 
 use log::{Level, Log};
 
@@ -47,6 +43,8 @@ pub struct TheresLog {
     stderr: Stderr,
     log_level: Level,
     log_buffer: RwLock<LogBuffer>,
+
+    log_file_string: Mutex<(String, u32)>,
 }
 
 impl TheresLog {
@@ -62,6 +60,8 @@ impl TheresLog {
 
                 buffered_logs: 0,
             }),
+
+            log_file_string: Mutex::new((String::new(), 0)),
         };
 
         log::set_boxed_logger(Box::new(me)).expect("failed to set up logging!");
@@ -96,6 +96,10 @@ impl Log for TheresLog {
     }
 
     fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+
         let should_clear_buffers = self.flush_buffers();
         let mut writer = self.log_buffer.write().unwrap();
 
@@ -104,14 +108,30 @@ impl Log for TheresLog {
             writer.indices.clear();
         }
 
-        let _ = writeln!(
+        let mut cached = self.log_file_string.lock().unwrap();
+        let filename = record.file().unwrap_or("<anon>");
+        let line_nr = record.line().unwrap_or_default();
+
+        if cached.0.as_str() != filename && cached.1 != line_nr {
+            writeln!(
+                self.stderr.lock(),
+                "\n({filename} @ line {line}):",
+                line = record.line().unwrap_or(0),
+            )
+            .expect("logging writer failed");
+
+            cached.0.clear();
+            cached.0.push_str(filename);
+            cached.1 = line_nr;
+        }
+
+        writeln!(
             self.stderr.lock(),
-            "{} @ ({filename}@{line}): {msg}",
+            "{}: {msg}",
             record.level(),
-            line = record.line().unwrap_or(0),
-            filename = record.file().unwrap_or("<anon>"),
             msg = record.args()
-        );
+        )
+        .expect("logging writer failed");
     }
 
     fn flush(&self) {

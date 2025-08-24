@@ -11,7 +11,6 @@ use crate::driver::HirDump;
 use crate::hir::node::Universe;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
-use crate::ty::TyKind;
 
 pub fn lower_universe<'hir>(
     sess: &'hir Session<'hir>,
@@ -28,11 +27,6 @@ pub fn lower_universe<'hir>(
     }
 
     let mappings = inner.into_mappings();
-
-    #[cfg(debug_assertions)]
-    for (id, res) in mappings.debug_resolutions() {
-        log::debug!("{id:?} resolves to: {res:?}");
-    }
 
     let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 

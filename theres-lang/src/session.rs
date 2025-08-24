@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
-use std::fmt::Write as _;
+use std::fmt::Debug;
 use std::ops::Deref;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
@@ -13,7 +13,8 @@ use crate::hir::def::{DefId, DefType, IntTy, PrimTy, Resolved};
 use crate::hir::lowering_ast::HirMap;
 use crate::hir::node::{self, BindItemKind, Field, Node, ThingKind};
 use crate::id::{IdxSlice, IdxVec};
-use crate::ty::{FieldDef, FnSig, InferKind, Instance, InstanceDef, Ty, TyKind};
+use crate::types::fun_cx::{FunCx, TyCollector, TypeTable};
+use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
 
 pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =
     LazyLock::new(|| Mutex::new(GlobalInterner::new()));
@@ -105,7 +106,7 @@ impl SymbolId {
     }
 }
 
-#[derive(Debug, PartialOrd, Eq, Ord, Hash)]
+#[derive(PartialOrd, Eq, Ord, Hash)]
 pub struct Pooled<'a, T>(pub &'a T);
 
 impl<T> Copy for Pooled<'_, T> {}
@@ -113,6 +114,12 @@ impl<T> Copy for Pooled<'_, T> {}
 impl<T> Clone for Pooled<'_, T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<T: Debug> Debug for Pooled<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -352,122 +359,18 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn stringify_ty(&'sess self, ty: Ty<'sess>) -> Cow<'static, str> {
-        let mut buf = String::new();
-
-        match ty.0 {
-            TyKind::Bool => Cow::Borrowed("bool"),
-            TyKind::Uint(size) => match size {
-                IntTy::N8 => Cow::Borrowed("u8"),
-                IntTy::N16 => Cow::Borrowed("u16"),
-                IntTy::N32 => Cow::Borrowed("u32"),
-                IntTy::N64 => Cow::Borrowed("u64"),
-            },
-            TyKind::Int(size) => match size {
-                IntTy::N8 => Cow::Borrowed("i8"),
-                IntTy::N16 => Cow::Borrowed("i16"),
-                IntTy::N32 => Cow::Borrowed("i32"),
-                IntTy::N64 => Cow::Borrowed("i64"),
-            },
-            TyKind::Float => Cow::Borrowed("f32"),
-            TyKind::Double => Cow::Borrowed("f64"),
-            TyKind::Nil => Cow::Borrowed("Nil"),
-            TyKind::Error => Cow::Borrowed("error!"),
-
-            TyKind::Diverges => Cow::Borrowed("Diverges"),
-
-            any => {
-                self.stringfy_string_helper(&mut buf, *any);
-                Cow::Owned(buf)
-            }
-        }
+        crate::types::ty::display_ty(self, ty)
     }
 
-    fn stringfy_string_helper(&'sess self, buf: &mut String, ty: TyKind<'sess>) {
-        let push = match ty {
-            TyKind::Bool => "bool",
-            TyKind::Uint(size) => match size {
-                IntTy::N8 => "u8",
-                IntTy::N16 => "u16",
-                IntTy::N32 => "u32",
-                IntTy::N64 => "u64",
-            },
-            TyKind::Int(size) => match size {
-                IntTy::N8 => "i8",
-                IntTy::N16 => "i16",
-                IntTy::N32 => "i32",
-                IntTy::N64 => "i64",
-            },
-            TyKind::Float => "f32",
-            TyKind::Double => "f64",
-            TyKind::Nil => "Nil",
+    pub fn typeck(&'sess self, def_id: DefId) -> TypeTable<'sess> {
+        log::trace!("`typeck` executed");
 
-            TyKind::Diverges => "Diverges",
-
-            TyKind::Array(ty) => {
-                buf.push('[');
-                self.stringfy_string_helper(buf, *ty);
-                buf.push(']');
-                return;
-            }
-
-            TyKind::Fn { inputs, output } => {
-                buf.push_str("fun(");
-                for (ix, i) in inputs.iter().enumerate() {
-                    self.stringfy_string_helper(buf, **i);
-
-                    if ix != inputs.len() {
-                        buf.push_str(", ");
-                    }
-                }
-                buf.push(')');
-                buf.push_str("=> ");
-                self.stringfy_string_helper(buf, *output);
-
-                return;
-            }
-
-            TyKind::Instance(def) => {
-                buf.push_str(def.name.get_interned());
-                return;
-            }
-
-            TyKind::FnDef(def_id) => {
-                let hir = self.hir_ref();
-                let (sig, name) = hir.expect_fn(def_id);
-                let _ = write!(buf, "fun {}(", name.interned.get_interned());
-
-                for (ix, param) in sig.arguments.iter().enumerate() {
-                    // i'll handle this later ok!
-                    let ty = self.lower_ty(param.ty);
-                    self.stringfy_string_helper(buf, *ty);
-
-                    if ix != sig.arguments.len() {
-                        buf.push_str(", ");
-                    }
-                }
-
-                buf.push(')');
-                buf.push_str("=> ");
-                self.stringfy_string_helper(buf, *self.lower_ty(sig.return_type));
-
-                return;
-            }
-
-            TyKind::Error => "error",
-
-            TyKind::InferTy(infer) => {
-                return match infer.kind {
-                    InferKind::Float => write!(buf, "{{float: {}?}}", infer.vid.to_usize()),
-                    InferKind::Integer => {
-                        write!(buf, "{{integer: {}?}}", infer.vid.to_usize())
-                    }
-                    InferKind::Regular => write!(buf, "{}?", infer.vid.to_usize()),
-                }
-                .expect("writing to a `String` never fails");
-            }
-        };
-
-        buf.push_str(push);
+        let mut fun_cx = FunCx::new(self);
+        let hir = self.hir_ref();
+        let (sig, _) = hir.expect_fn(def_id);
+        let body = hir.get_body(sig.body);
+        fun_cx.start(def_id, sig.body);
+        TyCollector::new(fun_cx, self).visit(body)
     }
 
     fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {

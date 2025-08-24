@@ -17,7 +17,7 @@ mod lexer;
 mod parser;
 mod session;
 mod sources;
-mod ty;
+mod types;
 
 use std::fs::File;
 use std::io::{self, Read as _};
@@ -30,7 +30,7 @@ use crate::driver::{Compiler, Flags, HirDump};
 use crate::sources::FileManager;
 
 fn main() -> sap::Result<()> {
-    println!("Evviva l'arte! Evviva l'arte! Evivva Theres!");
+    println!("woof :3");
     let (flags, path) = opts()?;
 
     parse(&path, flags, FileOpener);

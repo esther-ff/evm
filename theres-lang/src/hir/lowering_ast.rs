@@ -85,6 +85,7 @@ impl Mappings {
     }
 
     pub fn map_to_resolved(&mut self, id: AstId, res: Resolved<AstId>) {
+        log::trace!("{id} resolves to {res:?}");
         self.resolution_map.insert(id, res);
     }
 
