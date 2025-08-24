@@ -3,6 +3,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::panic::Location;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 
@@ -76,8 +77,8 @@ macro_rules! interned_consts {
 }
 
 impl SymbolId {
-    const BASE_SYMBOLS: [&str; 12] = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil", "bool",
+    const BASE_SYMBOLS: [&str; 13] = [
+        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil", "bool", "self",
     ];
 
     // keep in touch with `BASE_SYMBOLS`
@@ -93,7 +94,8 @@ impl SymbolId {
         f32 -> 8,
         f64 -> 9,
         nil -> 10,
-        bool -> 11
+        bool -> 11,
+        self_ -> 12
     );
 
     pub fn get_interned(&self) -> &str {
@@ -236,7 +238,9 @@ impl<'sess> Session<'sess> {
         new
     }
 
+    #[track_caller]
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
+        dbg!(Location::caller());
         self.hir(|map| match map.get_def(def_id) {
             Node::Thing(thing) => match thing.kind {
                 ThingKind::Fn { .. } => self.intern_ty(TyKind::FnDef(def_id)),
@@ -367,9 +371,30 @@ impl<'sess> Session<'sess> {
 
         let mut fun_cx = FunCx::new(self);
         let hir = self.hir_ref();
-        let (sig, _) = hir.expect_fn(def_id);
-        let body = hir.get_body(sig.body);
-        fun_cx.start(def_id, sig.body);
+        let def = hir.get_def(def_id);
+
+        let body_id = match def {
+            Node::BindItem(binditem) => {
+                if let BindItemKind::Fun { name: _, sig } = binditem.kind {
+                    sig.body
+                } else {
+                    panic!("called `typeck` not on a function")
+                }
+            }
+
+            Node::Thing(thing) => {
+                if let ThingKind::Fn { name: _, sig } = thing.kind {
+                    sig.body
+                } else {
+                    panic!("called `typeck` not on a function")
+                }
+            }
+
+            _ => panic!("called `typeck` not on a function"),
+        };
+
+        let body = hir.get_body(body_id);
+        fun_cx.start(def_id, body_id);
         TyCollector::new(fun_cx, self).visit(body)
     }
 

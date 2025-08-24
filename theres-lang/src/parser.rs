@@ -347,7 +347,7 @@ impl<'a> Parser<'a> {
             }
 
             let arg = Arg::new(
-                Name::new(SymbolId::DUMMY, tok.span),
+                Name::new(SymbolId::self_(), tok.span),
                 Ty {
                     id: self.new_id(),
                     kind: TyKind::MethodSelf,
@@ -1116,7 +1116,28 @@ impl<'a> Parser<'a> {
     }
 
     fn field_access_or_method_call(&mut self) -> Result<Expr> {
-        let mut lvalue = self.fun_call()?;
+        let tok = self.lexemes.peek_token();
+        let mut lvalue = if let TokenKind::SelfArg = tok.kind {
+            self.lexemes.advance();
+            Expr::new(
+                ExprType::Path(Path {
+                    path: vec![PathSeg {
+                        name: Name {
+                            interned: SymbolId::self_(),
+                            span: tok.span,
+                        },
+                        span: tok.span,
+                        id: self.new_id(),
+                    }],
+                    id: self.new_id(),
+                    span: tok.span,
+                }),
+                tok.span,
+                self.new_id(),
+            )
+        } else {
+            self.fun_call()?
+        };
 
         while self.consume_if(TokenKind::Dot) {
             let span_start = lvalue.span.start();
@@ -1358,7 +1379,7 @@ impl<'a> Parser<'a> {
 
     #[track_caller]
     fn error_out<T>(&mut self, kind: ParseError, span: Span) -> Result<T, ParseError> {
-        println!("erroring it out! at {}", Location::caller());
+        log::error!("`error_out` called at {}", Location::caller());
         let mut end_span = None;
 
         while !self.lexemes.is_empty() {
@@ -1368,7 +1389,10 @@ impl<'a> Parser<'a> {
             }
 
             match self.lexemes.peek_token().kind {
-                TokenKind::RightSqBracket | TokenKind::RightParen => break,
+                TokenKind::RightSqBracket | TokenKind::RightParen | TokenKind::Eof => {
+                    self.lexemes.advance();
+                    break;
+                }
 
                 _ => self.lexemes.advance(),
             }

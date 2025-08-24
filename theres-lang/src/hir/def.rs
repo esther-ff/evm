@@ -21,6 +21,7 @@ pub enum DefType {
     Const,
     Field,
     Bind,
+    BindItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]

@@ -55,10 +55,50 @@ pub enum TyKind<'ty> {
     InferTy(InferTy),
 }
 
+impl TyKind<'_> {
+    pub fn is_integer_like(self) -> bool {
+        matches!(
+            self,
+            TyKind::Uint(..)
+                | TyKind::Int(..)
+                | TyKind::InferTy(InferTy {
+                    kind: InferKind::Integer,
+                    ..
+                })
+        )
+    }
+
+    pub fn is_float_like(self) -> bool {
+        matches!(
+            self,
+            TyKind::Float
+                | TyKind::Double
+                | TyKind::InferTy(InferTy {
+                    kind: InferKind::Float,
+                    ..
+                })
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InferTy {
     pub vid: InferId,
     pub kind: InferKind,
+}
+
+impl InferTy {
+    pub fn is_regular(self) -> bool {
+        self.kind == InferKind::Regular
+    }
+
+    pub fn is_float(self) -> bool {
+        self.kind == InferKind::Float
+    }
+
+    pub fn is_integer(self) -> bool {
+        self.kind == InferKind::Integer
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -159,7 +199,10 @@ impl TheresError for TypingError {
                 format!("Attempted to access a field on type {got}")
             }
             TypingError::NoField { on, field_name } => {
-                format!("There is no field {field_name} on type {on}")
+                format!(
+                    "There is no field {} on type {on}",
+                    field_name.get_interned()
+                )
             }
             TypingError::MethodNotFound { on_ty, method_name } => {
                 format!("No method named {method_name} present on type {on_ty}")
@@ -254,7 +297,7 @@ fn stringfy_string_helper<'a>(session: &'a Session<'a>, buf: &mut String, ty: Ty
         TyKind::FnDef(def_id) => {
             let hir = session.hir_ref();
             let (sig, name) = hir.expect_fn(def_id);
-            let _ = write!(buf, "fun {}(", name.interned.get_interned());
+            let _ = write!(buf, "fun {}(", name.get_interned());
 
             for (ix, param) in sig.arguments.iter().enumerate() {
                 // i'll handle this later ok!

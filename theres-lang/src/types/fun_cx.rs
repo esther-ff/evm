@@ -2,7 +2,7 @@ use crate::ast::VisitorResult;
 use crate::hir::def::{BodyId, DefId, DefType, Resolved};
 use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
-    BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Stmt, StmtKind, Thing, ThingKind,
+    BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Node, Stmt, StmtKind, Thing, ThingKind,
     Universe,
 };
 use crate::hir::visitor::HirVisitor;
@@ -48,6 +48,9 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
 
             ThingKind::Bind(bind) => {
                 for bind_item in bind.items {
+                    if let BindItemKind::Fun { sig, name: _ } = bind_item.kind {
+                        self.sess.lower_fn_sig(*sig, bind_item.def_id);
+                    }
                     self.visit_bind_item(bind_item);
                 }
             }
@@ -138,7 +141,12 @@ impl<'ty> FunCx<'ty> {
             (TyKind::Array(ty_left), TyKind::Array(ty_right)) => self.unify(ty_left, ty_right)?,
 
             (TyKind::InferTy(infer), concrete) | (concrete, TyKind::InferTy(infer)) => {
-                // log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
+                log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
+
+                if infer.is_integer() && !concrete.is_integer_like() || infer.is_float() && !concrete.is_float_like() {
+                    return Err(UnifyError)
+                    
+                }
                 match self.ty_var_types.get(&infer.vid) {
                     None => {
                         self.ty_var_types
@@ -447,12 +455,20 @@ impl<'ty> FunCx<'ty> {
 
                     Resolved::Local(hir_id) => {
                         let hir = self.s.hir_ref();
-                        self.typeck_local(hir.get_local(hir_id))
+
+                        match hir.get_node(hir_id) {
+                            Node::Local(local) => self.typeck_local(local),
+                            Node::FnParam(param) => self.s.lower_ty(param.ty),
+
+                            _ => todo!(),
+                        }
                     }
 
                     Resolved::Def(def_id, DefType::Const) => self.s.def_type_of(def_id),
 
-                    any => unreachable!("what the fuck? {any:?}"),
+                    Resolved::Err => self.s.ty_err(),
+
+                    _ => unreachable!("what the fuck?"),
                 }
             }
 
@@ -604,6 +620,7 @@ impl<'ty> FunCx<'ty> {
 pub struct TypeTable<'ty> {
     map: HashMap<HirId, Ty<'ty>>,
     resolved_method_calls: HashMap<HirId, DefId>,
+    local_variables: HashMap<HirId, Ty<'ty>>,
 }
 
 impl<'ty> TypeTable<'ty> {
@@ -611,6 +628,7 @@ impl<'ty> TypeTable<'ty> {
         Self {
             map: HashMap::new(),
             resolved_method_calls: HashMap::new(),
+            local_variables: HashMap::new(),
         }
     }
 
@@ -647,6 +665,8 @@ impl<'ty> TyCollector<'ty> {
             &mut self.table.resolved_method_calls,
             self.cx.resolved_method_calls,
         );
+
+        let _ = core::mem::replace(&mut self.table.local_variables, self.cx.local_tys);
 
         self.table
     }
@@ -773,12 +793,24 @@ pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>)
     log::trace!("typeck_universe");
     ItemGatherer::new(session).visit_universe(universe);
     for thing in universe.things {
-        if let ThingKind::Fn { name, sig: _ } = thing.kind {
-            log::trace!("typeck'ing function: {}", name.interned.get_interned());
-            let table = session.typeck(thing.def_id);
-            dbg!(table);
+        match thing.kind {
+            ThingKind::Fn { name, sig: _ } => {
+                log::trace!("typeck'ing function: {}", name.interned.get_interned());
+                let table = session.typeck(thing.def_id);
+                dbg!(table);
+            }
+
+            ThingKind::Bind(bind) => {
+                for item in bind.items {
+                    if let BindItemKind::Fun { sig: _, name } = item.kind {
+                        log::trace!("typeck'ing function: {}", name.get_interned());
+                        let table = session.typeck(item.def_id);
+                        dbg!(table);
+                    }
+                }
+            }
+            _ => {}
         }
     }
-
     log::trace!("typeck_universe exited");
 }

@@ -98,6 +98,7 @@ impl ThingDefResolver<'_> {
     }
 
     fn register_defn(&mut self, id: AstId, kind: DefType, name: Name) -> DefId {
+        log::trace!("register_defn id={id} kind={kind:?}");
         let def_id = self.definitions.register_defn(kind, name.interned);
         self.ast_id_to_def_id.insert(id, def_id);
         self.def_id_to_ast_id.insert(def_id, id);
@@ -113,6 +114,8 @@ where
     type Result = ();
 
     fn visit_thing(&mut self, val: &'a Thing) -> Self::Result {
+        log::trace!("visit_thing val.id={}", val.id);
+
         self.thing_ast_id = Some(val.id);
         match &val.kind {
             ThingKind::Function(fndecl) => {
@@ -153,14 +156,11 @@ where
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
-        self.register_defn(
-            self.thing_ast_id.as_ref().copied().unwrap(),
-            DefType::Bind,
-            Name::DUMMY,
-        );
+        self.register_defn(val.id, DefType::BindItem, Name::DUMMY);
+
         match val.kind {
             BindItemKind::Const(ref stmt) => {
-                self.register_defn(stmt.id, DefType::Const, stmt.name);
+                self.register_defn(val.id, DefType::Const, stmt.name);
             }
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
@@ -255,6 +255,8 @@ pub struct LateResolver<'a> {
     module_scopes: AstIdMap<ScopeStack>,
 
     current_instance: Option<AstId>,
+    current_bind_item: Option<AstId>,
+    current_bind_ty: Option<AstId>,
 
     // mapping names to definitions,
     pub definitions: Definitions<'a>,
@@ -270,6 +272,10 @@ impl<'a> LateResolver<'a> {
         Self {
             current_item: None,
             current_instance: None,
+            current_bind_ty: None,
+
+            current_bind_item: None,
+
             current_scope: root.id,
             module_scopes: HashMap::from([(root.id, ScopeStack::new_with_prims())]),
 
@@ -482,6 +488,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             unimplemented!("interfaces!")
         }
 
+        self.current_bind_ty = Some(bind.victim.id);
+
         self.visit_ty(&bind.victim);
 
         if let TyKind::Path(path) = &bind.victim.kind {
@@ -495,22 +503,26 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         let scope_id = self.current_scope_stack().scopes.future_id();
 
+        let res = self.maps.resolve(bind.victim.id);
         self.with_new_scope(
             |this| {
                 for item in &bind.items {
                     this.visit_bind_item(item);
                 }
             },
-            None,
+            Some(&[(SymbolId::self_(), res)]),
         );
 
+        self.current_bind_ty.take();
         self.bind_to_scope.insert(bind.id, scope_id);
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
+        log::trace!("`visit_bind_item` astid = {}", val.id);
+        self.current_bind_item = Some(val.id);
         match val.kind {
             BindItemKind::Const(ref var_stmt) => {
-                let def_id = self.get_def_id(var_stmt.id);
+                let def_id = self.get_def_id(val.id);
                 self.with_current_scope_mut(|scope| {
                     scope.add(
                         &var_stmt.name,
@@ -523,6 +535,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
+        self.current_bind_item.take();
     }
 
     fn visit_fn_decl(&mut self, val: &'a crate::ast::FnDecl) -> Self::Result {
@@ -544,7 +557,11 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         self.visit_ty(ret_type);
 
-        let def_id = self.get_def_id(self.current_item());
+        let thing_ast_id = self
+            .current_bind_item
+            .unwrap_or_else(|| self.current_item());
+
+        let def_id = self.get_def_id(thing_ast_id);
 
         self.with_current_scope_mut(|s| {
             s.add(name, Resolved::Def(def_id, DefType::Fun), Space::Values);
@@ -656,8 +673,8 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 rvalue,
                 mode: _,
             } => {
-                let ExprType::Path(ref _path) = lvalue.ty else {
-                    todo!("error, can't assign to anything other than a variable")
+                let (ExprType::Path(..) | ExprType::FieldAccess { .. }) = lvalue.ty else {
+                    todo!("error, can't assign to anything other than a variable or field access")
                 };
 
                 self.visit_expr(lvalue);
@@ -752,11 +769,19 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             TyKind::Path(path) => {
                 let res = self.resolve_path(path, Space::Types);
-                self.visit_path(path);
+                self.maps.map_to_resolved(val.id, res);
                 self.maps.map_to_resolved(path.id, res);
             }
 
-            TyKind::MethodSelf | TyKind::Err => (), // explicit matching in case i add smth new
+            TyKind::MethodSelf => {
+                let Some(cur) = self.current_bind_item else {
+                    todo!("self ty outside bind!");
+                };
+
+                dbg!(cur);
+            }
+
+            TyKind::Err => (), // explicit matching in case i add smth new
         }
     }
 

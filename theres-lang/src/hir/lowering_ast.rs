@@ -1,3 +1,4 @@
+use core::panic;
 use std::collections::HashMap;
 use std::panic::Location;
 
@@ -10,7 +11,7 @@ use crate::hir::node::{self, Constant, Node, Param};
 use crate::id::IdxVec;
 use crate::lexer::Span;
 use crate::parser::{AstId, AstIdMap};
-use crate::session::Session;
+use crate::session::{Session, SymbolId};
 
 crate::newtyped_index!(HirId, HirIdMap, HirVec);
 crate::newtyped_index!(LocalId, LocalMap, LocalVec);
@@ -24,6 +25,8 @@ pub struct Mappings {
     instance_to_bind: DefMap<Vec<AstId>>,
     binds_to_resolved_ty_id: AstIdMap<AstId>,
     binds_to_items: AstIdMap<Vec<AstId>>,
+
+    self_ty_ast_id_to_ty: AstIdMap<Ty>,
 }
 
 impl Mappings {
@@ -37,6 +40,7 @@ impl Mappings {
             instance_to_bind: HashMap::new(),
             binds_to_resolved_ty_id: HashMap::new(),
             binds_to_items: HashMap::new(),
+            self_ty_ast_id_to_ty: HashMap::new(),
         }
     }
 
@@ -89,6 +93,7 @@ impl Mappings {
         self.resolution_map.insert(id, res);
     }
 
+    #[track_caller]
     pub fn resolve(&mut self, id: AstId) -> Resolved<AstId> {
         self.resolution_map
             .get(&id)
@@ -141,6 +146,7 @@ impl<'hir> HirMap<'hir> {
             .expect("Field's DefId wasn't mapped to any instance")
     }
 
+    #[track_caller]
     pub fn get_def(&'hir self, def_id: DefId) -> &'hir Node<'hir> {
         self.get_node(
             self.def_id_to_hir_id
@@ -150,6 +156,7 @@ impl<'hir> HirMap<'hir> {
         )
     }
 
+    #[track_caller]
     pub fn get_thing(&'hir self, def_id: DefId) -> &'hir node::Thing<'hir> {
         let Node::Thing(thing) = self.get_node(
             self.def_id_to_hir_id
@@ -157,7 +164,15 @@ impl<'hir> HirMap<'hir> {
                 .copied()
                 .expect("DefId wasn't mapped to any HirId"),
         ) else {
-            panic!("`DefId` pointed to not a definition ")
+            dbg!(
+                self.get_node(
+                    self.def_id_to_hir_id
+                        .get(&def_id)
+                        .copied()
+                        .expect("DefId wasn't mapped to any HirId"),
+                )
+            );
+            panic!("`DefId` pointed to not a definition")
         };
 
         thing
@@ -209,12 +224,26 @@ impl<'hir> HirMap<'hir> {
         expr_body
     }
 
-    pub fn expect_fn(&'hir self, def_id: DefId) -> (&'hir node::FnSig<'hir>, Name) {
-        let node::ThingKind::Fn { name, sig } = self.get_thing(def_id).kind else {
-            panic!("`DefId` given to `expect_fn` did not point to a `Fn`")
-        };
+    pub fn expect_fn(&'hir self, def_id: DefId) -> (&'hir node::FnSig<'hir>, SymbolId) {
+        match self.get_def(def_id) {
+            Node::Thing(thing) => {
+                let node::ThingKind::Fn { sig, name } = thing.kind else {
+                    panic!("`DefId` given to `expect_fn` did not point to any function")
+                };
 
-        (sig, name)
+                (sig, name.interned)
+            }
+
+            Node::BindItem(bind_item) => {
+                let node::BindItemKind::Fun { sig, name } = bind_item.kind else {
+                    panic!("`DefId` given to `expect_fn` did not point to any function")
+                };
+
+                (sig, name)
+            }
+
+            _ => panic!("`DefId` given to `expect_fn` did not point to any function"),
+        }
     }
 
     pub fn expect_instance(&'hir self, def_id: DefId) -> (&'hir [node::Field<'hir>], Name) {
@@ -242,6 +271,8 @@ pub struct AstLowerer<'hir> {
     ast_id_to_hir_id: AstIdMap<HirId>,
 
     current_instance: Option<DefId>,
+
+    current_bind_ty: Option<&'hir node::Ty<'hir>>,
 }
 
 impl<'hir> AstLowerer<'hir> {
@@ -249,6 +280,7 @@ impl<'hir> AstLowerer<'hir> {
         Self {
             map,
             current_instance: None,
+            current_bind_ty: None,
             session,
 
             hir_id_counter: 0,
@@ -291,6 +323,7 @@ impl<'hir> AstLowerer<'hir> {
         hir_id
     }
 
+    #[track_caller]
     fn map_ast_id_to_hir_id(&self, ast_id: AstId) -> HirId {
         self.ast_id_to_hir_id
             .get(&ast_id)
@@ -597,7 +630,18 @@ impl<'hir> AstLowerer<'hir> {
         let kind = match &ty.kind {
             TyKind::Fn { args: _, ret: _ } => todo!(),
             TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(inner)),
-            TyKind::MethodSelf => node::TyKind::MethodSelf,
+            TyKind::MethodSelf => {
+                if let Some(bind_ty) = self.current_bind_ty {
+                    return self.session.arena().alloc(node::Ty::new(
+                        ty.span,
+                        self.next_hir_id(ty.id),
+                        bind_ty.kind,
+                    ));
+                }
+
+                log::error!("self ty outside bind");
+                node::TyKind::Err
+            }
             TyKind::Path(path) => node::TyKind::Path(self.lower_path(path)),
             TyKind::Err => node::TyKind::Err,
         };
@@ -642,18 +686,24 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     pub fn lower_bind(&mut self, bind: &Bind) -> node::ThingKind<'hir> {
-        node::ThingKind::Bind(node::Bind {
-            with: self.lower_ty(&bind.victim),
+        let ty = self.lower_ty(&bind.victim);
+        self.current_bind_ty.replace(ty);
+
+        let bind_node = node::ThingKind::Bind(node::Bind {
+            with: ty,
             items: self
                 .session
                 .arena()
                 .alloc_from_iter(bind.items.iter().map(|item| self.lower_bind_item(item))),
             mask: None,
-        })
+        });
+
+        self.current_bind_ty.take();
+        bind_node
     }
 
     pub fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'hir> {
-        let (lowered_kind, ast_id, span) = match &kind.kind {
+        let (lowered_kind, _, span) = match &kind.kind {
             BindItemKind::Const(variable) => (
                 node::BindItemKind::Const {
                     ty: self.lower_ty(&variable.ty),
@@ -670,17 +720,19 @@ impl<'hir> AstLowerer<'hir> {
             ),
 
             BindItemKind::Fun(fn_decl) => {
+                let sig =
+                    self.lower_fn_sig(&fn_decl.sig, self.session.hir(|map| map.bodies.future_id()));
+
                 let body = self.session.arena().alloc(node::Expr::new(
                     node::ExprKind::Block(self.lower_block(&fn_decl.block)),
                     fn_decl.span,
                     self.new_hir_id(),
                 ));
-                let def_id = self.map.def_id_of(fn_decl.id);
 
-                let sig = self.lower_fn_sig(
-                    &fn_decl.sig,
-                    self.session.hir_mut(|map| map.insert_body_of(body, def_id)),
-                );
+                let def_id = self.map.def_id_of(kind.id);
+                self.session.hir_mut(|map| map.insert_body_of(body, def_id));
+
+                log::trace!("after fn decl in bind");
 
                 (
                     node::BindItemKind::Fun {
@@ -694,8 +746,8 @@ impl<'hir> AstLowerer<'hir> {
         };
 
         node::BindItem::new(
-            self.next_hir_id(ast_id),
-            self.map.def_id_of(ast_id),
+            self.next_hir_id(kind.id),
+            self.map.def_id_of(kind.id),
             span,
             lowered_kind,
         )
@@ -723,11 +775,11 @@ impl<'hir> AstLowerer<'hir> {
         let hir_sig = node::FnSig::new(
             sig.span,
             self.lower_ty(&sig.ret_type),
-            self.session.arena().alloc_from_iter(
-                sig.args
-                    .iter()
-                    .map(|arg| Param::new(arg.ident, self.lower_ty(&arg.ty), self.new_hir_id())),
-            ),
+            self.session
+                .arena()
+                .alloc_from_iter(sig.args.iter().map(|arg| {
+                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_hir_id(arg.id))
+                })),
             body_id,
         );
 
