@@ -372,19 +372,18 @@ impl<'sess> Session<'sess> {
         let mut fun_cx = FunCx::new(self);
         let hir = self.hir_ref();
         let def = hir.get_def(def_id);
-
-        let body_id = match def {
+        let (body_id, sym) = match def {
             Node::BindItem(binditem) => {
-                if let BindItemKind::Fun { name: _, sig } = binditem.kind {
-                    sig.body
+                if let BindItemKind::Fun { name, sig } = binditem.kind {
+                    (sig.body, name)
                 } else {
                     panic!("called `typeck` not on a function")
                 }
             }
 
             Node::Thing(thing) => {
-                if let ThingKind::Fn { name: _, sig } = thing.kind {
-                    sig.body
+                if let ThingKind::Fn { name, sig } = thing.kind {
+                    (sig.body, name.interned)
                 } else {
                     panic!("called `typeck` not on a function")
                 }
@@ -394,8 +393,19 @@ impl<'sess> Session<'sess> {
         };
 
         let body = hir.get_body(body_id);
+
+        log::trace!("typeck'ing function: {}", sym.get_interned());
         fun_cx.start(def_id, body_id);
-        TyCollector::new(fun_cx, self).visit(body)
+
+        let table = TyCollector::new(fun_cx, self).visit(body);
+
+        log::trace!(
+            "type table for function {}: \n{:?}",
+            sym.get_interned(),
+            table
+        );
+
+        table
     }
 
     fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {

@@ -189,6 +189,11 @@ pub enum ExprType {
         ctor_args: Vec<Expr>,
     },
 
+    Index {
+        indexed: Box<Expr>,
+        index: Box<Expr>,
+    },
+
     Path(Path),
 
     Block(Block),
@@ -886,6 +891,9 @@ pub trait Visitor<'a> {
         let Expr { ty, span: _, id: _ } = val;
 
         match ty {
+            ExprType::Index { indexed, index } => {
+                try_visit!(self.visit_expr(indexed), self.visit_expr(index))
+            }
             ExprType::Break | ExprType::Constant(..) => Self::Result::normal(),
 
             ExprType::BinaryExpr { lhs, rhs, op: _ } => {

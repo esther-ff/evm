@@ -11,7 +11,6 @@ use crate::session::Session;
 use crate::try_visit;
 use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
 use std::collections::HashMap;
-use std::panic::Location;
 
 crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
 crate::newtyped_index!(InferId, InferMap, InferVec, InferSlice);
@@ -189,6 +188,7 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
+        log::trace!("entering `typeck_local`");
         if let Some(local_ty) = self.local_tys.get(&local.hir_id) {
             return *local_ty;
         }
@@ -554,6 +554,7 @@ impl<'ty> FunCx<'ty> {
 
     fn typeck_block(&mut self, block: &Block<'_>) -> Ty<'ty> {
         log::trace!("typeck_block");
+
         for stmt in block.stmts {
             self.typeck_stmt(stmt);
         }
@@ -618,7 +619,7 @@ impl<'ty> FunCx<'ty> {
 
 #[derive(Debug)]
 pub struct TypeTable<'ty> {
-    map: HashMap<HirId, Ty<'ty>>,
+    expr_tys: HashMap<HirId, Ty<'ty>>,
     resolved_method_calls: HashMap<HirId, DefId>,
     local_variables: HashMap<HirId, Ty<'ty>>,
 }
@@ -626,7 +627,7 @@ pub struct TypeTable<'ty> {
 impl<'ty> TypeTable<'ty> {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            expr_tys: HashMap::new(),
             resolved_method_calls: HashMap::new(),
             local_variables: HashMap::new(),
         }
@@ -636,7 +637,7 @@ impl<'ty> TypeTable<'ty> {
     #[inline]
     pub fn type_of(&self, expr: Expr<'_>) -> Ty<'ty> {
         log::trace!("`type_of` executed");
-        self.map
+        self.expr_tys
             .get(&expr.hir_id)
             .copied()
             .expect("expr given to `type_of` has no type assoc'd with it")
@@ -687,15 +688,15 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
                         InferKind::Regular => todo!("regular variables aren't used yet"),
                     };
 
-                    self.table.map.insert(expr.hir_id, insert_ty);
+                    self.table.expr_tys.insert(expr.hir_id, insert_ty);
                     return;
                 };
 
-                self.table.map.insert(expr.hir_id, infer_resolved);
+                self.table.expr_tys.insert(expr.hir_id, infer_resolved);
             }
 
             _ => {
-                self.table.map.insert(expr.hir_id, ty);
+                self.table.expr_tys.insert(expr.hir_id, ty);
             }
         }
 
@@ -792,25 +793,23 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
     log::trace!("typeck_universe");
     ItemGatherer::new(session).visit_universe(universe);
+
     for thing in universe.things {
         match thing.kind {
-            ThingKind::Fn { name, sig: _ } => {
-                log::trace!("typeck'ing function: {}", name.interned.get_interned());
-                let table = session.typeck(thing.def_id);
-                dbg!(table);
+            ThingKind::Fn { name: _, sig: _ } => {
+                let _table = session.typeck(thing.def_id);
             }
 
             ThingKind::Bind(bind) => {
                 for item in bind.items {
-                    if let BindItemKind::Fun { sig: _, name } = item.kind {
-                        log::trace!("typeck'ing function: {}", name.get_interned());
-                        let table = session.typeck(item.def_id);
-                        dbg!(table);
+                    if let BindItemKind::Fun { sig: _, name:_ } = item.kind {
+                        let _table = session.typeck(item.def_id);
                     }
                 }
             }
             _ => {}
         }
     }
+
     log::trace!("typeck_universe exited");
 }

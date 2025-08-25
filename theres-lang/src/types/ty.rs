@@ -310,7 +310,7 @@ fn stringfy_string_helper<'a>(session: &'a Session<'a>, buf: &mut String, ty: Ty
             }
 
             buf.push(')');
-            buf.push_str("=> ");
+            buf.push_str(" => ");
             stringfy_string_helper(session, buf, *session.lower_ty(sig.return_type));
 
             return;

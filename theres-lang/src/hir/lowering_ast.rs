@@ -295,6 +295,8 @@ impl<'hir> AstLowerer<'hir> {
     /// as it maps `AstId`s to `HirId`s for lowering `Resolved`s
     #[track_caller]
     pub fn next_hir_id(&mut self, ast_id: AstId) -> HirId {
+        log::trace!("next_hir_id ast_id={} loc={}", ast_id, Location::caller());
+
         let hir_id = HirId::new(self.hir_id_counter);
         self.hir_id_counter += 1;
         let ret = self.ast_id_to_hir_id.insert(ast_id, hir_id);
@@ -341,11 +343,17 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[track_caller]
     pub fn lower_expr_noalloc(&mut self, expr: &Expr) -> node::Expr<'hir> {
         let hir_id = self.next_hir_id(expr.id);
 
         let hir_expr_kind = match &expr.ty {
             ExprType::Break => node::ExprKind::Break,
+
+            ExprType::Index { indexed, index } => node::ExprKind::Index {
+                index: self.lower_expr(index),
+                indexed_thing: self.lower_expr(indexed),
+            },
             ExprType::BinaryExpr { lhs, rhs, op } => node::ExprKind::Binary {
                 lhs: self.lower_expr(lhs),
                 rhs: self.lower_expr(rhs),
@@ -481,6 +489,7 @@ impl<'hir> AstLowerer<'hir> {
         body: &Block,
         desugar: DesugarLoop,
     ) -> &'hir node::Block<'hir> {
+        log::debug!("lower while or until loop");
         let cond_block = node::Block::new(
             Span::DUMMY,
             &[],
@@ -524,7 +533,6 @@ impl<'hir> AstLowerer<'hir> {
                 Some(self.session.arena().alloc(condition)),
             ),
             Some(expr) => {
-                let id = self.next_hir_id(expr.id);
                 let block_id = self.next_hir_id(body.id);
                 let lowered = self.lower_expr(expr);
 
@@ -535,7 +543,7 @@ impl<'hir> AstLowerer<'hir> {
                             core::iter::once(node::Stmt::new(
                                 expr.span,
                                 node::StmtKind::Expr(lowered),
-                                id,
+                                lowered.hir_id,
                             )),
                         ),
                     ),
@@ -571,7 +579,9 @@ impl<'hir> AstLowerer<'hir> {
         }
     }
 
+    #[track_caller]
     pub fn lower_expr(&mut self, expr: &Expr) -> &'hir node::Expr<'hir> {
+        log::debug!("lower_expr expr.id={} loc={}", expr.id, Location::caller());
         self.session.arena().alloc(self.lower_expr_noalloc(expr))
     }
 
@@ -754,20 +764,33 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     pub fn lower_fn_decl(&mut self, fn_decl: &FnDecl, def_id: DefId) -> node::ThingKind<'hir> {
-        let expr_body = node::Expr::new(
-            node::ExprKind::Block(self.lower_block(&fn_decl.block)),
-            fn_decl.span,
-            self.new_hir_id(),
-        );
+        let params =
+            self.session
+                .arena()
+                .alloc_from_iter(fn_decl.sig.args.iter().map(|arg| {
+                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_hir_id(arg.id))
+                }));
 
-        let body = self.session.arena().alloc(expr_body);
+        let body = self.lower_block(&fn_decl.block);
+        let body_id = self.session.hir_mut(|hir| {
+            hir.insert_body_of(
+                self.session.arena().alloc(node::Expr::new(
+                    node::ExprKind::Block(body),
+                    body.span,
+                    body.hir_id,
+                )),
+                def_id,
+            )
+        });
 
         node::ThingKind::Fn {
             name: fn_decl.sig.name,
-            sig: self.lower_fn_sig(
-                &fn_decl.sig,
-                self.session.hir_mut(|map| map.insert_body_of(body, def_id)),
-            ),
+            sig: self.session.arena().alloc(node::FnSig::new(
+                fn_decl.sig.span,
+                self.lower_ty(&fn_decl.sig.ret_type),
+                params,
+                body_id,
+            )),
         }
     }
 
@@ -833,6 +856,7 @@ impl<'hir> AstLowerer<'hir> {
         )
     }
 
+    #[track_caller]
     pub fn lower_resolved(&mut self, res: Resolved<AstId>) -> Resolved<HirId> {
         match res {
             Resolved::Local(ast_id) => Resolved::Local(self.map_ast_id_to_hir_id(ast_id)),

@@ -105,6 +105,7 @@ impl<'a> Parser<'a> {
     fn declaration(&mut self) -> Result<ThingKind> {
         let tok = self.lexemes.peek_token();
 
+        log::trace!("declaration tok={:#?}", tok);
         let decl = match tok.kind {
             TokenKind::Function => ThingKind::Function(self.function_declaration()?),
             TokenKind::Global => self.global_variable_decl()?,
@@ -153,6 +154,7 @@ impl<'a> Parser<'a> {
     fn ty(&mut self) -> Result<Ty> {
         let id = self.new_id();
         let tok = self.lexemes.peek_token();
+        dbg!(tok);
         match tok.kind {
             TokenKind::Function => self.parse_function_type(),
             TokenKind::LeftSqBracket => self.parse_array_type(),
@@ -1269,8 +1271,20 @@ impl<'a> Parser<'a> {
 
             TokenKind::Identifier(..) => {
                 let path = self.path()?;
-                let span = path.span;
-                let ty = ExprType::Path(path);
+                let mut span = path.span;
+                let mut ty = ExprType::Path(path);
+
+                if self.consume_if(t!(LeftSqBracket)) {
+                    let idx = self.expression()?;
+                    let tok = self.expect(t!(RightSqBracket));
+
+                    ty = ExprType::Index {
+                        indexed: Box::new(Expr::new(ty, span, self.new_id())),
+                        index: Box::new(idx),
+                    };
+
+                    span = Span::between(span, tok.span);
+                }
 
                 return Ok(Expr::new(ty, span, self.new_id()));
             }
@@ -1278,7 +1292,15 @@ impl<'a> Parser<'a> {
             TokenKind::LeftCurlyBracket => Some(ExprType::Block(self.block()?)),
 
             _ => {
-                return self.error_out(ParseError::ExpectedExpr, token.span);
+                let expr = self.expression()?;
+                self.expect(t!(LeftSqBracket));
+                let idx = self.expression()?;
+                self.expect(t!(RightSqBracket));
+
+                Some(ExprType::Index {
+                    indexed: Box::new(expr),
+                    index: Box::new(idx),
+                })
             }
         };
 

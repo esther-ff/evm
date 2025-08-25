@@ -743,6 +743,11 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 self.with_new_scope(|x| x.visit_block(b), None);
             }
 
+            ExprType::Index { indexed, index } => {
+                self.visit_expr(indexed);
+                self.visit_expr(index);
+            }
+
             any => todo!("to-do expression kinds: {any:#?}"),
         }
     }
