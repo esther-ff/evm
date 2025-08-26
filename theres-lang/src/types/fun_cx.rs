@@ -143,6 +143,7 @@ impl<'ty> FunCx<'ty> {
                 log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
 
                 if infer.is_integer() && !concrete.is_integer_like() || infer.is_float() && !concrete.is_float_like() {
+                    log::error!("infer error infer={infer:?} concrete={concrete:?}");
                     return Err(UnifyError)
                     
                 }
@@ -524,27 +525,26 @@ impl<'ty> FunCx<'ty> {
                 ret_ty
             }
 
-            ExprKind::Array {
-                ty_of_array,
-                init,
-                size,
-            } => {
-                let size_ty = self.type_of(size);
-                if self.s.u64() != size_ty {
-                    self.type_mismatch_err(self.s.u64(), size_ty, expr.span);
+            ExprKind::List(exprs) => {
+                if exprs.is_empty() {
+                    return self.s.intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular)))
                 }
 
-                let array_ty = self.s.lower_ty(ty_of_array);
+                exprs
+                    .iter()
+                    .fold(None, |state, expr| {
+                        let Some(ty) = state else {
+                            return Some(self.type_of(expr))
+                        };
 
-                for expr in init {
-                    let expr_ty = self.type_of(expr);
+                        let expr_ty = self.type_of(expr);
+                        if self.unify(ty, expr_ty).is_err() {
+                            self.type_mismatch_err(ty, expr_ty, expr.span);
+                        }
 
-                    if expr_ty != array_ty {
-                        self.type_mismatch_err(array_ty, expr_ty, expr.span);
-                    }
-                }
-
-                self.s.intern_ty(TyKind::Array(array_ty))
+                        state
+                    })
+                    .map_or_else(|| unreachable!(), |output| self.s.intern_ty(TyKind::Array(output)))
             }
         };
 
@@ -763,14 +763,8 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
 
             ExprKind::Loop { body, reason: _ } => self.visit_block(body),
 
-            ExprKind::Array {
-                ty_of_array,
-                init,
-                size,
-            } => {
-                self.visit_ty(ty_of_array);
-                crate::visit_iter!(v: self, m: visit_expr, *init);
-                self.visit_expr(size);
+            ExprKind::List(exprs) => {
+                crate::visit_iter!(v: self, m: visit_expr, *exprs);
             }
 
             ExprKind::Index {

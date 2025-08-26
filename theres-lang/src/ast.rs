@@ -169,11 +169,7 @@ pub enum ExprType {
         field: Name,
     },
 
-    ArrayDecl {
-        ty: Ty,
-        size: Box<Expr>,
-        initialize: Vec<Expr>,
-    },
+    List(Vec<Expr>),
 
     Lambda {
         args: Vec<Pat>,
@@ -438,10 +434,13 @@ pub struct Instance {
     pub span: Span,
     pub fields: Vec<Field>,
     pub id: AstId,
+
+    /// id of it's constructor
+    pub ctor_id: AstId,
 }
 
 impl Instance {
-    pub fn new(name: Name, span: Span, fields: Vec<Field>, id: AstId) -> Self {
+    pub fn new(name: Name, span: Span, fields: Vec<Field>, id: AstId, ctor_id: AstId) -> Self {
         Self {
             name,
 
@@ -449,6 +448,7 @@ impl Instance {
             fields,
 
             id,
+            ctor_id,
         }
     }
 }
@@ -552,8 +552,8 @@ impl ThingKind {
         })
     }
 
-    pub fn instance(name: Name, span: Span, fields: Vec<Field>, id: AstId) -> Self {
-        Self::Instance(Instance::new(name, span, fields, id))
+    pub fn instance(name: Name, span: Span, fields: Vec<Field>, id: AstId, ctor_id: AstId) -> Self {
+        Self::Instance(Instance::new(name, span, fields, id, ctor_id))
     }
 
     pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
@@ -753,6 +753,7 @@ pub trait Visitor<'a> {
             id: _,
             span: _,
             fields,
+            ctor_id: _,
         } = val;
 
         for field in fields {
@@ -966,13 +967,8 @@ pub trait Visitor<'a> {
                 maybe_visit!(v: self, m: visit_block, otherwise)
             }
 
-            ExprType::ArrayDecl {
-                ty,
-                size,
-                initialize,
-            } => {
-                try_visit!(self.visit_ty(ty), self.visit_expr(size));
-                visit_iter!(v: self, m: visit_expr, initialize)
+            ExprType::List(exprs) => {
+                visit_iter!(v: self, m: visit_expr, exprs)
             }
 
             ExprType::FieldAccess { source, field } => {

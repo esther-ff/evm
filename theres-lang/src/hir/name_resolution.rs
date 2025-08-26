@@ -184,6 +184,8 @@ where
             val.name,
         );
 
+        self.register_defn(val.ctor_id, DefType::AdtCtor, val.name);
+
         for field in &val.fields {
             self.visit_field(field);
         }
@@ -581,6 +583,12 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 Resolved::Def(instance_def_id, DefType::Instance),
                 Space::Types,
             );
+
+            scope.add(
+                &val.name,
+                Resolved::Def(instance_def_id, DefType::AdtCtor),
+                Space::Values,
+            );
         });
 
         for f in &val.fields {
@@ -662,7 +670,7 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             ExprType::Group(expr) => self.visit_expr(expr),
 
-            ExprType::CommaGroup(exprs) => {
+            ExprType::CommaGroup(exprs) | ExprType::List(exprs) => {
                 for e in exprs {
                     self.visit_expr(e);
                 }
@@ -709,19 +717,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             ExprType::While { cond, body } | ExprType::Until { cond, body } => {
                 self.visit_expr(cond);
                 self.visit_block(body);
-            }
-
-            ExprType::ArrayDecl {
-                ty,
-                size,
-                initialize,
-            } => {
-                self.visit_ty(ty);
-                self.visit_expr(size);
-
-                for inits in initialize {
-                    self.visit_expr(inits);
-                }
             }
 
             ExprType::FieldAccess { source, field: _ } => self.visit_expr(source),

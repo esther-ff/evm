@@ -250,17 +250,7 @@ pub trait HirVisitor<'hir> {
 
             ExprKind::Loop { body, reason: _ } => self.visit_block(body),
 
-            ExprKind::Array {
-                ty_of_array,
-                init,
-                size,
-            } => {
-                try_visit!(
-                    self.visit_ty(ty_of_array),
-                    visit_iter!(v: self, m: visit_expr, *init),
-                    self.visit_expr(size)
-                )
-            }
+            ExprKind::List(exprs) => visit_iter!(v: self, m: visit_expr, *exprs),
 
             ExprKind::Index {
                 index,

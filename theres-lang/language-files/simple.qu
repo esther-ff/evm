@@ -1,37 +1,51 @@
 instance Simple (
-	field: nil
+    field: nil
 ) 
 
 bind Simple with (
-	const SimpleConst: Simple = 1;
+    const SimpleConst: Simple = 1;
+
+    fun method(self) => nil {
+        self.field = {};
+    }
 )
 
 realm RealmOne {
-	fun meow() => nil {
-		
-	}
+    fun meow() => nil {}
 }
 
-fun main() => i32 {
-	let m: u32 = test();
-	fun test() => i32 {
-		1 + 1;
-	}
+fun main() => nil {
+    let m: i32 = test();
+    fun test() => i32 {
+        1 + 1
+    }
 
-	let varA: i32 = 1;
-	let bindA: i32 = varA + 1; # a is symbol 11
-	let function: u32 = d(1, 2, 3);
+    let varA: i32 = 1;
+    let bindA: i32 = varA + 1;
+    
+    let function: u32 = d();
 
-	let realmRef: nil = RealmOne::meow();
+    let realmRef: nil = RealmOne::meow();
 
-	let ConstToVar: u32 = Simple::SimpleConst;
-	let cond: bool = true;
+    # let ConstToVar: u32 = Simple::SimpleConst;
+    let cond: bool = true;
+    # let test: Simple = 1;
 
-	while cond {
-		d(1);
-	}
+    while cond {
+        d();
+        1
+    }
 }
 
 fun d() => u32 {
-	1 + 1;
+    2 + 2
+}
+
+fun arr(a: [i32]) => i32 {
+    a[1]
+}
+
+fun arr_a() => [i32] {
+    let a: [i32] = [1];
+    a
 }

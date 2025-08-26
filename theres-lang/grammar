@@ -51,10 +51,11 @@ untilExpr     → "until" expression block ;
 forExpr       → "for" pat "in" expression block ;
 loopExpr      → "loop" block;
 lambdaExpr    → "\" pat ("," pat)*? "=>" (expression | block)
-arrayExpr     → "[" expression "]" type ("{" expression ("," expression)* "}")?
+arrayExpr     → "[" (expression ("," expression)* )? "]" ; 
 returnExpr    → "return" expression? ;
 makeExpr      → "make" type callArgs ;
 pathExpr      → path ;
+indexExpr     → expression "[" expression "]" ;
 
 pat           → IDENT
 		      | "(" IDENT ("," IDENT) ")"
@@ -107,4 +108,5 @@ primary        → NUMBER
 			   | returnExpr 
 			   | makeExpr
 			   | pathExpr
+			   | indexExpr  
 			   | block ;

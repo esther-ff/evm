@@ -14,14 +14,29 @@ pub fn def_id(i: u32) -> DefId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DefType {
+    /// Function.
     Fun,
+
+    /// Instance.
     Instance,
-    Interface,
+
+    /// Realm.
     Realm,
+
+    /// Associated constant, might get removed.
     Const,
+
+    /// Field of an instance.
     Field,
+
+    /// Bind
     Bind,
+
+    /// Associated item of a bind
     BindItem,
+
+    /// Constructor of an `instance`
+    AdtCtor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]

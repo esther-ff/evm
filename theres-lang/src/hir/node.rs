@@ -173,11 +173,7 @@ pub enum ExprKind<'h> {
 
     Literal(HirLiteral),
 
-    Array {
-        ty_of_array: &'h Ty<'h>,
-        init: &'h [Expr<'h>],
-        size: &'h Expr<'h>,
-    },
+    List(&'h [Expr<'h>]),
 
     Index {
         index: &'h Expr<'h>,

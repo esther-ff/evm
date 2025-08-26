@@ -439,18 +439,11 @@ impl<'hir> AstLowerer<'hir> {
                     .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_noalloc(expr))),
             ),
 
-            ExprType::ArrayDecl {
-                ty,
-                size,
-                initialize,
-            } => node::ExprKind::Array {
-                ty_of_array: self.lower_ty(ty),
-                init: self
-                    .session
+            ExprType::List(exprs) => node::ExprKind::List(
+                self.session
                     .arena()
-                    .alloc_from_iter(initialize.iter().map(|expr| self.lower_expr_noalloc(expr))),
-                size: self.lower_expr(size),
-            },
+                    .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_noalloc(expr))),
+            ),
 
             ExprType::Return { ret } => node::ExprKind::Return {
                 expr: ret.as_ref().map(|expr| self.lower_expr(expr)),

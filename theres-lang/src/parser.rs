@@ -105,7 +105,7 @@ impl<'a> Parser<'a> {
     fn declaration(&mut self) -> Result<ThingKind> {
         let tok = self.lexemes.peek_token();
 
-        log::trace!("declaration tok={:#?}", tok);
+        log::trace!("declaration tok={tok:#?}");
         let decl = match tok.kind {
             TokenKind::Function => ThingKind::Function(self.function_declaration()?),
             TokenKind::Global => self.global_variable_decl()?,
@@ -433,7 +433,13 @@ impl<'a> Parser<'a> {
         let span_end = rcurly.span.end();
         let span = self.new_span(keyword.span.start(), span_end, 0);
 
-        Ok(ThingKind::instance(name, span, fields, self.new_id()))
+        Ok(ThingKind::instance(
+            name,
+            span,
+            fields,
+            self.new_id(),
+            self.new_id(),
+        ))
     }
 
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
@@ -790,36 +796,25 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub fn array_expr(&mut self) -> Result<Expr> {
+    pub fn list_expr(&mut self) -> Result<Expr> {
         let left_sq = self.expect_token(TokenKind::LeftSqBracket)?;
-        let size = self.primary().map(Box::new)?;
-        self.expect_token(TokenKind::RightSqBracket)?;
-        let ty = self.ty()?;
+        let mut exprs = vec![];
 
-        let span_start = left_sq.span.start();
-        let mut span_end = ty.span.end();
-
-        let mut inits: Vec<Expr> = Vec::new();
-
-        if self.consume_if(TokenKind::LeftCurlyBracket) {
-            // parse the initializers
-            inits.push(self.expression()?);
-
-            while self.consume_if(TokenKind::Comma) {
-                inits.push(self.expression()?);
+        loop {
+            if self.lexemes.peek_token().kind == TokenKind::RightSqBracket {
+                break;
+            } else if self.lexemes.previous().kind != TokenKind::LeftSqBracket {
+                self.expect(t!(Comma));
             }
 
-            let end = self.expect_token(TokenKind::RightCurlyBracket)?;
-            span_end = end.span.end();
+            exprs.push(self.expression()?);
         }
 
+        let right_sq = self.expect(TokenKind::RightSqBracket);
+
         Ok(Expr::new(
-            ExprType::ArrayDecl {
-                size,
-                ty,
-                initialize: inits,
-            },
-            self.new_span(span_start, span_end, 0),
+            ExprType::List(exprs),
+            Span::between(left_sq.span, right_sq.span),
             self.new_id(),
         ))
     }
@@ -1238,7 +1233,7 @@ impl<'a> Parser<'a> {
             TokenKind::For => return self.for_loop(),
             TokenKind::While => return self.while_expr(),
             TokenKind::Until => return self.until_expr(),
-            TokenKind::LeftSqBracket => return self.array_expr(),
+            TokenKind::LeftSqBracket => return self.list_expr(),
             TokenKind::Backslash => return self.lambda_expr(),
 
             TokenKind::IntegerLiteral(num) => Some(ExprType::Constant(ConstantExpr::Int(num))),
