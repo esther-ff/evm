@@ -41,9 +41,10 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
                 self.visit_expr(body);
             }
 
-            ThingKind::Instance { fields: _, name: _ } => {
+            ThingKind::Instance { fields: _, name: _, ctor_id: (_, ctor_id) } => {
                 self.sess.instance_def(thing.def_id);
-            } // Nothing to do
+                self.sess.reify_fn_sig_for_ctor_of(ctor_id);
+            } 
 
             ThingKind::Bind(bind) => {
                 for bind_item in bind.items {
@@ -351,7 +352,7 @@ impl<'ty> FunCx<'ty> {
                 let TyKind::FnDef(def_id) = *callable.0 else {
                     self.s.diag().emit_err(
                         TypingError::CallingNotFn {
-                            offender: "".into(), // not sure?
+                            offender: self.s.stringify_ty(callable), // not sure?
                         },
                         expr.span,
                     );
@@ -453,6 +454,8 @@ impl<'ty> FunCx<'ty> {
 
                 match res {
                     Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
+
+                    Resolved::Def(ctor_def_id, DefType::AdtCtor) => self.s.intern_ty(TyKind::FnDef(ctor_def_id)),
 
                     Resolved::Local(hir_id) => {
                         let hir = self.s.hir_ref();
@@ -579,6 +582,7 @@ impl<'ty> FunCx<'ty> {
         args: &[Expr<'_>],
         span: Span,
     ) -> Ty<'ty> {
+        dbg!(def_id);
         let sig = self.s.fn_sig_for(def_id);
 
         let amount_of_args = sig.inputs.len();
@@ -594,7 +598,7 @@ impl<'ty> FunCx<'ty> {
                     amount_given: given_args,
                     amount_req: amount_of_args,
                 },
-                span,
+                dbg!(span),
             );
         }
 

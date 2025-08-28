@@ -86,7 +86,7 @@ impl SourceFile {
     }
 
     pub fn get_lines_from_to(&self, from: usize, to: usize) -> Option<Vec<&str>> {
-        let slice = self.lines.get(from + 1..to + 1)?;
+        let slice = self.lines.get(from + 1..to)?;
 
         slice
             .iter()

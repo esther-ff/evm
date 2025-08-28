@@ -88,17 +88,22 @@ impl Mappings {
         }
     }
 
+    #[track_caller]
     pub fn map_to_resolved(&mut self, id: AstId, res: Resolved<AstId>) {
-        log::trace!("{id} resolves to {res:?}");
+        log::trace!("{id} resolves to {res:?}, loc: {}", Location::caller());
         self.resolution_map.insert(id, res);
     }
 
     #[track_caller]
     pub fn resolve(&mut self, id: AstId) -> Resolved<AstId> {
-        self.resolution_map
+        log::trace!("`resolve` id={id}");
+        let ret = self
+            .resolution_map
             .get(&id)
             .copied()
-            .expect("Given AstId is not mapped to any resolution!")
+            .expect("Given AstId is not mapped to any resolution!");
+        log::trace!("`resolved` resolved to {ret:?}");
+        ret
     }
 }
 
@@ -111,6 +116,7 @@ pub struct HirMap<'hir> {
     node_to_body: DefMap<BodyId>,
 
     field_to_instance: HashMap<DefId, DefId>,
+    ctor_to_instance: HashMap<DefId, DefId>,
 }
 
 impl<'hir> HirMap<'hir> {
@@ -122,6 +128,7 @@ impl<'hir> HirMap<'hir> {
             bodies: IdxVec::new(),
             node_to_body: HashMap::new(),
             field_to_instance: HashMap::new(),
+            ctor_to_instance: HashMap::new(),
         }
     }
 
@@ -197,6 +204,7 @@ impl<'hir> HirMap<'hir> {
 
     #[track_caller]
     pub fn get_node(&'hir self, hir_id: HirId) -> &'hir Node<'hir> {
+        log::trace!("get_node hir_id={hir_id}");
         match self.nodes.get(&hir_id) {
             None => panic!(
                 "Invalid `HirId` ({hir_id:?}) given to `get_node`! loc: {}",
@@ -224,6 +232,7 @@ impl<'hir> HirMap<'hir> {
         expr_body
     }
 
+    #[track_caller]
     pub fn expect_fn(&'hir self, def_id: DefId) -> (&'hir node::FnSig<'hir>, SymbolId) {
         match self.get_def(def_id) {
             Node::Thing(thing) => {
@@ -247,11 +256,33 @@ impl<'hir> HirMap<'hir> {
     }
 
     pub fn expect_instance(&'hir self, def_id: DefId) -> (&'hir [node::Field<'hir>], Name) {
-        let node::ThingKind::Instance { fields, name } = self.get_thing(def_id).kind else {
+        let node::ThingKind::Instance {
+            fields,
+            name,
+            ctor_id: _,
+        } = self.get_thing(def_id).kind
+        else {
             panic!("`DefId` given to `expect_fn` did not point to a `instance`")
         };
 
         (fields, name)
+    }
+
+    pub fn is_ctor(&self, id: DefId) -> bool {
+        self.ctor_to_instance.contains_key(&id)
+    }
+
+    #[track_caller]
+    pub fn get_instance_of_ctor(&self, ctor_def_id: DefId) -> DefId {
+        log::trace!("get_instance_of_ctor ctor_def_id={ctor_def_id}");
+        let ret = self
+            .ctor_to_instance
+            .get(&ctor_def_id)
+            .copied()
+            .expect("this `DefId` of a ctor wasn't mapped to any Instance");
+
+        log::trace!("returned: {ret}");
+        ret
     }
 }
 
@@ -816,6 +847,9 @@ impl<'hir> AstLowerer<'hir> {
     pub fn lower_instance(&mut self, inst: &Instance, def_id: DefId) -> node::ThingKind<'hir> {
         self.current_instance.replace(def_id);
 
+        let ctor_hir_id = self.next_hir_id(inst.ctor_id);
+        let ctor_def_id = self.map.def_id_of(inst.ctor_id);
+
         let kind = node::ThingKind::Instance {
             fields: self.session.arena().alloc_from_iter(
                 inst.fields
@@ -823,7 +857,11 @@ impl<'hir> AstLowerer<'hir> {
                     .map(|ast_field| self.lower_field(ast_field, def_id)),
             ),
             name: inst.name,
+            ctor_id: (ctor_hir_id, ctor_def_id),
         };
+
+        self.session
+            .hir_mut(|map| map.ctor_to_instance.insert(ctor_def_id, def_id));
 
         self.current_instance.take();
 

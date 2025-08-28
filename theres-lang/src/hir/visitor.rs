@@ -37,7 +37,11 @@ pub trait HirVisitor<'hir> {
         } = thing;
         match kind {
             ThingKind::Fn { name: _, sig } => self.visit_fn_sig(sig),
-            ThingKind::Instance { fields, name: _ } => {
+            ThingKind::Instance {
+                fields,
+                name: _,
+                ctor_id: _,
+            } => {
                 visit_iter!(v: self, m: visit_field, *fields)
             }
             ThingKind::Realm { name: _, things } => visit_iter!(v: self, m: visit_thing, *things),

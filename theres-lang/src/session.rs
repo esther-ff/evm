@@ -240,11 +240,15 @@ impl<'sess> Session<'sess> {
 
     #[track_caller]
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
-        dbg!(Location::caller());
+        log::trace!("def_type_of def_id={def_id}");
         self.hir(|map| match map.get_def(def_id) {
             Node::Thing(thing) => match thing.kind {
                 ThingKind::Fn { .. } => self.intern_ty(TyKind::FnDef(def_id)),
-                ThingKind::Instance { fields, name } => self.intern_ty(TyKind::Instance(
+                ThingKind::Instance {
+                    fields,
+                    name,
+                    ctor_id: _,
+                } => self.intern_ty(TyKind::Instance(
                     self.intern_instance_def(self.gen_instance_def(fields, name.interned)),
                 )),
 
@@ -273,6 +277,31 @@ impl<'sess> Session<'sess> {
             .unwrap_or_else(|| panic!("No fn sig for def id: {def_id}"))
     }
 
+    #[track_caller]
+    pub fn reify_fn_sig_for_ctor_of(&'sess self, def_id: DefId) {
+        log::trace!("reify_fn_sig_for_ctof_of def_id={def_id}");
+
+        let instance = self.hir_ref().get_instance_of_ctor(def_id);
+        let instance_def = self.instance_def(instance);
+
+        let sig = FnSig {
+            inputs: self.arena().alloc_from_iter(
+                instance_def
+                    .fields
+                    .iter()
+                    .map(|field| self.def_type_of(field.def_id)),
+            ),
+
+            output: self.def_type_of(instance),
+        };
+
+        self.fn_sigs.borrow_mut().insert(def_id, sig);
+    }
+
+    pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
+        self.hir_ref().is_ctor(def_id)
+    }
+
     pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
         let sig = FnSig {
             inputs: self
@@ -285,6 +314,7 @@ impl<'sess> Session<'sess> {
         self.fn_sigs.borrow_mut().insert(def_id, sig);
     }
 
+    /// This is so fucking stupid
     pub fn binds_for_ty<F, R>(&'sess self, ty: Ty<'sess>, work: F) -> R
     where
         F: FnOnce(Vec<node::Bind<'_>>) -> R,
@@ -329,6 +359,7 @@ impl<'sess> Session<'sess> {
         new
     }
 
+    #[track_caller]
     pub fn lower_ty<'a>(&'sess self, ty: &node::Ty<'a>) -> Ty<'sess>
     where
         'sess: 'a,
@@ -349,10 +380,12 @@ impl<'sess> Session<'sess> {
 
                 Resolved::Def(def_id, def_ty) => match def_ty {
                     DefType::Instance => return self.def_type_of(def_id),
+                    DefType::AdtCtor => TyKind::FnDef(def_id),
+
                     any => panic!("Can't type: {any:?}"),
                 },
 
-                Resolved::Err => panic!("Tried to resolve a `Resolved::Err`"),
+                Resolved::Err => return self.ty_err(),
                 Resolved::Local(..) => {
                     panic!("Tried to lower type with a local inside of it's path")
                 }

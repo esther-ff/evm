@@ -162,6 +162,8 @@ impl<'a> DiagEmitterInner<'a> {
 
     #[allow(clippy::needless_pass_by_value)]
     fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
+        dbg!(&span);
+
         let origin = span.line as usize;
         let line_nr_offset = origin.saturating_sub(EXTRA_LINES);
         let lines = self.get_lines(span.sourceid, origin, EXTRA_LINES);

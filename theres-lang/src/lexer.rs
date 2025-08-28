@@ -392,6 +392,10 @@ impl Lexemes {
         let span = self.last_token.unwrap().span;
         Token::new(span, TokenKind::Eof)
     }
+
+    pub fn tokens_left(&self) -> &[Token] {
+        &self.tokens[self.pos..]
+    }
 }
 
 pub struct Lexer<'a> {

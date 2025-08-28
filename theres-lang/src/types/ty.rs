@@ -232,7 +232,7 @@ pub fn display_ty<'a>(session: &'a Session<'a>, ty: Ty<'a>) -> Cow<'static, str>
         TyKind::Float => Cow::Borrowed("f32"),
         TyKind::Double => Cow::Borrowed("f64"),
         TyKind::Nil => Cow::Borrowed("Nil"),
-        TyKind::Error => Cow::Borrowed("error!"),
+        TyKind::Error => Cow::Borrowed("{type error!}"),
 
         TyKind::Diverges => Cow::Borrowed("Diverges"),
 
@@ -295,28 +295,25 @@ fn stringfy_string_helper<'a>(session: &'a Session<'a>, buf: &mut String, ty: Ty
         }
 
         TyKind::FnDef(def_id) => {
-            let hir = session.hir_ref();
-            let (sig, name) = hir.expect_fn(def_id);
-            let _ = write!(buf, "fun {}(", name.get_interned());
+            let sig = session.fn_sig_for(def_id);
+            let _ = write!(buf, "fun (",);
 
-            for (ix, param) in sig.arguments.iter().enumerate() {
-                // i'll handle this later ok!
-                let ty = session.lower_ty(param.ty);
-                stringfy_string_helper(session, buf, *ty);
+            for (ix, ty) in sig.inputs.iter().enumerate() {
+                stringfy_string_helper(session, buf, **ty);
 
-                if ix != sig.arguments.len() {
+                if ix == sig.inputs.len() {
                     buf.push_str(", ");
                 }
             }
 
             buf.push(')');
             buf.push_str(" => ");
-            stringfy_string_helper(session, buf, *session.lower_ty(sig.return_type));
+            stringfy_string_helper(session, buf, *sig.output);
 
             return;
         }
 
-        TyKind::Error => "error",
+        TyKind::Error => "{type error!}",
 
         TyKind::InferTy(infer) => {
             return match infer.kind {

@@ -10,6 +10,7 @@ use crate::parser::AstIdMap;
 use crate::session::{SymbolId, SymbolMap};
 use std::collections::HashMap;
 use std::mem;
+use std::panic::Location;
 
 type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
@@ -70,6 +71,10 @@ impl Scope {
     }
 
     pub fn add(&mut self, name: &Name, res: Resolved<AstId>, ns: Space) {
+        log::trace!(
+            "Scope::add name={} res={res:?} ns={ns:?}",
+            name.interned.get_interned()
+        );
         match ns {
             Space::Types => self.types.insert(name.interned, res),
             Space::Values => self.bindings.insert(name.interned, res),
@@ -82,6 +87,9 @@ pub struct ThingDefResolver<'a> {
     // mapping names to definitions,
     definitions: Definitions<'a>,
 
+    // def scope
+    defs_scope: Scope,
+
     // mapping ast ids to def ids
     ast_id_to_def_id: AstIdMap<DefId>,
     def_id_to_ast_id: DefMap<AstId>,
@@ -90,6 +98,7 @@ pub struct ThingDefResolver<'a> {
 impl ThingDefResolver<'_> {
     pub fn new() -> Self {
         Self {
+            defs_scope: Scope::new(None),
             thing_ast_id: None,
             definitions: Definitions::new(),
             ast_id_to_def_id: HashMap::new(),
@@ -97,9 +106,14 @@ impl ThingDefResolver<'_> {
         }
     }
 
+    pub fn debug(&self) -> &Scope {
+        &self.defs_scope
+    }
+
     fn register_defn(&mut self, id: AstId, kind: DefType, name: Name) -> DefId {
-        log::trace!("register_defn id={id} kind={kind:?}");
         let def_id = self.definitions.register_defn(kind, name.interned);
+
+        log::trace!("register_defn id={id} kind={kind:?} def_id={def_id}");
         self.ast_id_to_def_id.insert(id, def_id);
         self.def_id_to_ast_id.insert(def_id, id);
 
@@ -133,21 +147,30 @@ where
     }
 
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
-        self.register_defn(
+        let id = self.register_defn(
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Realm,
             val.name,
         );
+
+        self.defs_scope
+            .add(&val.name, Resolved::Def(id, DefType::Realm), Space::Types);
         for thing in &val.items {
             self.visit_thing(thing);
         }
     }
 
     fn visit_bind(&mut self, val: &'a Bind) -> Self::Result {
-        self.register_defn(
+        let id = self.register_defn(
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Bind,
             Name::DUMMY,
+        );
+
+        self.defs_scope.add(
+            &Name::DUMMY,
+            Resolved::Def(id, DefType::Realm),
+            Space::Types,
         );
 
         for item in &val.items {
@@ -160,7 +183,10 @@ where
 
         match val.kind {
             BindItemKind::Const(ref stmt) => {
-                self.register_defn(val.id, DefType::Const, stmt.name);
+                let id = self.register_defn(val.id, DefType::Const, stmt.name);
+
+                self.defs_scope
+                    .add(&stmt.name, Resolved::Def(id, DefType::Const), Space::Values);
             }
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
@@ -168,23 +194,41 @@ where
 
     #[track_caller]
     fn visit_fn_decl(&mut self, val: &'a FnDecl) -> Self::Result {
-        self.register_defn(
+        let id = self.register_defn(
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Fun,
             val.sig.name,
+        );
+
+        self.defs_scope.add(
+            &val.sig.name,
+            Resolved::Def(id, DefType::Fun),
+            Space::Values,
         );
 
         self.visit_block(&val.block);
     }
 
     fn visit_instance(&mut self, val: &'a Instance) -> Self::Result {
-        self.register_defn(
+        let id = self.register_defn(
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Instance,
             val.name,
         );
 
-        self.register_defn(val.ctor_id, DefType::AdtCtor, val.name);
+        self.defs_scope.add(
+            &val.name,
+            Resolved::Def(id, DefType::Instance),
+            Space::Types,
+        );
+
+        let ctor_def_id = self.register_defn(val.ctor_id, DefType::AdtCtor, val.name);
+
+        self.defs_scope.add(
+            &val.name,
+            Resolved::Def(ctor_def_id, DefType::AdtCtor),
+            Space::Values,
+        );
 
         for field in &val.fields {
             self.visit_field(field);
@@ -250,6 +294,7 @@ impl ScopeStack {
 }
 
 pub struct LateResolver<'a> {
+    def_scope: Scope,
     current_item: Option<AstId>,
 
     // ast id -> scope stack
@@ -272,6 +317,7 @@ pub struct LateResolver<'a> {
 impl<'a> LateResolver<'a> {
     pub fn new(old: ThingDefResolver<'a>, root: &Universe) -> Self {
         Self {
+            def_scope: old.defs_scope,
             current_item: None,
             current_instance: None,
             current_bind_ty: None,
@@ -370,15 +416,21 @@ impl<'a> LateResolver<'a> {
 
         match self.with_current_scope(f) {
             Some(val) => val,
-            None => self
-                .definitions
-                .get_def_via_name(symbol)
-                .map_or(Resolved::Err, |(l, r)| Resolved::Def(r, l)),
+            None => self.def_scope.get(symbol, ns).unwrap_or(Resolved::Err),
         }
     }
 
     #[track_caller]
     fn resolve_path(&mut self, arg_path: &Path, last_space: Space) -> Resolved<AstId> {
+        log::trace!(
+            "resolve path arg_path={:?} last_space={last_space:?}",
+            arg_path
+                .path
+                .iter()
+                .map(|seg| seg.name.interned.get_interned())
+                .collect::<Vec<_>>()
+        );
+
         let amount_of_segments = arg_path.path.len().saturating_sub(1);
         let old_scope = self.current_scope;
         let mut ret = Resolved::Err;
@@ -387,7 +439,11 @@ impl<'a> LateResolver<'a> {
             let name = seg.name.interned;
 
             if ix == amount_of_segments {
-                return self.get_name(name, last_space);
+                let ret = self.get_name(name, last_space);
+                log::trace!(
+                    "resolve_path exited at if guard resolved={ret:?} with ns={last_space:?}"
+                );
+                return ret;
             }
 
             ret = match self.get_name(name, Space::Types) {
@@ -403,6 +459,7 @@ impl<'a> LateResolver<'a> {
         }
 
         self.current_scope = old_scope;
+        log::trace!("resolve_path resolved={ret:?}");
         ret
     }
 
@@ -425,6 +482,7 @@ fn traverse_scopes(
     symbol: SymbolId,
     ns: Space,
 ) -> Option<Resolved<AstId>> {
+    log::trace!("traverse_scopes sym={} ns={ns:?}", symbol.get_interned());
     while let Some(ref id) = cursor {
         let scope = scopes.get_scope(*id);
         let Some(binding) = scope.get(symbol, ns) else {
@@ -434,6 +492,11 @@ fn traverse_scopes(
 
         return Some(binding);
     }
+
+    log::trace!(
+        "traverse_scopes loop ended sym={} ns={ns:?}",
+        symbol.get_interned()
+    );
 
     None
 }
@@ -578,16 +641,11 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         self.current_instance.replace(val.id);
 
         self.with_current_scope_mut(|scope| {
+            // Redundant?
             scope.add(
                 &val.name,
                 Resolved::Def(instance_def_id, DefType::Instance),
                 Space::Types,
-            );
-
-            scope.add(
-                &val.name,
-                Resolved::Def(instance_def_id, DefType::AdtCtor),
-                Space::Values,
             );
         });
 

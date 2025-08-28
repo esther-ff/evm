@@ -315,6 +315,7 @@ pub enum ThingKind<'h> {
     Instance {
         fields: &'h [Field<'h>],
         name: Name,
+        ctor_id: (HirId, DefId),
     },
 
     Realm {

@@ -88,17 +88,10 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let start = self
-            .decls
-            .first()
-            .map_or(0, |decl| decl.kind.span().start());
-        let end = self.decls.last().map_or(0, |decl| decl.kind.span().end());
-        let span = self.new_span(start, end, 0);
-
         Universe {
             id: universe_id,
             thingies: self.decls,
-            span,
+            span: Span::DUMMY,
         }
     }
 
@@ -145,7 +138,7 @@ impl<'a> Parser<'a> {
             id: self.new_id(),
             items,
             name,
-            span: self.new_span(kw.span.start, rcurly.span.end, 0),
+            span: Span::between(kw.span, rcurly.span),
         };
 
         Ok(ThingKind::Realm(realm))
@@ -154,7 +147,6 @@ impl<'a> Parser<'a> {
     fn ty(&mut self) -> Result<Ty> {
         let id = self.new_id();
         let tok = self.lexemes.peek_token();
-        dbg!(tok);
         match tok.kind {
             TokenKind::Function => self.parse_function_type(),
             TokenKind::LeftSqBracket => self.parse_array_type(),
@@ -196,7 +188,7 @@ impl<'a> Parser<'a> {
             segments.push(self.path_segment()?);
         }
 
-        let span = self.new_span(segments[0].span.start, segments.last().unwrap().span.end, 0);
+        let span = Span::between(segments[0].span, segments.last().unwrap().span);
 
         Ok(Path {
             path: segments,
@@ -228,14 +220,13 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenKind::RightArrow)?;
 
         let ret = self.ty().map(Box::new)?;
-        let end = ret.span.end();
 
         Ok(Ty {
+            span: Span::between(fun_ident.span, ret.span),
             kind: TyKind::Fn {
                 args: types,
                 ret: Some(ret),
             },
-            span: self.new_span(fun_ident.span.start, end, 0),
             id: self.new_id(),
         })
     }
@@ -248,13 +239,13 @@ impl<'a> Parser<'a> {
 
         Ok(Ty {
             kind: TyKind::Array(ty),
-            span: self.new_span(left_sq.span.start(), right_sq.span.end(), 0),
+            span: Span::between(left_sq.span, right_sq.span),
             id: self.new_id(),
         })
     }
 
     fn function_signature(&mut self) -> Result<FnSig> {
-        let start_span = self.expect_token(TokenKind::Function)?.span.start();
+        let start_span = self.expect_token(TokenKind::Function)?.span;
         let name = self.expect_ident_as_name()?;
         self.expect_token(TokenKind::LeftParen)?;
 
@@ -265,7 +256,7 @@ impl<'a> Parser<'a> {
 
         let ret_type = self.ty()?;
 
-        let span = self.new_span(start_span, ret_type.span.end(), 0);
+        let span = Span::between(start_span, ret_type.span);
         Ok(FnSig::new(name, span, ret_type, fun_args, self.new_id()))
     }
 
@@ -290,7 +281,7 @@ impl<'a> Parser<'a> {
 
         match maybe_block {
             Some(block) => {
-                let span = self.new_span(sig.span.end(), block.span.end(), 0);
+                let span = Span::between(sig.span, block.span);
                 let id = self.new_id();
                 let fndecl = FnDecl {
                     sig,
@@ -401,7 +392,7 @@ impl<'a> Parser<'a> {
             victim: ty,
             mask,
             items,
-            span: self.new_span(keyword.span.start(), self.lexemes.previous().span.end(), 0),
+            span: Span::between(keyword.span, self.lexemes.previous().span),
             id: self.new_id(),
         })
     }
@@ -429,9 +420,7 @@ impl<'a> Parser<'a> {
 
         let fields = self.instance_fields()?;
         let rcurly = self.expect(TokenKind::RightParen);
-
-        let span_end = rcurly.span.end();
-        let span = self.new_span(keyword.span.start(), span_end, 0);
+        let span = Span::between(keyword.span, rcurly.span);
 
         Ok(ThingKind::instance(
             name,
@@ -444,14 +433,14 @@ impl<'a> Parser<'a> {
 
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
         fn one_field(me: &mut Parser) -> Result<Field> {
-            let span_start = me.lexemes.peek_token().span.start();
+            let span_start = me.lexemes.peek_token().span;
             let is_const = me.consume_if(TokenKind::Const);
             let field_name = me.expect_ident_as_name()?;
 
             me.expect_token(TokenKind::Colon)?;
 
             let ty = me.ty()?;
-            let field_span = me.new_span(span_start, ty.span.end(), 0);
+            let field_span = Span::between(span_start, ty.span);
 
             Ok(Field::new(
                 is_const,
@@ -586,7 +575,7 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<Block> {
-        let span_start = self.expect(t!(LeftCurlyBracket)).span.start();
+        let span_start = self.expect(t!(LeftCurlyBracket)).span;
         let mut stmts = Vec::new();
         let mut expr = None;
 
@@ -601,8 +590,9 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let span_end = self.expect(t!(RightCurlyBracket)).span.end();
-        let span = self.new_span(span_start, span_end, 0);
+        let span_end = self.expect(t!(RightCurlyBracket)).span;
+
+        let span = Span::between(span_start, span_end);
 
         Ok(Block::new(stmts, span, self.new_id(), expr))
     }
@@ -617,7 +607,7 @@ impl<'a> Parser<'a> {
 
         let first_block = self.block()?;
 
-        let mut end = first_block.span.end();
+        let mut end = first_block.span;
         let mut else_ifs = Vec::new();
         let mut otherwise = None;
 
@@ -630,7 +620,7 @@ impl<'a> Parser<'a> {
                     else_ifs,
                     otherwise,
                 },
-                self.new_span(begin.span.start(), end, 0),
+                Span::between(begin.span, end),
                 self.new_id(),
             ));
         }
@@ -645,7 +635,7 @@ impl<'a> Parser<'a> {
                     else_ifs,
                     otherwise,
                 },
-                self.new_span(begin.span.start(), end, 0),
+                Span::between(begin.span, end),
                 self.new_id(),
             ));
         }
@@ -658,13 +648,13 @@ impl<'a> Parser<'a> {
         while self.consume_if(TokenKind::Else) && self.consume_if(TokenKind::If) {
             let cond = self.expression()?;
             let block = self.block()?;
-            end = block.span.end();
+            end = block.span;
             else_ifs.push(ElseIf::new(cond, block));
         }
 
         if self.lexemes.previous().kind == TokenKind::Else {
             let block = self.block()?;
-            end = block.span.end();
+            end = block.span;
             otherwise.replace(block);
         }
 
@@ -675,7 +665,7 @@ impl<'a> Parser<'a> {
                 else_ifs,
                 otherwise,
             },
-            self.new_span(begin.span.start(), end, 0),
+            Span::between(begin.span, end),
             self.new_id(),
         ))
     }
@@ -683,7 +673,7 @@ impl<'a> Parser<'a> {
     pub fn loop_expr(&mut self) -> Result<Expr> {
         let loop_ident = self.expect_token(TokenKind::Loop)?;
         let body = self.block()?;
-        let span = self.new_span(loop_ident.span.start(), body.span.end(), 0);
+        let span = Span::between(loop_ident.span, body.span);
 
         Ok(Expr::new(ExprType::Loop { body }, span, self.new_id()))
     }
@@ -697,7 +687,7 @@ impl<'a> Parser<'a> {
         let iterable = self.expression().map(Box::new)?;
 
         let body = self.block()?;
-        let span = self.new_span(for_ident.span.start(), body.span.end(), 0);
+        let span = Span::between(for_ident.span, body.span);
 
         Ok(Expr::new(
             ExprType::For {
@@ -748,7 +738,7 @@ impl<'a> Parser<'a> {
         let cond = self.expression().map(Box::new)?;
 
         let body = self.block()?;
-        let span = self.new_span(while_ident.span.start(), body.span.end(), 0);
+        let span = Span::between(while_ident.span, body.span);
 
         Ok(Expr::new(
             ExprType::While { cond, body },
@@ -761,7 +751,7 @@ impl<'a> Parser<'a> {
         let until_ident = self.expect_token(TokenKind::Until)?;
         let cond = self.expression().map(Box::new)?;
         let body = self.block()?;
-        let span = self.new_span(until_ident.span.start(), body.span.end(), 0);
+        let span = Span::between(until_ident.span, body.span);
 
         Ok(Expr::new(
             ExprType::Until { cond, body },
@@ -787,7 +777,7 @@ impl<'a> Parser<'a> {
             LambdaBody::Expr(self.expression().map(Box::new)?)
         };
 
-        let span = self.new_span(slash.span.start(), body.span().end(), 0);
+        let span = Span::between(slash.span, body.span());
 
         Ok(Expr {
             ty: ExprType::Lambda { args, body },
@@ -843,7 +833,7 @@ impl<'a> Parser<'a> {
         self.lexemes.advance();
 
         let rvalue = self.assignment()?;
-        let span = self.new_span(lvalue.span.start(), rvalue.span.end(), 0);
+        let span = Span::between(lvalue.span, rvalue.span);
 
         let expr_ty = ExprType::Assign {
             lvalue: Box::new(lvalue),
@@ -857,11 +847,11 @@ impl<'a> Parser<'a> {
     fn bitwise_or(&mut self) -> Result<Expr> {
         let mut lhs = self.bitwise_xor()?;
 
-        let start = lhs.span.start();
+        let start = lhs.span;
 
         while self.consume_if(TokenKind::BitOr) {
             let rhs = self.bitwise_xor()?;
-            let span = self.new_span(start, rhs.span.end(), 0);
+            let span = Span::between(start, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -876,11 +866,11 @@ impl<'a> Parser<'a> {
 
     fn bitwise_xor(&mut self) -> Result<Expr> {
         let mut lhs = self.bitwise_and()?;
-        let start = lhs.span.start();
+        let start = lhs.span;
 
         while self.consume_if(TokenKind::Xor) {
             let rhs = self.bitwise_and()?;
-            let span = self.new_span(start, rhs.span.end(), 0);
+            let span = Span::between(start, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -895,11 +885,11 @@ impl<'a> Parser<'a> {
 
     fn bitwise_and(&mut self) -> Result<Expr> {
         let mut lhs = self.logic_or()?;
-        let start = lhs.span.start();
+        let start = lhs.span;
 
         while self.consume_if(TokenKind::BitAnd) {
             let rhs = self.logic_or()?;
-            let span = self.new_span(start, rhs.span.end(), 0);
+            let span = Span::between(start, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -914,11 +904,11 @@ impl<'a> Parser<'a> {
 
     fn logic_or(&mut self) -> Result<Expr> {
         let mut lhs = self.logic_and()?;
-        let start = lhs.span.start();
+        let start = lhs.span;
 
         while self.consume_if(TokenKind::LogicalOr) {
             let rhs = self.logic_and()?;
-            let span = self.new_span(start, rhs.span.end(), 0);
+            let span = Span::between(start, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -933,11 +923,11 @@ impl<'a> Parser<'a> {
 
     fn logic_and(&mut self) -> Result<Expr> {
         let mut lhs = self.equality()?;
-        let start = lhs.span.start();
+        let start = lhs.span;
 
         while self.consume_if(TokenKind::LogicalAnd) {
             let rhs = self.equality()?;
-            let span = self.new_span(start, rhs.span.end(), 0);
+            let span = Span::between(start, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -962,7 +952,7 @@ impl<'a> Parser<'a> {
             };
 
             let rhs = self.comparison()?;
-            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
+            let span = Span::between(lhs.span, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -993,7 +983,7 @@ impl<'a> Parser<'a> {
             };
 
             let rhs = self.bit_shifts()?;
-            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
+            let span = Span::between(lhs.span, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -1018,7 +1008,7 @@ impl<'a> Parser<'a> {
             };
 
             let rhs = self.term().map(Box::new)?;
-            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
+            let span = Span::between(lhs.span, rhs.span);
 
             lhs = Expr::new(
                 ExprType::BinaryExpr {
@@ -1047,7 +1037,7 @@ impl<'a> Parser<'a> {
             };
 
             let rhs = self.factor()?;
-            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
+            let span = Span::between(lhs.span, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -1073,7 +1063,7 @@ impl<'a> Parser<'a> {
             };
 
             let rhs = self.unary()?;
-            let span = self.new_span(lhs.span.start(), rhs.span.end(), 0);
+            let span = Span::between(lhs.span, rhs.span);
             let expr_ty = ExprType::BinaryExpr {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
@@ -1100,7 +1090,7 @@ impl<'a> Parser<'a> {
             };
 
             let primary = self.unary()?;
-            let span = self.new_span(tok.span.start(), primary.span.end(), 0);
+            let span = Span::between(tok.span, primary.span);
             let expr_ty = ExprType::UnaryExpr {
                 op,
                 target: Box::new(primary),
@@ -1137,15 +1127,15 @@ impl<'a> Parser<'a> {
         };
 
         while self.consume_if(TokenKind::Dot) {
-            let span_start = lvalue.span.start();
+            let span_start = lvalue.span;
             let field = self.expect_ident_as_name()?;
-            let mut span_end = field.span.end();
+            let mut span_end = field.span;
 
             let exprty = if self.consume_if(TokenKind::LeftParen) {
                 // we are in a method call
                 let args = self.fn_call_args()?;
                 let rparen = self.expect_token(TokenKind::RightParen)?;
-                span_end = rparen.span.end();
+                span_end = rparen.span;
 
                 ExprType::MethodCall {
                     args,
@@ -1159,31 +1149,28 @@ impl<'a> Parser<'a> {
                 }
             };
 
-            lvalue = Expr::new(
-                exprty,
-                self.new_span(span_start, span_end, 0),
-                self.new_id(),
-            );
+            lvalue = Expr::new(exprty, Span::between(span_start, span_end), self.new_id());
         }
 
         Ok(lvalue)
     }
 
+    #[track_caller]
     fn fun_call(&mut self) -> Result<Expr> {
         let callee = self.primary()?;
 
         if self.consume_if(TokenKind::LeftParen) {
             let mut args = vec![];
-
             if self.lexemes.peek_token().kind != TokenKind::RightParen {
                 args.push(self.expression()?);
+
                 while self.consume_if(TokenKind::Comma) {
                     args.push(self.expression()?);
                 }
             }
 
             let end_paren = self.expect_token(TokenKind::RightParen)?;
-            let span = self.new_span(callee.span.start(), end_paren.span.end(), 0);
+            let span = Span::between(callee.span, end_paren.span);
 
             return Ok(Expr::new(
                 ExprType::FunCall {
@@ -1211,11 +1198,11 @@ impl<'a> Parser<'a> {
         }
         .map(Box::new);
 
-        let end = ret.as_ref().map_or(span.end(), |tok| tok.span.end());
+        let end = ret.as_ref().map_or(span, |tok| tok.span);
 
         Ok(Expr::new(
             ExprType::Return { ret },
-            self.new_span(span.start(), end, 0),
+            Span::between(span, end),
             self.new_id(),
         ))
     }
@@ -1223,89 +1210,104 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> Result<Expr> {
         let token = self.lexemes.peek_token().to_err_if_eof()?;
 
-        let mut span = token.span;
+        match token.kind {
+            TokenKind::Return => self.return_expr(token),
 
-        let expr = match token.kind {
-            TokenKind::Return => return self.return_expr(token),
+            TokenKind::If => self.if_expr(),
+            TokenKind::Loop => self.loop_expr(),
+            TokenKind::For => self.for_loop(),
+            TokenKind::While => self.while_expr(),
+            TokenKind::Until => self.until_expr(),
+            TokenKind::LeftSqBracket => self.list_expr(),
+            TokenKind::Backslash => self.lambda_expr(),
 
-            TokenKind::If => return self.if_expr(),
-            TokenKind::Loop => return self.loop_expr(),
-            TokenKind::For => return self.for_loop(),
-            TokenKind::While => return self.while_expr(),
-            TokenKind::Until => return self.until_expr(),
-            TokenKind::LeftSqBracket => return self.list_expr(),
-            TokenKind::Backslash => return self.lambda_expr(),
+            TokenKind::IntegerLiteral(..)
+            | TokenKind::FloatLiteral(..)
+            | TokenKind::False
+            | TokenKind::True
+            | TokenKind::StringLiteral(..) => Ok(self.literals(token.kind)),
+            TokenKind::LeftParen => self.group_exprs(),
+            TokenKind::Identifier(..) => self.path_expr(),
 
-            TokenKind::IntegerLiteral(num) => Some(ExprType::Constant(ConstantExpr::Int(num))),
-            TokenKind::FloatLiteral(num) => Some(ExprType::Constant(ConstantExpr::Float(num))),
+            TokenKind::LeftCurlyBracket => {
+                let block = self.block()?;
+                let block_span = block.span;
+
+                Ok(Expr::new(ExprType::Block(block), block_span, self.new_id()))
+            }
+
+            _ => self.index_expr(),
+        }
+    }
+
+    fn literals(&mut self, tkn: TokenKind) -> Expr {
+        let actual = self.lexemes.next_token();
+
+        let expr_ty = match tkn {
+            TokenKind::IntegerLiteral(num) => ExprType::Constant(ConstantExpr::Int(num)),
+            TokenKind::FloatLiteral(num) => ExprType::Constant(ConstantExpr::Float(num)),
             TokenKind::StringLiteral(interned) => {
                 let strexpr = ConstantExpr::Str(interned);
 
-                Some(ExprType::Constant(strexpr))
+                ExprType::Constant(strexpr)
             }
-            TokenKind::False => Some(ExprType::Constant(ConstantExpr::Bool(false))),
-            TokenKind::True => Some(ExprType::Constant(ConstantExpr::Bool(true))),
+            TokenKind::False => ExprType::Constant(ConstantExpr::Bool(false)),
+            TokenKind::True => ExprType::Constant(ConstantExpr::Bool(true)),
 
-            TokenKind::LeftParen => {
-                self.lexemes.advance();
-                let expr = self.expression()?;
-
-                let token = self.lexemes.peek_token();
-                if token.kind == TokenKind::RightParen {
-                    span = self.new_span(span.start(), token.span.end(), 0);
-                    Some(ExprType::Group(Box::new(expr)))
-                } else {
-                    return self.error_out(
-                        ParseError::ExpectedUnknown {
-                            what: "a right parenthesis",
-                        },
-                        span,
-                    );
-                }
-            }
-
-            TokenKind::Identifier(..) => {
-                let path = self.path()?;
-                let mut span = path.span;
-                let mut ty = ExprType::Path(path);
-
-                if self.consume_if(t!(LeftSqBracket)) {
-                    let idx = self.expression()?;
-                    let tok = self.expect(t!(RightSqBracket));
-
-                    ty = ExprType::Index {
-                        indexed: Box::new(Expr::new(ty, span, self.new_id())),
-                        index: Box::new(idx),
-                    };
-
-                    span = Span::between(span, tok.span);
-                }
-
-                return Ok(Expr::new(ty, span, self.new_id()));
-            }
-
-            TokenKind::LeftCurlyBracket => Some(ExprType::Block(self.block()?)),
-
-            _ => {
-                let expr = self.expression()?;
-                self.expect(t!(LeftSqBracket));
-                let idx = self.expression()?;
-                self.expect(t!(RightSqBracket));
-
-                Some(ExprType::Index {
-                    indexed: Box::new(expr),
-                    index: Box::new(idx),
-                })
-            }
+            _ => unreachable!(),
         };
 
-        self.lexemes.advance();
+        Expr::new(expr_ty, actual.span, self.new_id())
+    }
 
-        let Some(expr_ty) = expr else {
-            return self.error_out(ParseError::ExpectedExpr, token.span);
-        };
+    fn index_expr(&mut self) -> Result<Expr> {
+        let expr = self.expression()?;
+        self.expect(t!(LeftSqBracket));
+        let idx = self.expression()?;
+        self.expect(t!(RightSqBracket));
 
-        Ok(Expr::new(expr_ty, span, self.new_id()))
+        let span = Span::between(expr.span, idx.span);
+
+        Ok(Expr::new(
+            ExprType::Index {
+                indexed: Box::new(expr),
+                index: Box::new(idx),
+            },
+            span,
+            self.new_id(),
+        ))
+    }
+
+    fn group_exprs(&mut self) -> Result<Expr> {
+        let lparen = self.lexemes.next_token();
+        let expr = self.expression()?;
+        let rparen = self.expect(t!(RightParen));
+
+        Ok(Expr::new(
+            ExprType::Group(Box::new(expr)),
+            Span::between(lparen.span, rparen.span),
+            self.new_id(),
+        ))
+    }
+
+    fn path_expr(&mut self) -> Result<Expr> {
+        let path = self.path()?;
+        let mut span = path.span;
+        let mut ty = ExprType::Path(path);
+
+        if self.consume_if(t!(LeftSqBracket)) {
+            let idx = self.expression()?;
+            let tok = self.expect(t!(RightSqBracket));
+
+            ty = ExprType::Index {
+                indexed: Box::new(Expr::new(ty, span, self.new_id())),
+                index: Box::new(idx),
+            };
+
+            span = Span::between(span, tok.span);
+        }
+
+        Ok(Expr::new(ty, span, self.new_id()))
     }
 
     fn consume_if(&mut self, kind: TokenKind) -> bool {
@@ -1321,15 +1323,6 @@ impl<'a> Parser<'a> {
         }
 
         false
-    }
-
-    fn new_span(&self, start: usize, end: usize, _line: u32) -> Span {
-        Span::new(
-            start,
-            end,
-            self.lexemes.peek_token().span.line,
-            self.lexemes.source_id,
-        )
     }
 
     fn expect_ident_as_name(&mut self) -> Result<Name, ParseError> {
@@ -1354,7 +1347,8 @@ impl<'a> Parser<'a> {
         let next = self.lexemes.peek_token();
 
         if next.kind == exp {
-            return self.lexemes.next_token();
+            self.lexemes.advance();
+            return next;
         }
 
         self.diag.emit_err(
@@ -1379,6 +1373,7 @@ impl<'a> Parser<'a> {
     }
 
     // except eof
+    #[track_caller]
     fn expect_token(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
         let tok = self.expect_any_token()?;
 
