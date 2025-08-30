@@ -1,136 +1,119 @@
-# Creating a middle-level IR and lowering it to... something?
+# Design of the PILL
 
-So i'd want a comfortable to analyze, basic-block based, SSA-form, semi-typed IR.
+The name isn't that stupid...
+it stands for the **P**uppygirl **I**ntermediate **L**owering **L**anguage
+the idea of is it to represent the program in a simple basic-block way
+amenable to analysis but also easy to translate into SSA form to perform further analysis or constant evaluation.
 
-I think the first draft is of course going to be rough, but let's create some IR for a simple function:
+let's imagine a function in Theres like
 ```rs
-fun func(arg: i32) -> i32 {
-    let a: i32 = 1;
-    let b: i32 = 1;
+fun esprit() => [i32] {
+    let base: [[i32]]
+        = [
+            [1,2,3],
+            [4,5,6],
+            [7,8,9]
+          ];
 
-    if arg == 1 {
-        return a+b
+    let add: i32 = base[1][1] + 1;
+    let sub: i32 = base[2][2] - base[1][1];
+
+    base[sub]
+}
+```
+
+The IL generated for it would be:
+```rs
+fun esprit() => [i32] {
+  altar ret: [i32]
+
+  -- local vars --
+  altar _0: [[i32]] >> "base"
+  altar _1: i32     >> "add"
+  altar _2: i32     >> "sub"
+
+  -- temporaries --
+  altar _3: i32 // temporary for add
+  altar _4: i32 // lhs for sub
+  altar _5: i32 // rhs for sub
+
+  altar _6: [i32] // first index out of add
+  altar _7: [i32] // first index out of sub lhs
+  altar _8: [i32] // first index out of sub rhs
+
+  bb0: {
+    _6 = Index(_0, 1)
+    _3 = Index(_6, 1)
+    _1 = Add(_3, const 1_i32)
+
+    _7 = Index(_0, 2)
+    _4 = Index(_7, 2)
+    _8 = Index(_0, 1)
+    _5 = Index(_8, 1)
+    _2 = Sub(_4, _5)
+
+    ret = Index(_0, _2)
+
+    exit: return
+  }
+}
+```
+
+The idea is that each `altar` represents a place in memory we store something, each "use" of an altar like in `Sub(_4, _5)` corresponds to using it as a operand, so just referencing the memory.
+The `exit: return` semi-statement describes the end of this block is a return of the function.
+
+
+Each subexpression is visibly broken into it's core components which simplifies the flow a lot!
+
+Now how would branching look like?
+
+Let's consider another function:
+```rs
+fun geist(cond: bool) => i32 {
+    if cond {
+        esprit()[1]
     } else {
-        return a*b
+        32
     }
 }
 ```
 
-The IR for this could look like: 
-```
-fun func(arg: i32) -> i32:
-  _0: i32; // return place
-  _1: i32; // our a
-  _2: i32; // our b
-  _3: i32; // intermediate for the math ops
-  _4: bool; // intermediate for the comparison
-  _5: i32 // our arg
-
-
-  bb0:
-    _4.0 = cmp(_5, imm 1_i32)
-
-    exit: switch
-      1 -> bb1
-      otherwise -> bb2
-
-  bb1:
-    _0.0 = add(i32, _1, _2)
-
-    exit: return _0.0
-
-  bb2:
-    _0.1 = mul(i32, _1, _2)
-
-    exit: ret _0.1
-```
-
-This looks relatively clean and simple however i wonder how would it look where SSA's features shine a bit.
-
-Let's take a function like:
+In our IL, it would be like:
 ```rs
-fun branching(num: u8) => i32 {
-    let a;
+fun geist(cond: bool) => i32 {
+  altar ret: i32
 
-    if num == 1 {
-        a = 4
-    } else if num == 2 {
-        a = 5
-    } else {
-        a = 6
-    }
+  -- args --
+  altar cond: bool
+  
+  -- temporaries --
+  altar _0: [i32] // `esprit` call
 
-    return a + 1
+  bb0: {
+    exit: switch(cond)
+            | 0 -> bb1
+            | otherwise -> bb2
+  }
+
+  bb1: {
+    ret = const 32_i32
+
+    exit: goto -> bb4
+  }
+
+  bb2: {
+    exit: call (esprit, ret: _0) -> bb3
+  }
+
+  bb3: {
+    ret = Index(_0, 1)
+
+    exit: goto -> bb4
+  }
+
+  bb4: {
+    exit: return 
+  }
 }
 ```
 
-The IR for that could roughly look like (not-SSA):
-```
-fun branching(num: u8) => i32:
-  _0: i32 // return
-  _1: i32 // a
-  _2: u8  // num
-
-  bb0:
-    exit: switch _2
-      1 -> bb1
-      2 -> bb2
-      otherwise -> bb3
-
-  bb1:
-    _1 = 4
-
-    goto -> bb4
-
-  bb2:
-    _1 = 5
-
-    exit: goto -> bb4
-
-  bb3:
-    _1 = 6
-
-    exit: goto -> bb4
-
-  bb4:
-    _0 = add(i32, _1, imm 1_u32)
-    ret _0
-```
-
-with SSA it would be:
-```
-fun branching(num: u8) => i32:
-  _1: i32 // a
-  _2: u8  // num
-
-  bb0:
-    exit: switch _2
-      1 -> bb1
-      2 -> bb2
-      otherwise -> bb3
-
-  bb1:
-    _1.0 = 4
-
-    goto -> bb4
-
-  bb2:
-    _1.1 = 5
-
-    exit: goto -> bb4
-
-  bb3:
-    _1.2 = 6
-
-    exit: goto -> bb4
-
-  bb4:
-    _1.3 = phi(
-        (bb1, _1.0),
-        (bb2, _1.1),
-        (bb3, _1.2),
-    )
-    ret _1.3
-```
-
-    
