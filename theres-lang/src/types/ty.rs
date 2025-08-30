@@ -79,6 +79,18 @@ impl TyKind<'_> {
                 })
         )
     }
+
+    pub fn is_signed_int(self) -> bool {
+        matches!(self, TyKind::Int(..))
+    }
+
+    pub fn maybe_infer(self) -> Option<InferTy> {
+        if let TyKind::InferTy(i) = self {
+            return Some(i);
+        }
+
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -98,6 +110,10 @@ impl InferTy {
 
     pub fn is_integer(self) -> bool {
         self.kind == InferKind::Integer
+    }
+
+    pub fn id(self) -> InferId {
+        self.vid
     }
 }
 

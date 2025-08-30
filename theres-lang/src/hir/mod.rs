@@ -20,7 +20,6 @@ pub fn lower_universe<'hir>(
     for decl in &ast.thingies {
         first_pass.visit_thing(decl);
     }
-    dbg!(first_pass.debug());
 
     let mut inner = LateResolver::new(first_pass, ast);
     for decl in &ast.thingies {

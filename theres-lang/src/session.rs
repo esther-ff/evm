@@ -3,7 +3,6 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
-use std::panic::Location;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 
@@ -98,8 +97,15 @@ impl SymbolId {
         self_ -> 12
     );
 
+    #[track_caller]
     pub fn get_interned(&self) -> &str {
         let interner = SYMBOL_INTERNER.lock().unwrap();
+
+        debug_assert!(
+            self != &Self::DUMMY,
+            "tried to get the interned value of a dummy `SymbolId`"
+        );
+
         interner.storage[self.private as usize]
     }
 

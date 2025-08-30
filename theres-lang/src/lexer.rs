@@ -103,6 +103,7 @@ pub enum TokenKind {
 
 impl Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(clippy::enum_glob_use)]
         use TokenKind::*;
 
         let w = match self {
@@ -259,6 +260,7 @@ impl Span {
         self.end
     }
 
+    #[track_caller]
     pub fn between(left: Self, right: Self) -> Span {
         debug_assert!(left.sourceid == right.sourceid);
         Span::new(left.start, right.end, right.line, right.sourceid)
@@ -504,12 +506,12 @@ impl<'a> Lexer<'a> {
                     self.hex_literal();
                 }
 
-                '0' if self.consume_if('x') => {
+                '0' if self.consume_if('o') => {
                     self.octal_literal();
                 }
 
                 ch if ch.is_ascii_digit() => {
-                    self.integer_literal();
+                    self.number_literal();
                 }
 
                 '\n' => self.current_line += 1,
@@ -535,6 +537,7 @@ impl<'a> Lexer<'a> {
         Lexemes::new(self.tokens, self.sourceid)
     }
 
+    #[inline]
     fn lex_error(&mut self, any: char) {
         let start = self.chars.position - 1;
         self.skip_all_filter(|x| x == any);
@@ -542,6 +545,55 @@ impl<'a> Lexer<'a> {
         self.error(
             self.new_span(start, self.chars.position),
             LexError::UnknownChar(any),
+        );
+    }
+
+    #[inline]
+    fn number_literal(&mut self) {
+        let start = self.chars.position - 1;
+
+        while let Some(ch) = self.chars.next_char() {
+            if ch == '.' {
+                return self.inner_float_literal(start);
+            } else if !ch.is_ascii_digit() {
+                self.chars.position -= 1;
+                break;
+            }
+        }
+
+        let Some(literal_str) = self.chars.get_str(start, self.chars.position) else {
+            unreachable!()
+        };
+
+        let literal = literal_str
+            .parse::<i64>()
+            .expect("this isn't supposed to fail");
+
+        self.add_token(
+            self.new_span(start, self.chars.position),
+            TokenKind::IntegerLiteral(literal),
+        );
+    }
+
+    #[inline]
+    fn inner_float_literal(&mut self, start: usize) {
+        while let Some(ch) = self.chars.peek_char() {
+            if !ch.is_ascii_digit() {
+                break;
+            }
+
+            self.chars.position += 1;
+        }
+
+        let Some(literal_str) = self.chars.get_str(start, self.chars.position) else {
+            unreachable!()
+        };
+
+        let float: f64 = literal_str.parse().expect("shouldn't fail");
+
+        self.add_token(
+            self.new_span(start, self.chars.position),
+            TokenKind::FloatLiteral(float),
         );
     }
 
@@ -696,51 +748,6 @@ impl<'a> Lexer<'a> {
         self.tokens.push(token);
     }
 
-    fn float_literal(&mut self, start: usize) {
-        while let Some(char) = self.chars.next_char() {
-            if !char.is_ascii_digit() {
-                let span = self.new_span(start, self.chars.position + 1);
-                self.error(span, LexError::InvalidFloatLiteral);
-                self.skip_all_filter(|x| !x.is_whitespace());
-            }
-        }
-
-        let span = self.new_span(start, self.chars.position + 1);
-        let string = self
-            .get_literal_str(start, self.chars.position)
-            .expect("couldn't retrieve the string");
-
-        let Ok(float) = string.parse::<f64>() else {
-            self.error(span, LexError::InvalidFloatLiteral);
-            return;
-        };
-
-        self.add_token(span, TokenKind::FloatLiteral(float));
-    }
-
-    fn integer_literal(&mut self) {
-        self.chars.position -= 1;
-        let start = self.chars.position;
-
-        while let Some(next) = self.chars.next_char() {
-            if self.consume_if('.') {
-                return self.float_literal(start);
-            } else if !next.is_ascii_digit() {
-                self.chars.position -= 1;
-                break;
-            }
-        }
-
-        let span = self.new_span(start, self.chars.position + 1);
-        let num = self
-            .get_literal_str(start, self.chars.position)
-            .expect("couldn't get this string")
-            .parse::<i64>()
-            .expect("loop above ensures this never fails");
-
-        self.add_token(span, TokenKind::IntegerLiteral(num));
-    }
-
     fn parse_literal_radix(&mut self, radix: u32, err_kind: LexError) {
         let start = self.chars.position;
         self.skip_all_filter(|x| x.is_digit(radix));
@@ -807,6 +814,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn get_literal_str(&self, start: usize, end: usize) -> Option<&str> {
+        dbg!(end - start);
         self.chars.get_str(start, end)
     }
 

@@ -1099,7 +1099,28 @@ impl<'a> Parser<'a> {
             return Ok(Expr::new(expr_ty, span, self.new_id()));
         }
 
-        self.field_access_or_method_call()
+        self.index_expr()
+    }
+
+    fn index_expr(&mut self) -> Result<Expr> {
+        let mut expr = self.field_access_or_method_call()?;
+
+        while self.consume_if(t!(LeftSqBracket)) {
+            let index = self.expression().map(Box::new)?;
+            let rbrkt = self.expect(t!(RightSqBracket));
+            let span = expr.span;
+
+            expr = Expr::new(
+                ExprType::Index {
+                    indexed: Box::new(expr),
+                    index,
+                },
+                Span::between(span, rbrkt.span),
+                self.new_id(),
+            );
+        }
+
+        Ok(expr)
     }
 
     fn field_access_or_method_call(&mut self) -> Result<Expr> {
@@ -1236,7 +1257,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::new(ExprType::Block(block), block_span, self.new_id()))
             }
 
-            _ => self.index_expr(),
+            _ => self.error_out(ParseError::ExpectedExpr, token.span),
         }
     }
 
@@ -1258,24 +1279,6 @@ impl<'a> Parser<'a> {
         };
 
         Expr::new(expr_ty, actual.span, self.new_id())
-    }
-
-    fn index_expr(&mut self) -> Result<Expr> {
-        let expr = self.expression()?;
-        self.expect(t!(LeftSqBracket));
-        let idx = self.expression()?;
-        self.expect(t!(RightSqBracket));
-
-        let span = Span::between(expr.span, idx.span);
-
-        Ok(Expr::new(
-            ExprType::Index {
-                indexed: Box::new(expr),
-                index: Box::new(idx),
-            },
-            span,
-            self.new_id(),
-        ))
     }
 
     fn group_exprs(&mut self) -> Result<Expr> {
@@ -1359,7 +1362,7 @@ impl<'a> Parser<'a> {
             next.span,
         );
 
-        Token::new(Span::DUMMY, exp)
+        Token::new(next.span, exp)
     }
 
     // except eof

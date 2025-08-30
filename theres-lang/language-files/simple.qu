@@ -1,51 +1,105 @@
 instance Simple (
     field: nil
-) 
+)
 
-bind Simple with (
-    const SimpleConst: Simple = 1;
+instance Vector (
+    x: f32,
+    y: f32
+)
 
-    fun method(self) => nil {
-        self.field = {};
+bind Vector with (
+    fun mul(self, m: f32) => nil {
+        self.x *= m;
+        self.y *= m;
     }
 )
 
-realm RealmOne {
-    fun meow() => nil {}
+fun inst() => Simple {
+    Simple({})
 }
 
 fun main() => nil {
-    let m: i32 = test();
-    fun test() => i32 {
-        1 + 1
-    }
+    let add: u64 = calc() + calc();
+    let sub: u64 = calc() - calc();
+    #dom ?
 
-    let varA: i32 = 1;
-    let bindA: i32 = varA + 1;
+    let mul: u64 = calc() * calc();
+    let div: u64 = calc() / calc();
+
+    div /= calc();
     
-    let function: u32 = d();
+    let adt: Simple = inst();
+    adt.field;
 
-    let realmRef: nil = RealmOne::meow();
+    let vector: Vector = Vector(1.0, 1.2);
+    vector.mul(2.5);
+    
+    vector.x;
+    adt.field
+}
 
-    # let ConstToVar: u32 = Simple::SimpleConst;
-    let cond: bool = true;
-    # let test: Simple = 1;
+fun calc() => u64 {
+    1 + 1
+}
 
-    while cond {
-        d();
+fun calc_a() => i64 {
+    1 + 1
+}
+
+fun calc_float() => f32 {
+    1.0 + 1.0
+}
+
+fun calc_double() => f64 {
+    1.0 + 1.0
+}
+
+fun test_ifs() => nil {
+    let null: nil = if 0 == 0 {
+        0
+    };
+
+    let num: i64 = if true {
         1
-    }
+    } else {
+        2
+    };
 }
 
-fun d() => u32 {
-    2 + 2
+fun neg() => i32 {
+    let a: i32 = -1;
+    1
 }
 
-fun arr(a: [i32]) => i32 {
-    a[1]
+fun test_loopies() => nil {
+    let null: nil = until true {
+        0
+    };
+
+    let null: nil = while true {
+        0
+    };
+
+    let looop: nil = loop {};
 }
 
-fun arr_a() => [i32] {
-    let a: [i32] = [1];
-    a
+fun nested_arr() => [[[i32]]] {
+    [
+        [
+            [1, 2], [1, 2],
+            [1, 3], [1, 3]
+        ]
+    ]
+}
+
+fun nested_arr_idx() => i32 {
+    let arr: [[[i32]]] = nested_arr();
+
+    arr[1][1][1]
+}
+
+fun weird() => f32 {
+    let val: [[f32]] = [[1.0, 1.2], [1.0]];
+
+    val[1][1] + 1.0
 }

@@ -44,7 +44,7 @@ impl TheresError for ParseError {
             ParseError::MalformedType => "this type is malformed".into(),
 
             ParseError::ExpectedDecl { got } => {
-                format!("expected the start of a declaration, got: {}", got).into()
+                format!("expected the start of a declaration, got: {got}").into()
             }
 
             ParseError::ExpectedConstVar => "expected a constant here".into(),
@@ -62,8 +62,14 @@ impl TheresError for LexError {
     }
 
     fn message(&self) -> Cow<'static, str> {
-        dbg!(self);
-        "error occured, todo! this message!".into()
+        match self {
+            LexError::InvalidFloatLiteral => "the float literal is invalid",
+            LexError::InvalidHexLiteral => "the hex literal is invalid",
+            LexError::InvalidOctalLiteral => "the octal literal is invalid",
+            LexError::LackingEndForStringLiteral => "unterminated string literal",
+            LexError::UnknownChar(ch) => return format!("unknown character: {ch}").into(),
+        }
+        .into()
     }
 }
 

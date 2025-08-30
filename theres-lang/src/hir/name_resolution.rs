@@ -2,15 +2,14 @@ use super::def::{DefId, DefMap, DefType, Definitions, IntTy, PrimTy, Resolved};
 use crate::ast::{
     AstId, Bind, BindItem, BindItemKind, Block, Expr, ExprType, Field, FnDecl, FnSig, Instance,
     Name, Path, Realm, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe, VariableStmt,
-    Visitor,
+    Visitor, VisitorResult,
 };
-
 use crate::hir::lowering_ast::Mappings;
 use crate::parser::AstIdMap;
 use crate::session::{SymbolId, SymbolMap};
+use crate::{maybe_visit, try_visit};
 use std::collections::HashMap;
 use std::mem;
-use std::panic::Location;
 
 type BindingList<'a> = &'a [(SymbolId, Resolved<AstId>)];
 
@@ -71,10 +70,10 @@ impl Scope {
     }
 
     pub fn add(&mut self, name: &Name, res: Resolved<AstId>, ns: Space) {
-        log::trace!(
-            "Scope::add name={} res={res:?} ns={ns:?}",
-            name.interned.get_interned()
-        );
+        // log::trace!(
+        //     "Scope::add name={} res={res:?} ns={ns:?}",
+        //     name.interned.get_interned()
+        // );
         match ns {
             Space::Types => self.types.insert(name.interned, res),
             Space::Values => self.bindings.insert(name.interned, res),
@@ -801,6 +800,22 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
                 self.visit_expr(index);
             }
 
+            ExprType::If {
+                cond,
+                if_block,
+                else_ifs,
+                otherwise,
+            } => {
+                try_visit!(self.visit_expr(cond), self.visit_block(if_block));
+
+                for elsif in else_ifs {
+                    self.visit_expr(&elsif.cond);
+                    self.visit_block(&elsif.body);
+                }
+
+                maybe_visit!(v: self, m: visit_block, otherwise);
+            }
+
             any => todo!("to-do expression kinds: {any:#?}"),
         }
     }
@@ -832,11 +847,9 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             }
 
             TyKind::MethodSelf => {
-                let Some(cur) = self.current_bind_item else {
+                let Some(_cur) = self.current_bind_item else {
                     todo!("self ty outside bind!");
                 };
-
-                dbg!(cur);
             }
 
             TyKind::Err => (), // explicit matching in case i add smth new

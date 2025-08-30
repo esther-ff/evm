@@ -1,4 +1,4 @@
-use crate::ast::VisitorResult;
+use crate::ast::{BinOp, VisitorResult};
 use crate::hir::def::{BodyId, DefId, DefType, Resolved};
 use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
@@ -10,10 +10,18 @@ use crate::lexer::Span;
 use crate::session::Session;
 use crate::try_visit;
 use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
+
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
 crate::newtyped_index!(InferId, InferMap, InferVec, InferSlice);
+
+#[derive(Debug, Clone, Copy)]
+pub enum CallKind<'ty> {
+    Method(Ty<'ty>),
+    Regular,
+}
 
 /// Gathers and interns stuff like
 /// function signatures, instance declarations
@@ -41,10 +49,14 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
                 self.visit_expr(body);
             }
 
-            ThingKind::Instance { fields: _, name: _, ctor_id: (_, ctor_id) } => {
+            ThingKind::Instance {
+                fields: _,
+                name: _,
+                ctor_id: (_, ctor_id),
+            } => {
                 self.sess.instance_def(thing.def_id);
                 self.sess.reify_fn_sig_for_ctor_of(ctor_id);
-            } 
+            }
 
             ThingKind::Bind(bind) => {
                 for bind_item in bind.items {
@@ -66,6 +78,13 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum Obligation {
+    /// Type must be able to be negated via `!`
+    Neg,
+}
+
 pub struct FunCx<'ty> {
     s: &'ty Session<'ty>,
 
@@ -80,6 +99,8 @@ pub struct FunCx<'ty> {
     resolved_method_calls: HashMap<HirId, DefId>,
 
     local_tys: HashMap<HirId, Ty<'ty>>,
+
+    obligations: RefCell<HashMap<InferId, Vec<Obligation>>>,
 }
 
 pub struct UnifyError;
@@ -94,6 +115,7 @@ impl<'ty> FunCx<'ty> {
             node_type: HashMap::new(),
             resolved_method_calls: HashMap::new(),
             local_tys: HashMap::new(),
+            obligations: RefCell::new(HashMap::default()),
         }
     }
 
@@ -121,6 +143,33 @@ impl<'ty> FunCx<'ty> {
         }))
     }
 
+    fn obligation_for(&self, vid: InferId, oblig: Obligation) {
+        let mut map = self.obligations.borrow_mut();
+        if let Some(entry) = map.get_mut(&vid) {
+            return entry.push(oblig);
+        }
+
+        map.insert(vid, vec![oblig]);
+    }
+
+    fn process_obligs_of_ty(&self, vid: InferId, concrete_ty: Ty<'_>) {
+        let map = self.obligations.borrow();
+        let Some(obligs) = map.get(&vid) else { return };
+
+        // if we get more just do a match
+        // rn it's just `Neg`
+        for _obligation in obligs {
+            if let Some(inferty) = concrete_ty.maybe_infer() {
+                self.obligation_for(inferty.vid, Obligation::Neg);
+                continue;
+            }
+
+            if !concrete_ty.is_signed_int() {
+                todo!("only signed ints can be neg")
+            }
+        }
+    }
+
     fn unify(&mut self, expected: Ty<'ty>, got: Ty<'ty>) -> Result<(), UnifyError> {
         log::trace!("entered `unify` expected={expected:?} got={got:?}");
         match (*expected, *got) {
@@ -142,24 +191,22 @@ impl<'ty> FunCx<'ty> {
 
             (TyKind::InferTy(infer), concrete) | (concrete, TyKind::InferTy(infer)) => {
                 log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
-
                 if infer.is_integer() && !concrete.is_integer_like() || infer.is_float() && !concrete.is_float_like() {
                     log::error!("infer error infer={infer:?} concrete={concrete:?}");
                     return Err(UnifyError)
-                    
                 }
-                match self.ty_var_types.get(&infer.vid) {
-                    None => {
-                        self.ty_var_types
-                            .insert(infer.vid, self.s.intern_ty(concrete));
-                    }
 
-                    Some(ty) => return self.unify(*ty, self.s.intern_ty(concrete)),
+                let ty_reff = self.s.intern_ty(concrete);
+                self.process_obligs_of_ty(infer.vid, ty_reff);
+
+                if let Some(ty) = self.ty_var_types.get(&infer.vid) {
+                    return self.unify(*ty, ty_reff)
                 }
+
+                self.ty_var_types.insert(infer.vid, ty_reff);
             }
 
             (TyKind::Error, _) | (_, TyKind::Error) => return Ok(()),
-
 
             _ => return Err(UnifyError),
         }
@@ -237,7 +284,7 @@ impl<'ty> FunCx<'ty> {
                 HirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
             },
 
-            ExprKind::Binary { lhs, rhs, op: _ } => {
+            ExprKind::Binary { lhs, rhs, op } => {
                 let ty_lhs = self.type_of(lhs);
                 let ty_rhs = self.type_of(rhs);
 
@@ -253,14 +300,29 @@ impl<'ty> FunCx<'ty> {
                     return self.s.ty_err();
                 }
 
-                ty_lhs
+                if let BinOp::LogicalOr | BinOp::LogicalAnd | BinOp::NotEquality | BinOp::Equality =
+                    op
+                {
+                    self.s.bool()
+                } else {
+                    ty_lhs
+                }
             }
 
             ExprKind::Unary { target, op: _ } => {
                 let ty = self.type_of(target);
 
-                if let TyKind::Bool | TyKind::Uint(..) | TyKind::Int(..) = *ty {
+                if let TyKind::Bool = *ty {
                     return ty;
+                }
+
+                match ty.0 {
+                    TyKind::Bool | TyKind::Int(..) => (),
+                    TyKind::InferTy(inferty) if inferty.is_integer() => {
+                        self.obligation_for(inferty.id(), Obligation::Neg);
+                        return ty;
+                    }
+                    _ => return ty,
                 }
 
                 self.s.diag().emit_err(
@@ -327,20 +389,20 @@ impl<'ty> FunCx<'ty> {
                     }
                 }
 
-                if let Some(otherwise_block) = otherwise
-                    && self.typeck_block(otherwise_block) != ret_ty
-                {
-                    let block_ty = self.typeck_block(otherwise_block);
+                let Some(otherwise_block) = otherwise else {
+                    return self.s.nil();
+                };
 
-                    if ret_ty != block_ty {
-                        self.s.diag().emit_err(
-                            TypingError::TypeMismatch(
-                                self.s.stringify_ty(block_ty),
-                                self.s.stringify_ty(ret_ty),
-                            ),
-                            otherwise_block.span,
-                        );
-                    }
+                let block_ty = self.typeck_block(otherwise_block);
+
+                if self.unify(ret_ty, block_ty).is_err() {
+                    self.s.diag().emit_err(
+                        TypingError::TypeMismatch(
+                            self.s.stringify_ty(block_ty),
+                            self.s.stringify_ty(ret_ty),
+                        ),
+                        otherwise_block.span,
+                    );
                 }
 
                 ret_ty
@@ -455,7 +517,9 @@ impl<'ty> FunCx<'ty> {
                 match res {
                     Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
 
-                    Resolved::Def(ctor_def_id, DefType::AdtCtor) => self.s.intern_ty(TyKind::FnDef(ctor_def_id)),
+                    Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
+                        self.s.intern_ty(TyKind::FnDef(ctor_def_id))
+                    }
 
                     Resolved::Local(hir_id) => {
                         let hir = self.s.hir_ref();
@@ -522,7 +586,12 @@ impl<'ty> FunCx<'ty> {
 
                     self.resolved_method_calls.insert(expr.hir_id, def_id);
 
-                    ret_ty = self.verify_arguments_for_call(def_id, args, span);
+                    ret_ty = self.verify_arguments_for_method_call(
+                        def_id,
+                        core::iter::once(receiver).chain(args.iter()),
+                        args.len() + 1,
+                        span,
+                    );
                 });
 
                 ret_ty
@@ -530,14 +599,16 @@ impl<'ty> FunCx<'ty> {
 
             ExprKind::List(exprs) => {
                 if exprs.is_empty() {
-                    return self.s.intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular)))
+                    return self
+                        .s
+                        .intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular)));
                 }
 
                 exprs
                     .iter()
                     .fold(None, |state, expr| {
                         let Some(ty) = state else {
-                            return Some(self.type_of(expr))
+                            return Some(self.type_of(expr));
                         };
 
                         let expr_ty = self.type_of(expr);
@@ -547,7 +618,10 @@ impl<'ty> FunCx<'ty> {
 
                         state
                     })
-                    .map_or_else(|| unreachable!(), |output| self.s.intern_ty(TyKind::Array(output)))
+                    .map_or_else(
+                        || unreachable!(),
+                        |output| self.s.intern_ty(TyKind::Array(output)),
+                    )
             }
         };
 
@@ -582,7 +656,6 @@ impl<'ty> FunCx<'ty> {
         args: &[Expr<'_>],
         span: Span,
     ) -> Ty<'ty> {
-        dbg!(def_id);
         let sig = self.s.fn_sig_for(def_id);
 
         let amount_of_args = sig.inputs.len();
@@ -591,6 +664,48 @@ impl<'ty> FunCx<'ty> {
         let mut sig_tys = self.s.fn_sig_for(def_id).inputs.iter().copied();
 
         let mut call_tys = args.iter();
+
+        if amount_of_args != given_args {
+            self.s.diag().emit_err(
+                TypingError::WrongArgumentAmnt {
+                    amount_given: given_args,
+                    amount_req: amount_of_args,
+                },
+                dbg!(span),
+            );
+        }
+
+        loop {
+            match (
+                sig_tys.next(),
+                call_tys.next().map(|expr| self.typeck_expr(expr)),
+            ) {
+                (Some(sig_ty), Some(call_ty)) => {
+                    if self.unify(sig_ty, call_ty).is_err() {
+                        self.type_mismatch_err(sig_ty, call_ty, span);
+                    }
+                }
+                (Some(..), None) | (None, Some(..)) => {}
+                (None, None) => break,
+            }
+        }
+
+        sig.output
+    }
+
+    #[track_caller]
+    fn verify_arguments_for_method_call<'a>(
+        &mut self,
+        def_id: DefId,
+        args: impl IntoIterator<Item = &'a Expr<'a>>,
+        given_args: usize,
+        span: Span,
+    ) -> Ty<'ty> {
+        let sig = self.s.fn_sig_for(def_id);
+        let amount_of_args = sig.inputs.len();
+
+        let mut sig_tys = self.s.fn_sig_for(def_id).inputs.iter().copied();
+        let mut call_tys = args.into_iter();
 
         if amount_of_args != given_args {
             self.s.diag().emit_err(
@@ -800,7 +915,7 @@ pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>)
 
             ThingKind::Bind(bind) => {
                 for item in bind.items {
-                    if let BindItemKind::Fun { sig: _, name:_ } = item.kind {
+                    if let BindItemKind::Fun { sig: _, name: _ } = item.kind {
                         let _table = session.typeck(item.def_id);
                     }
                 }

@@ -83,7 +83,10 @@ bitShifts      → term ( ( ">>" | "<<" ) term )*;
 term           → factor ( ( "-" | "+" ) factor )* ;
 factor         → unary ( ( "/" | "*" ) unary )* ;
 unary          → ( "!" | "-" ) unary
-               | fieldAccess ;
+               | indexExpr ;
+
+
+indexExpr      → fieldAccess "[" expression "]" ;
 
 fieldAccess    → methodCall "." IDENT ;
 methodCall     → funCall "." IDENT + "(" expression? ("," expression)? ")"; 
@@ -108,5 +111,4 @@ primary        → NUMBER
 			   | returnExpr 
 			   | makeExpr
 			   | pathExpr
-			   | indexExpr  
 			   | block ;
