@@ -2,8 +2,9 @@
 
 The name isn't that stupid...
 it stands for the **P**uppygirl **I**ntermediate **L**owering **L**anguage
-the idea of is it to represent the program in a simple basic-block way
-amenable to analysis but also easy to translate into SSA form to perform further analysis or constant evaluation.
+the idea of is it to represent the program as a simple graph built from basic block amenable to analysis but also easy to translate into SSA form.
+
+## Some examples
 
 let's imagine a function in Theres like
 ```rs
@@ -117,3 +118,100 @@ fun geist(cond: bool) => i32 {
 }
 ```
 
+## Terminators
+The `exit` describes a terminator of the block where it diverges by returning, calling a function, doing a direct goto or a switch or becomes unreachable.
+
+I think these terminators would be enough for the language at this time:
+- `goto` for simple jumps
+- `call` for function calls
+- `switch` for if and eventually match statements
+- `return` for returning from a function
+
+I see a possible use for some sort a `unreachable` terminator
+that would describe a block that is unreachable (duh)
+
+## Instructions of the IR
+The following instructions should be enough to handle the language:
+- arithmetic operations like `Add`, `Sub`, `Mul`, `Div`, `Mod`, `BitOr` and `BitAnd`
+- comparisons like `Greater`, `Equal` and `Lesser``
+- operations like `Index` for lists and strings (i don't know how i'll handle slicing with ranges)
+- constructors for `instance`s
+
+With this semi-spec we could try translating another program to the IL by hand
+```rs
+instance Vector3 (
+    x: f32,
+    y: f32,
+    z: f32,
+)
+
+fun mkVector(cond: i32) => Vector3 {
+    if cond == 0 {
+        Vector3(0.0, 0.0, 0.0)
+    } else if cond == 1 {
+        Vector3(0.1, 0.1, 0.1)
+    } else {
+        Vector(1.1, 1.1, 1.1)
+    }
+}
+
+fun main() => nil {
+    let vector: Vector3 = mkVector(2)
+}
+```
+
+The IL for this could look like:
+```rs
+fun mkVector(cond: i32) => Vector3 {
+  altar ret: Vector3
+  
+  -- args --
+  cond: i32
+
+  bb0: {
+    exit: switch(cond)
+            | 0 -> bb1
+            | 1 -> bb2
+            | otherwise -> bb3
+`  }
+
+  bb1: {
+    ret = Construct(Vector3, 0.0_f32, 0.0_f32, 0.0_f32)
+
+    exit: goto -> bb4
+  }
+
+  bb2: {
+    ret = Construct(Vector3, 0.1_f32, 0.1_f32, 0.1_f32)
+
+    exit: goto -> bb4
+  }
+
+  bb3: {
+    ret = Construct(Vector3, 1.1_f32, 1.1_f32, 1.1_f32)
+
+    exit: goto -> bb4
+  }
+
+  bb4: {
+    exit: return
+  }
+}
+
+fun main() => nil {
+  altar ret: nil
+
+  -- user variables --
+  altar _0: Vector3 >> "vector"
+
+  bb0: {
+    exit: call (mkVector, 3_i32, ret: _0) -> bb1
+  }
+
+  bb1 {
+    exit: return
+  }
+}
+```
+
+The idea of slightly abstracting away constructing an instance allows us to make it opaque enough to implement it in a VM and implement it in a native runtime existing as garbage collected pointers.
