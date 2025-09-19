@@ -138,8 +138,6 @@ where
             ThingKind::Realm(realm) => self.visit_realm(realm),
             ThingKind::Instance(instance) => self.visit_instance(instance),
 
-            ThingKind::Interface(..) => unimplemented!(),
-
             ThingKind::Bind(bind) => self.visit_bind(bind),
         }
         self.thing_ast_id.take();
@@ -511,7 +509,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
             ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
-            ThingKind::Interface(..) => unimplemented!(),
         }
 
         self.current_item = old;
@@ -541,10 +538,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         self.with_current_scope_mut(|s| {
             s.add(name, Resolved::Def(def_id, DefType::Realm), Space::Types);
         });
-    }
-
-    fn visit_interface(&mut self, _val: &'a crate::ast::Interface) -> Self::Result {
-        todo!("interfaces: resolving")
     }
 
     fn visit_bind(&mut self, bind: &'a Bind) -> Self::Result {
@@ -582,7 +575,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
-        log::trace!("`visit_bind_item` astid = {}", val.id);
         self.current_bind_item = Some(val.id);
         match val.kind {
             BindItemKind::Const(ref var_stmt) => {
@@ -627,8 +619,12 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
         let def_id = self.get_def_id(thing_ast_id);
 
-        self.with_current_scope_mut(|s| {
-            s.add(name, Resolved::Def(def_id, DefType::Fun), Space::Values);
+        if self.current_scope == AstId::ZERO && name.interned == SymbolId::main() {
+            self.maps.set_entry_point(def_id);
+        }
+
+        self.with_current_scope_mut(|scope| {
+            scope.add(name, Resolved::Def(def_id, DefType::Fun), Space::Values);
         });
 
         self.with_new_scope(|visitor| visitor.visit_block(&val.block), Some(&bindings));
@@ -780,13 +776,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
 
             ExprType::Lambda { args: _, body: _ } => {
                 todo!("lambda")
-            }
-
-            ExprType::Make {
-                created: _,
-                ctor_args: _,
-            } => {
-                todo!("make")
             }
 
             ExprType::Constant(..) => (),

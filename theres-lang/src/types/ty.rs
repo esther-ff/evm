@@ -3,6 +3,7 @@ use crate::hir::def::{DefId, IntTy};
 use crate::hir::node::Constant;
 use crate::session::{Pooled, Session, SymbolId};
 use crate::types::fun_cx::{FieldSlice, InferId};
+use core::panic;
 use std::borrow::Cow;
 
 /// Interned type for a particular something.
@@ -55,7 +56,7 @@ pub enum TyKind<'ty> {
     InferTy(InferTy),
 }
 
-impl TyKind<'_> {
+impl<'ty> TyKind<'ty> {
     pub fn is_integer_like(self) -> bool {
         matches!(
             self,
@@ -90,6 +91,15 @@ impl TyKind<'_> {
         }
 
         None
+    }
+
+    #[track_caller]
+    pub fn expect_instance(&self) -> Instance<'ty> {
+        let TyKind::Instance(def) = self else {
+            panic!("expected instance but got different ty!")
+        };
+
+        *def
     }
 }
 

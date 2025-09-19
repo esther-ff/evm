@@ -1,3 +1,4 @@
+pub mod check;
 pub mod def;
 pub mod lowering_ast;
 pub mod map_builder;
@@ -8,6 +9,7 @@ pub use name_resolution::{LateResolver, ThingDefResolver};
 
 use crate::ast::Visitor;
 use crate::driver::HirDump;
+use crate::hir::def::DefId;
 use crate::hir::node::Universe;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
@@ -15,7 +17,7 @@ use crate::session::Session;
 pub fn lower_universe<'hir>(
     sess: &'hir Session<'hir>,
     ast: &crate::ast::Universe,
-) -> &'hir Universe<'hir> {
+) -> (&'hir Universe<'hir>, Option<DefId>) {
     let mut first_pass = ThingDefResolver::new();
     for decl in &ast.thingies {
         first_pass.visit_thing(decl);
@@ -27,6 +29,7 @@ pub fn lower_universe<'hir>(
     }
 
     let mappings = inner.into_mappings();
+    let entry = mappings.entry_point();
 
     let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 
@@ -54,5 +57,5 @@ pub fn lower_universe<'hir>(
         HirDump::None => {}
     }
 
-    hir_universe
+    (hir_universe, entry)
 }

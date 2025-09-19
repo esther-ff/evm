@@ -15,6 +15,8 @@ mod hir;
 mod id;
 mod lexer;
 mod parser;
+mod passes;
+mod pill;
 mod session;
 mod sources;
 mod types;

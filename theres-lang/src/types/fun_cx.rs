@@ -1,13 +1,13 @@
-use crate::ast::{BinOp, VisitorResult};
+use crate::ast::{BinOp, UnaryOp, VisitorResult};
 use crate::hir::def::{BodyId, DefId, DefType, Resolved};
 use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
-    BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Node, Stmt, StmtKind, Thing, ThingKind,
-    Universe,
+    BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Node, Path, Stmt, StmtKind, Thing,
+    ThingKind, Universe,
 };
 use crate::hir::visitor::HirVisitor;
 use crate::lexer::Span;
-use crate::session::Session;
+use crate::session::{Session, SymbolId};
 use crate::try_visit;
 use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
 
@@ -191,19 +191,20 @@ impl<'ty> FunCx<'ty> {
 
             (TyKind::InferTy(infer), concrete) | (concrete, TyKind::InferTy(infer)) => {
                 log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
-                if infer.is_integer() && !concrete.is_integer_like() || infer.is_float() && !concrete.is_float_like() {
-                    log::error!("infer error infer={infer:?} concrete={concrete:?}");
+
+                if infer.is_integer() && !concrete.is_integer_like()
+                || infer.is_float() && !concrete.is_float_like() {
                     return Err(UnifyError)
                 }
 
-                let ty_reff = self.s.intern_ty(concrete);
-                self.process_obligs_of_ty(infer.vid, ty_reff);
+                let concrete_ref = self.s.intern_ty(concrete);
+                self.process_obligs_of_ty(infer.vid, concrete_ref);
 
                 if let Some(ty) = self.ty_var_types.get(&infer.vid) {
-                    return self.unify(*ty, ty_reff)
+                    return self.unify(*ty, concrete_ref)
                 }
 
-                self.ty_var_types.insert(infer.vid, ty_reff);
+                self.ty_var_types.insert(infer.vid, concrete_ref);
             }
 
             (TyKind::Error, _) | (_, TyKind::Error) => return Ok(()),
@@ -260,82 +261,36 @@ impl<'ty> FunCx<'ty> {
             StmtKind::Local(local) => {
                 let _ = self.typeck_local(local);
             }
-            StmtKind::Thing(..) => {} // we typeck them later
+
+            StmtKind::Thing(..) => {} // we typeck them separately
+
             StmtKind::Expr(expr) => {
                 let _ = self.typeck_expr(expr);
             }
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn typeck_expr(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
         log::trace!("entering `typeck_expr`");
         let ty = match expr.kind {
-            ExprKind::Literal(lit) => match lit {
-                HirLiteral::Bool(..) => self.s.bool(),
-                HirLiteral::Uint(..) | HirLiteral::Int(..) => {
-                    let new = self.new_infer_var(InferKind::Integer);
-                    log::trace!("new infer ty for integer: {new:?}");
-                    new
-                }
-
-                HirLiteral::Str(_sym) => todo!("idk how to type strings yet Ok!"),
-
-                HirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
-            },
-
-            ExprKind::Binary { lhs, rhs, op } => {
-                let ty_lhs = self.type_of(lhs);
-                let ty_rhs = self.type_of(rhs);
-
-                if self.unify(ty_lhs, ty_rhs).is_err() {
-                    self.s.diag().emit_err(
-                        TypingError::NoBinaryOp {
-                            lhs: self.s.stringify_ty(ty_lhs),
-                            rhs: self.s.stringify_ty(ty_rhs),
-                        },
-                        Span::between(lhs.span, rhs.span),
-                    );
-
-                    return self.s.ty_err();
-                }
-
-                if let BinOp::LogicalOr | BinOp::LogicalAnd | BinOp::NotEquality | BinOp::Equality =
-                    op
-                {
-                    self.s.bool()
-                } else {
-                    ty_lhs
-                }
-            }
-
-            ExprKind::Unary { target, op: _ } => {
-                let ty = self.type_of(target);
-
-                if let TyKind::Bool = *ty {
-                    return ty;
-                }
-
-                match ty.0 {
-                    TyKind::Bool | TyKind::Int(..) => (),
-                    TyKind::InferTy(inferty) if inferty.is_integer() => {
-                        self.obligation_for(inferty.id(), Obligation::Neg);
-                        return ty;
-                    }
-                    _ => return ty,
-                }
-
-                self.s.diag().emit_err(
-                    TypingError::NoUnaryOp {
-                        on: self.s.stringify_ty(ty),
-                    },
-                    target.span,
-                );
-
-                self.s.ty_err()
-            }
-
+            ExprKind::Literal(lit) => self.typeck_expr_literal(lit),
+            ExprKind::Binary { lhs, rhs, op } => self.typeck_expr_bin_op(lhs, rhs, op),
+            ExprKind::Unary { target, op } => self.typeck_expr_un_op(target, op),
             ExprKind::Paren { inner } => self.type_of(inner),
+            ExprKind::Path(path) => self.typeck_expr_path(path),
+            ExprKind::Block(block) => self.typeck_block(block),
+            ExprKind::Field { src, field } => self.typeck_expr_field(src, field),
+            ExprKind::List(exprs) => self.typeck_expr_list(exprs),
+            ExprKind::Break => self.s.ty_diverge(),
+            ExprKind::Loop { body, reason: _ } => {
+                self.typeck_block(body);
+                self.s.nil()
+            }
+
+            ExprKind::Index {
+                index,
+                indexed_thing,
+            } => self.typeck_expr_index(indexed_thing, index, expr.span),
 
             ExprKind::Assign { variable, value } => {
                 let variable_ty = self.type_of(variable);
@@ -359,54 +314,7 @@ impl<'ty> FunCx<'ty> {
                 block,
                 else_ifs,
                 otherwise,
-            } => {
-                let cond_ty = self.type_of(condition);
-                if *cond_ty != TyKind::Bool {
-                    self.type_mismatch_err(self.s.bool(), cond_ty, condition.span);
-                }
-
-                let ret_ty = self.typeck_block(block);
-
-                for (block, elsif) in else_ifs {
-                    let block_ty = self.typeck_block(block);
-                    if block_ty != ret_ty {
-                        self.s.diag().emit_err(
-                            TypingError::TypeMismatch(
-                                self.s.stringify_ty(block_ty),
-                                self.s.stringify_ty(ret_ty),
-                            ),
-                            Span::between(block.span, elsif.span),
-                        );
-                    }
-
-                    let elsif_ty = self.type_of(elsif);
-
-                    if *elsif_ty != TyKind::Bool {
-                        self.s.diag().emit_err(
-                            TypingError::TypeMismatch("bool".into(), self.s.stringify_ty(elsif_ty)),
-                            elsif.span,
-                        );
-                    }
-                }
-
-                let Some(otherwise_block) = otherwise else {
-                    return self.s.nil();
-                };
-
-                let block_ty = self.typeck_block(otherwise_block);
-
-                if self.unify(ret_ty, block_ty).is_err() {
-                    self.s.diag().emit_err(
-                        TypingError::TypeMismatch(
-                            self.s.stringify_ty(block_ty),
-                            self.s.stringify_ty(ret_ty),
-                        ),
-                        otherwise_block.span,
-                    );
-                }
-
-                ret_ty
-            }
+            } => self.typeck_expr_if(condition, block, else_ifs, otherwise),
 
             ExprKind::Call { function, args } => {
                 let callable = self.type_of(function);
@@ -454,92 +362,6 @@ impl<'ty> FunCx<'ty> {
                 self.s.nil()
             }
 
-            ExprKind::Field {
-                src,
-                field: field_name,
-            } => {
-                let src_ty = self.type_of(src);
-                let err = if let TyKind::Instance(def) = src_ty.0 {
-                    if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
-                        return self.s.def_type_of(found.def_id);
-                    }
-
-                    TypingError::NoField {
-                        on: self.s.stringify_ty(src_ty),
-                        field_name,
-                    }
-                } else {
-                    TypingError::NotInstance {
-                        got: self.s.stringify_ty(src_ty),
-                    }
-                };
-
-                self.s.diag().emit_err(err, src.span);
-                self.s.ty_err()
-            }
-
-            ExprKind::Loop { body, reason: _ } => {
-                self.typeck_block(body);
-                self.s.nil()
-            }
-
-            ExprKind::Block(block) => self.typeck_block(block),
-
-            ExprKind::Index {
-                index,
-                indexed_thing,
-            } => {
-                let src_ty = self.type_of(indexed_thing);
-
-                let TyKind::Array(inner_ty) = src_ty.0 else {
-                    self.s.diag().emit_err(
-                        TypingError::NoIndexOp {
-                            on: self.s.stringify_ty(src_ty),
-                        },
-                        expr.span,
-                    );
-
-                    return self.s.ty_err();
-                };
-
-                let index_ty = self.type_of(index);
-
-                if self.unify(self.s.u64(), index_ty).is_err() {
-                    self.type_mismatch_err(self.s.u64(), index_ty, expr.span);
-                }
-
-                *inner_ty
-            }
-
-            ExprKind::Path(path) => {
-                let res = path.res;
-
-                match res {
-                    Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
-
-                    Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
-                        self.s.intern_ty(TyKind::FnDef(ctor_def_id))
-                    }
-
-                    Resolved::Local(hir_id) => {
-                        let hir = self.s.hir_ref();
-
-                        match hir.get_node(hir_id) {
-                            Node::Local(local) => self.typeck_local(local),
-                            Node::FnParam(param) => self.s.lower_ty(param.ty),
-
-                            _ => todo!(),
-                        }
-                    }
-
-                    Resolved::Def(def_id, DefType::Const) => self.s.def_type_of(def_id),
-
-                    Resolved::Err => self.s.ty_err(),
-
-                    _ => unreachable!("what the fuck?"),
-                }
-            }
-
             ExprKind::CommaSep(exprs) => exprs
                 .iter()
                 .fold(None, |state, expr| {
@@ -551,82 +373,293 @@ impl<'ty> FunCx<'ty> {
                 })
                 .expect("cannot fail as comma'd exprs have >1 exprs!"),
 
-            ExprKind::Break => self.s.ty_diverge(),
-
             ExprKind::MethodCall {
                 receiver,
                 method,
                 args,
-            } => {
-                let recv_ty = self.type_of(receiver);
-                let mut ret_ty = self.s.ty_err();
-
-                self.s.binds_for_ty(recv_ty, |binds| {
-                    let Some((def_id, _, span)) = binds
-                        .iter()
-                        .flat_map(|x| x.items.iter())
-                        .filter_map(|item| {
-                            let BindItemKind::Fun { sig: _, name } = item.kind else {
-                                return None;
-                            };
-
-                            Some((item.def_id, name, item.span))
-                        })
-                        .find(|(_, name, _)| name == &method)
-                    else {
-                        self.s.diag().emit_err(
-                            TypingError::MethodNotFound {
-                                on_ty: self.s.stringify_ty(recv_ty),
-                                method_name: method.get_interned().to_string().into(),
-                            },
-                            receiver.span,
-                        );
-                        return;
-                    };
-
-                    self.resolved_method_calls.insert(expr.hir_id, def_id);
-
-                    ret_ty = self.verify_arguments_for_method_call(
-                        def_id,
-                        core::iter::once(receiver).chain(args.iter()),
-                        args.len() + 1,
-                        span,
-                    );
-                });
-
-                ret_ty
-            }
-
-            ExprKind::List(exprs) => {
-                if exprs.is_empty() {
-                    return self
-                        .s
-                        .intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular)));
-                }
-
-                exprs
-                    .iter()
-                    .fold(None, |state, expr| {
-                        let Some(ty) = state else {
-                            return Some(self.type_of(expr));
-                        };
-
-                        let expr_ty = self.type_of(expr);
-                        if self.unify(ty, expr_ty).is_err() {
-                            self.type_mismatch_err(ty, expr_ty, expr.span);
-                        }
-
-                        state
-                    })
-                    .map_or_else(
-                        || unreachable!(),
-                        |output| self.s.intern_ty(TyKind::Array(output)),
-                    )
-            }
+            } => self.typeck_expr_meth_call(receiver, method, args, expr.hir_id),
         };
 
         self.node_type.insert(expr.hir_id, ty);
         ty
+    }
+
+    fn typeck_expr_bin_op(&mut self, lhs: &Expr<'_>, rhs: &Expr<'_>, op: BinOp) -> Ty<'ty> {
+        let ty_lhs = self.type_of(lhs);
+        let ty_rhs = self.type_of(rhs);
+
+        if self.unify(ty_lhs, ty_rhs).is_err() {
+            self.s.diag().emit_err(
+                TypingError::NoBinaryOp {
+                    lhs: self.s.stringify_ty(ty_lhs),
+                    rhs: self.s.stringify_ty(ty_rhs),
+                },
+                Span::between(lhs.span, rhs.span),
+            );
+
+            return self.s.ty_err();
+        }
+
+        if let BinOp::LogicalOr | BinOp::LogicalAnd | BinOp::NotEquality | BinOp::Equality = op {
+            self.s.bool()
+        } else {
+            ty_lhs
+        }
+    }
+
+    fn typeck_expr_un_op(&mut self, target: &Expr<'_>, _op: UnaryOp) -> Ty<'ty> {
+        let ty = self.type_of(target);
+
+        if let TyKind::Bool = *ty {
+            return ty;
+        }
+
+        match ty.0 {
+            TyKind::Bool | TyKind::Int(..) => (),
+            TyKind::InferTy(inferty) if inferty.is_integer() => {
+                self.obligation_for(inferty.id(), Obligation::Neg);
+                return ty;
+            }
+            _ => return ty,
+        }
+
+        self.s.diag().emit_err(
+            TypingError::NoUnaryOp {
+                on: self.s.stringify_ty(ty),
+            },
+            target.span,
+        );
+
+        self.s.ty_err()
+    }
+
+    fn typeck_expr_index(
+        &mut self,
+        indexed_thing: &Expr<'_>,
+        index: &Expr<'_>,
+        expr_span: Span,
+    ) -> Ty<'ty> {
+        let src_ty = self.type_of(indexed_thing);
+
+        let TyKind::Array(inner_ty) = src_ty.0 else {
+            self.s.diag().emit_err(
+                TypingError::NoIndexOp {
+                    on: self.s.stringify_ty(src_ty),
+                },
+                expr_span,
+            );
+
+            return self.s.ty_err();
+        };
+
+        let index_ty = self.type_of(index);
+
+        if self.unify(self.s.u64(), index_ty).is_err() {
+            self.type_mismatch_err(self.s.u64(), index_ty, expr_span);
+        }
+
+        *inner_ty
+    }
+
+    fn typeck_expr_literal(&mut self, lit: HirLiteral) -> Ty<'ty> {
+        match lit {
+            HirLiteral::Bool(..) => self.s.bool(),
+            HirLiteral::Uint(..) | HirLiteral::Int(..) => {
+                let new = self.new_infer_var(InferKind::Integer);
+                log::trace!("new infer ty for integer: {new:?}");
+                new
+            }
+
+            HirLiteral::Str(_sym) => todo!("idk how to type strings yet"),
+
+            HirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
+        }
+    }
+
+    fn typeck_expr_if(
+        &mut self,
+        condition: &Expr<'_>,
+        block: &Block<'_>,
+        else_ifs: &[(Block<'_>, Expr<'_>)],
+        otherwise: Option<&Block<'_>>,
+    ) -> Ty<'ty> {
+        let cond_ty = self.type_of(condition);
+        if *cond_ty != TyKind::Bool {
+            self.type_mismatch_err(self.s.bool(), cond_ty, condition.span);
+        }
+
+        let ret_ty = self.typeck_block(block);
+
+        if otherwise.is_none() && self.unify(ret_ty, self.s.nil()).is_err() {
+            self.s.diag().emit_err(
+                TypingError::TypeMismatch(self.s.stringify_ty(ret_ty), "nil".into()),
+                block.span,
+            );
+        }
+
+        for (block, elsif) in else_ifs {
+            let block_ty = self.typeck_block(block);
+            if self.unify(block_ty, ret_ty).is_err() {
+                self.s.diag().emit_err(
+                    TypingError::TypeMismatch(
+                        self.s.stringify_ty(block_ty),
+                        self.s.stringify_ty(ret_ty),
+                    ),
+                    Span::between(block.span, elsif.span),
+                );
+            }
+
+            let elsif_ty = self.type_of(elsif);
+
+            if *elsif_ty != TyKind::Bool {
+                self.s.diag().emit_err(
+                    TypingError::TypeMismatch("bool".into(), self.s.stringify_ty(elsif_ty)),
+                    elsif.span,
+                );
+            }
+        }
+
+        let Some(otherwise_block) = otherwise else {
+            return self.s.nil();
+        };
+
+        let block_ty = self.typeck_block(otherwise_block);
+
+        if self.unify(ret_ty, block_ty).is_err() {
+            self.s.diag().emit_err(
+                TypingError::TypeMismatch(
+                    self.s.stringify_ty(block_ty),
+                    self.s.stringify_ty(ret_ty),
+                ),
+                otherwise_block.span,
+            );
+        }
+
+        ret_ty
+    }
+
+    fn typeck_expr_field(&mut self, src: &Expr<'_>, field_name: SymbolId) -> Ty<'ty> {
+        let src_ty = self.type_of(src);
+        let err = if let TyKind::Instance(def) = src_ty.0 {
+            if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
+                return self.s.def_type_of(found.def_id);
+            }
+
+            TypingError::NoField {
+                on: self.s.stringify_ty(src_ty),
+                field_name,
+            }
+        } else {
+            TypingError::NotInstance {
+                got: self.s.stringify_ty(src_ty),
+            }
+        };
+
+        self.s.diag().emit_err(err, src.span);
+        self.s.ty_err()
+    }
+
+    #[track_caller]
+    fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
+        let res = path.res;
+
+        match res {
+            Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
+
+            Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
+                self.s.intern_ty(TyKind::FnDef(ctor_def_id))
+            }
+
+            Resolved::Local(hir_id) => {
+                let hir = self.s.hir_ref();
+
+                match hir.get_node(hir_id) {
+                    Node::Local(local) => self.typeck_local(local),
+                    Node::FnParam(param) => self.s.lower_ty(param.ty),
+
+                    _ => todo!(),
+                }
+            }
+
+            Resolved::Def(def_id, DefType::Const) => self.s.def_type_of(def_id),
+
+            Resolved::Err => self.s.ty_err(),
+
+            _ => unreachable!("what the fuck?"),
+        }
+    }
+
+    fn typeck_expr_list(&mut self, exprs: &[Expr<'_>]) -> Ty<'ty> {
+        if exprs.is_empty() {
+            return self
+                .s
+                .intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular)));
+        }
+
+        exprs
+            .iter()
+            .fold(None, |state, expr| {
+                let Some(ty) = state else {
+                    return Some(self.type_of(expr));
+                };
+
+                let expr_ty = self.type_of(expr);
+                if self.unify(ty, expr_ty).is_err() {
+                    self.type_mismatch_err(ty, expr_ty, expr.span);
+                }
+
+                state
+            })
+            .map_or_else(
+                || unreachable!(),
+                |output| self.s.intern_ty(TyKind::Array(output)),
+            )
+    }
+
+    fn typeck_expr_meth_call(
+        &mut self,
+        receiver: &Expr<'_>,
+        method: SymbolId,
+        args: &[Expr<'_>],
+        expr_hir_id: HirId,
+    ) -> Ty<'ty> {
+        let recv_ty = self.type_of(receiver);
+        let mut ret_ty = self.s.ty_err();
+
+        self.s.binds_for_ty(recv_ty, |binds| {
+            let Some((def_id, _, span)) = binds
+                .iter()
+                .flat_map(|x| x.items.iter())
+                .filter_map(|item| {
+                    let BindItemKind::Fun { sig: _, name } = item.kind else {
+                        return None;
+                    };
+
+                    Some((item.def_id, name, item.span))
+                })
+                .find(|(_, name, _)| name == &method)
+            else {
+                self.s.diag().emit_err(
+                    TypingError::MethodNotFound {
+                        on_ty: self.s.stringify_ty(recv_ty),
+                        method_name: method.get_interned().to_string().into(),
+                    },
+                    receiver.span,
+                );
+                return;
+            };
+
+            self.resolved_method_calls.insert(expr_hir_id, def_id);
+
+            ret_ty = self.verify_arguments_for_method_call(
+                def_id,
+                core::iter::once(receiver).chain(args.iter()),
+                args.len() + 1,
+                span,
+            );
+        });
+
+        ret_ty
     }
 
     fn typeck_block(&mut self, block: &Block<'_>) -> Ty<'ty> {
@@ -761,6 +794,24 @@ impl<'ty> TypeTable<'ty> {
             .copied()
             .expect("expr given to `type_of` has no type assoc'd with it")
     }
+
+    #[track_caller]
+    #[inline]
+    pub fn local_var_ty(&self, id: HirId) -> Ty<'ty> {
+        self.local_variables
+            .get(&id)
+            .copied()
+            .expect("hir id given to `local_var_ty` has no type assoc'd with it")
+    }
+
+    #[track_caller]
+    #[inline]
+    pub fn resolve_method(&self, id: HirId) -> DefId {
+        self.resolved_method_calls
+            .get(&id)
+            .copied()
+            .expect("hir id given to `resolve_method` was invalid")
+    }
 }
 
 pub struct TyCollector<'ty> {
@@ -794,6 +845,32 @@ impl<'ty> TyCollector<'ty> {
 
 impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
     type Result = ();
+
+    fn visit_local(&mut self, local: &'vis Local<'vis>) -> Self::Result {
+        let val = self
+            .cx
+            .local_tys
+            .get(&local.hir_id)
+            .expect("Trying to get type of a local that isn't there?");
+        self.table.local_variables.insert(local.hir_id, *val);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'vis Stmt<'vis>) -> Self::Result {
+        if let StmtKind::Expr(expr) = stmt.kind {
+            self.visit_expr(expr);
+        }
+
+        match stmt.kind {
+            StmtKind::Expr(expr) => self.visit_expr(expr),
+            StmtKind::Local(loc) => {
+                if let Some(expr) = loc.init {
+                    self.visit_expr(expr);
+                }
+            }
+
+            StmtKind::Thing(..) => (),
+        }
+    }
 
     fn visit_expr(&mut self, expr: &'vis Expr<'vis>) -> Self::Result {
         let ty = self.cx.type_of(expr);
@@ -855,7 +932,7 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
 
             ExprKind::Block(block) => {
                 crate::visit_iter!(v: self, m: visit_stmt, block.stmts);
-                // log::debug!("block stmts: {:#?}", block.stmts);
+                log::debug!("block stmts: {:#?}", block.stmts);
                 crate::maybe_visit!(v: self, m: visit_expr, block.expr);
             }
 

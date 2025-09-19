@@ -82,6 +82,24 @@ pub enum AssignOp {
     And,
 }
 
+impl From<AssignOp> for BinOp {
+    fn from(value: AssignOp) -> Self {
+        match value {
+            AssignOp::Add => BinOp::Add,
+            AssignOp::Sub => BinOp::Sub,
+            AssignOp::Div => BinOp::Div,
+            AssignOp::Mul => BinOp::Mul,
+            AssignOp::Mod => BinOp::Mod,
+            AssignOp::ShiftLeft => BinOp::Shl,
+            AssignOp::ShiftRight => BinOp::Shr,
+
+            AssignOp::Xor => BinOp::BitXor,
+            AssignOp::And => BinOp::BitAnd,
+            AssignOp::Or => BinOp::BitOr,
+        }
+    }
+}
+
 impl AssignOp {
     pub fn lower_assign_mode(mode: AssignMode) -> Self {
         match mode {
@@ -122,10 +140,6 @@ pub enum ExprKind<'h> {
         op: UnaryOp,
     },
 
-    Paren {
-        inner: &'h Expr<'h>,
-    },
-
     Assign {
         variable: &'h Expr<'h>,
         value: &'h Expr<'h>,
@@ -153,8 +167,7 @@ pub enum ExprKind<'h> {
     If {
         condition: &'h Expr<'h>,
         block: &'h Block<'h>,
-        else_ifs: &'h [(Block<'h>, Expr<'h>)],
-        otherwise: Option<&'h Block<'h>>,
+        else_: Option<&'h Expr<'h>>,
     },
 
     Return {

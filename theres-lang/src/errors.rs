@@ -3,6 +3,7 @@ use std::{
     cell::RefCell,
     cmp,
     io::{self, BufWriter, Stderr, Write},
+    panic::Location,
 };
 
 use crate::{
@@ -83,7 +84,10 @@ impl Message {
     where
         O: io::Write,
     {
-        let msg_indent = self.attached_to.end() - self.attached_to.start();
+        let msg_indent = self
+            .attached_to
+            .end()
+            .saturating_sub(self.attached_to.start());
         writeln!(writer, "{:<indent$}| ", " ")?;
         write!(writer, "{:<indent$}| ", " ")?;
         writeln!(writer, "{msg:>msg_indent$}", msg = self.msg)?;
@@ -137,7 +141,9 @@ impl<'a> DiagEmitter<'a> {
         }
     }
 
+    #[track_caller]
     pub fn emit_err(&self, err: impl TheresError, span: Span) {
+        log::trace!("`emit_err` triggered at loc: {}", Location::caller());
         self.inner
             .borrow_mut()
             .emit_err(err, span)
@@ -167,8 +173,9 @@ impl<'a> DiagEmitterInner<'a> {
     }
 
     #[allow(clippy::needless_pass_by_value)]
+    #[track_caller]
     fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
-        dbg!(&span);
+        dbg!(&span, std::panic::Location::caller());
 
         let origin = span.line as usize;
         let line_nr_offset = origin.saturating_sub(EXTRA_LINES);

@@ -1,6 +1,8 @@
 use crate::lexer::Span;
 pub use crate::parser::AstId;
 use crate::session::SymbolId;
+
+use core::fmt::{Display, Formatter, Result};
 use core::ops::ControlFlow;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -28,10 +30,48 @@ pub enum BinOp {
     Greater,
 }
 
+impl Display for BinOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let write = match self {
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Mul => "mul",
+            Self::Div => "div",
+            Self::Shl => "shl",
+            Self::Shr => "shr",
+            Self::Mod => "mod",
+            Self::BitOr => "bitor",
+            Self::BitXor => "bitxor",
+            Self::BitAnd => "bitand",
+            Self::LogicalOr => "or",
+            Self::LogicalAnd => "and",
+            Self::Equality => "eq",
+            Self::NotEquality => "ne",
+            Self::GreaterOrEq => "gteq",
+            Self::LesserOrEq => "lteq",
+            Self::Lesser => "lt",
+            Self::Greater => "gt",
+        };
+
+        write!(f, "{write}")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnaryOp {
     Negation,
     Not,
+}
+
+impl Display for UnaryOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let write = match self {
+            UnaryOp::Negation => "neg",
+            UnaryOp::Not => "not",
+        };
+
+        write!(f, "{write}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -178,11 +218,6 @@ pub enum ExprType {
 
     Return {
         ret: Option<Box<Expr>>,
-    },
-
-    Make {
-        created: Ty,
-        ctor_args: Vec<Expr>,
     },
 
     Index {
@@ -454,62 +489,6 @@ impl Instance {
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct AnonConst {
-    expr: Expr,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct AssocConst {
-    value: AnonConst,
-    span: Span,
-    ty: Ty,
-    name: Name,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct Interface {
-    span: Span,
-    name: Name,
-    entries: Vec<InterfaceEntry>,
-}
-
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub enum InterfaceEntry {
-    ProvidedFn(FnDecl),
-    TemplateFn(FnSig),
-    Const(VariableStmt),
-}
-
-impl Interface {
-    pub fn new(span: Span, name: Name, entries: Vec<InterfaceEntry>) -> Self {
-        Self {
-            span,
-            name,
-            entries,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub struct Apply {
-    interface: Name,
-    receiver: Ty,
-    span: Span,
-    items: Vec<InterfaceEntry>,
-}
-
-impl Apply {
-    pub fn new(interface: Name, receiver: Ty, span: Span, items: Vec<InterfaceEntry>) -> Self {
-        Self {
-            interface,
-            receiver,
-            span,
-            items,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Thing {
     pub id: AstId,
     pub kind: ThingKind,
@@ -527,7 +506,6 @@ pub enum ThingKind {
     Global(GlobalDecl),
     Instance(Instance),
     Realm(Realm),
-    Interface(Interface),
     Bind(Bind),
 }
 
@@ -556,16 +534,11 @@ impl ThingKind {
         Self::Instance(Instance::new(name, span, fields, id, ctor_id))
     }
 
-    pub fn interface(name: Name, span: Span, entries: Vec<InterfaceEntry>) -> Self {
-        Self::Interface(Interface::new(span, name, entries))
-    }
-
     pub fn span(&self) -> Span {
         match self {
             Self::Function(f) => f.span,
             Self::Global(g) => g.name.span,
             Self::Instance(i) => i.span,
-            Self::Interface(it) => it.span,
             Self::Bind(a) => a.span,
             Self::Realm(r) => r.span,
         }
@@ -743,7 +716,6 @@ pub trait Visitor<'a> {
             ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
-            ThingKind::Interface(ia) => self.visit_interface(ia),
         }
     }
 
@@ -775,25 +747,6 @@ pub trait Visitor<'a> {
         try_visit!(self.visit_ty(ty));
 
         self.visit_name(name)
-    }
-
-    fn visit_interface(&mut self, val: &'a Interface) -> Self::Result {
-        let Interface {
-            span: _,
-            name,
-            entries,
-        } = val;
-
-        visit_iter!(v: self, m: visit_interface_entry, entries);
-        self.visit_name(name)
-    }
-
-    fn visit_interface_entry(&mut self, val: &'a InterfaceEntry) -> Self::Result {
-        match val {
-            InterfaceEntry::ProvidedFn(f) => self.visit_fn_decl(f),
-            InterfaceEntry::TemplateFn(s) => self.visit_fn_sig(s),
-            InterfaceEntry::Const(c) => self.visit_var_stmt(c),
-        }
     }
 
     fn visit_var_stmt(&mut self, val: &'a VariableStmt) -> Self::Result {
@@ -830,28 +783,6 @@ pub trait Visitor<'a> {
 
             TyKind::MethodSelf | TyKind::Err => Self::Result::normal(),
         }
-    }
-
-    fn visit_assoc_const(&mut self, val: &'a AssocConst) -> Self::Result {
-        let AssocConst {
-            value,
-            span: _,
-            ty,
-            name,
-        } = val;
-
-        try_visit!(
-            self.visit_anon_const(value),
-            self.visit_ty(ty),
-            self.visit_name(name)
-        );
-
-        Self::Result::normal()
-    }
-
-    fn visit_anon_const(&mut self, val: &'a AnonConst) -> Self::Result {
-        let AnonConst { expr } = val;
-        self.visit_expr(expr)
     }
 
     fn visit_bind(&mut self, val: &'a Bind) -> Self::Result {
@@ -986,11 +917,6 @@ pub trait Visitor<'a> {
             }
 
             ExprType::Return { ret } => maybe_visit!(v: self, m: visit_expr, ret),
-
-            ExprType::Make { created, ctor_args } => {
-                try_visit!(self.visit_ty(created));
-                visit_iter!(v: self, m: visit_expr, ctor_args)
-            }
 
             ExprType::Block(b) => self.visit_block(b),
         }

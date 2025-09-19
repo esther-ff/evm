@@ -25,6 +25,7 @@ pub struct Mappings {
     instance_to_bind: DefMap<Vec<AstId>>,
     binds_to_resolved_ty_id: AstIdMap<AstId>,
     binds_to_items: AstIdMap<Vec<AstId>>,
+    entry_point: Option<DefId>,
 
     self_ty_ast_id_to_ty: AstIdMap<Ty>,
 }
@@ -32,6 +33,7 @@ pub struct Mappings {
 impl Mappings {
     pub fn new(ast_id_to_def_id: AstIdMap<DefId>, def_id_to_ast_id: DefMap<AstId>) -> Self {
         Self {
+            entry_point: None,
             instance_to_field_list: HashMap::new(),
             field_id_to_instance: HashMap::new(),
             resolution_map: HashMap::new(),
@@ -42,6 +44,14 @@ impl Mappings {
             binds_to_items: HashMap::new(),
             self_ty_ast_id_to_ty: HashMap::new(),
         }
+    }
+
+    pub fn set_entry_point(&mut self, entry: DefId) {
+        self.entry_point.replace(entry);
+    }
+
+    pub fn entry_point(&self) -> Option<DefId> {
+        self.entry_point
     }
 
     pub fn debug_resolutions(&self) -> impl IntoIterator<Item = (&AstId, &Resolved<AstId>)> {
@@ -237,7 +247,9 @@ impl<'hir> HirMap<'hir> {
         match self.get_def(def_id) {
             Node::Thing(thing) => {
                 let node::ThingKind::Fn { sig, name } = thing.kind else {
-                    panic!("`DefId` given to `expect_fn` did not point to any function")
+                    panic!(
+                        "`DefId` given to `expect_fn` did not point to any function, but: {thing:#?}"
+                    )
                 };
 
                 (sig, name.interned)
@@ -245,13 +257,17 @@ impl<'hir> HirMap<'hir> {
 
             Node::BindItem(bind_item) => {
                 let node::BindItemKind::Fun { sig, name } = bind_item.kind else {
-                    panic!("`DefId` given to `expect_fn` did not point to any function")
+                    panic!(
+                        "`DefId` given to `expect_fn` did not point to any function (checked bind item)"
+                    )
                 };
 
                 (sig, name)
             }
 
-            _ => panic!("`DefId` given to `expect_fn` did not point to any function"),
+            any => {
+                panic!("`DefId` given to `expect_fn` did not point to any function, but: {any:#?}")
+            }
         }
     }
 
@@ -480,11 +496,6 @@ impl<'hir> AstLowerer<'hir> {
                 expr: ret.as_ref().map(|expr| self.lower_expr(expr)),
             },
 
-            ExprType::Make {
-                created: _,
-                ctor_args: _,
-            } => todo!("Make in HIR!"),
-
             ExprType::Lambda { args: _, body: _ } => todo!("Lambdas in HIR!"),
 
             ExprType::FieldAccess { source, field } => node::ExprKind::Field {
@@ -540,8 +551,7 @@ impl<'hir> AstLowerer<'hir> {
                     DesugarLoop::Until => self.lower_expr(cond),
                 },
                 block: self.session.arena().alloc(cond_block),
-                else_ifs: &[],
-                otherwise: None,
+                else_: None,
             },
             cond.span,
             self.new_hir_id(),
@@ -580,6 +590,7 @@ impl<'hir> AstLowerer<'hir> {
         self.session.arena().alloc(loop_body)
     }
 
+    // might be broken!
     pub fn lower_expr_if(
         &mut self,
         cond: &Expr,
@@ -587,19 +598,35 @@ impl<'hir> AstLowerer<'hir> {
         else_ifs: &[ElseIf],
         otherwise: Option<&Block>,
     ) -> hir::node::ExprKind<'hir> {
+        let first = else_ifs.first();
+        let rest = else_ifs.get(1..).unwrap_or(&[]);
+
         node::ExprKind::If {
             condition: self.lower_expr(cond),
             block: self.lower_block(if_block),
-            else_ifs: self
-                .session
-                .arena()
-                .alloc_from_iter(else_ifs.iter().map(|els| {
-                    (
-                        self.lower_block_noalloc(&els.body),
-                        self.lower_expr_noalloc(&els.cond),
-                    )
-                })),
-            otherwise: otherwise.as_ref().map(|target| self.lower_block(target)),
+            else_: first
+                .map(|first| {
+                    let expr_kind = self.lower_expr_if(&first.cond, &first.body, rest, otherwise);
+                    let expr = node::Expr::new(
+                        expr_kind,
+                        Span::between(first.cond.span, first.body.span),
+                        self.new_hir_id(),
+                    );
+
+                    self.session.arena().alloc(expr)
+                })
+                .or_else(|| {
+                    if let Some(expr) = otherwise {
+                        let expr = node::Expr::new(
+                            node::ExprKind::Block(self.lower_block(expr)),
+                            expr.span,
+                            self.next_hir_id(expr.id),
+                        );
+                        return Some(self.session.arena().alloc(expr));
+                    }
+
+                    None
+                }),
         }
     }
 

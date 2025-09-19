@@ -1,8 +1,9 @@
+use std::ops::{Index, IndexMut};
+
 pub trait IndexId: Copy + Clone {
     fn new(n: usize) -> Self;
     fn idx(&self) -> usize;
     fn own_name() -> &'static str;
-    fn is_dummy(&self) -> bool;
 }
 
 #[repr(transparent)]
@@ -135,6 +136,19 @@ impl<I, T> core::ops::Deref for IdxVec<I, T> {
     }
 }
 
+impl<I: IndexId, T> Index<I> for IdxVec<I, T> {
+    type Output = T;
+
+    fn index(&self, index: I) -> &Self::Output {
+        &self.inner[index.idx()]
+    }
+}
+impl<I: IndexId, T> IndexMut<I> for IdxVec<I, T> {
+    fn index_mut(&mut self, index: I) -> &mut T {
+        &mut self.inner[index.idx()]
+    }
+}
+
 impl<I, T> IntoIterator for IdxVec<I, T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -176,18 +190,22 @@ macro_rules! newtyped_index {
             // }
 
             #[allow(dead_code)]
-            fn new(private: u32) -> Self {
+            pub const fn new(private: u32) -> Self {
                 Self { private }
             }
 
             #[allow(dead_code)]
-            fn new_usize(i: usize) -> Self {
+            pub fn new_usize(i: usize) -> Self {
                 Self::new(i.try_into().expect("id overflow"))
             }
 
             #[allow(dead_code)]
-            pub fn to_usize(self) -> usize {
+            pub const fn to_usize(self) -> usize {
                 self.private as usize
+            }
+
+            pub fn is_dummy(self) -> bool {
+                self == Self::DUMMY
             }
         }
 
@@ -202,10 +220,6 @@ macro_rules! newtyped_index {
 
             fn own_name() -> &'static str {
                 stringify!($name)
-            }
-
-            fn is_dummy(&self) -> bool {
-                self == &Self::DUMMY
             }
         }
 

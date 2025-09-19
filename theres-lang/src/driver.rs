@@ -6,12 +6,12 @@ use std::sync::{Mutex, RwLock};
 use crate::ast::Universe;
 use crate::ast_pretty_printer::PrettyPrinter;
 use crate::errors::DiagEmitter;
-use crate::hir;
 use crate::lexer::{Lexemes, Lexer};
 use crate::parser::Parser;
 use crate::session::Session;
 use crate::sources::{FileManager, SourceId, Sources};
 use crate::types::fun_cx::typeck_universe;
+use crate::{hir, pill};
 
 use log::{Level, Log};
 
@@ -204,8 +204,14 @@ impl Compiler {
         let ast = self.parse_to_ast(lexemes, &diags);
 
         session.enter(|session| {
-            let uni = hir::lower_universe(session, &ast);
+            let (uni, entry) = hir::lower_universe(session, &ast);
             typeck_universe(session, uni);
+
+            if let Some(..) = entry {
+                todo!("check main fn")
+            };
+
+            pill::lowering::lower_universe(session, uni);
         });
     }
 

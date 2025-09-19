@@ -76,8 +76,9 @@ macro_rules! interned_consts {
 }
 
 impl SymbolId {
-    const BASE_SYMBOLS: [&str; 13] = [
+    const BASE_SYMBOLS: [&str; 14] = [
         "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "nil", "bool", "self",
+        "main",
     ];
 
     // keep in touch with `BASE_SYMBOLS`
@@ -94,7 +95,8 @@ impl SymbolId {
         f64 -> 9,
         nil -> 10,
         bool -> 11,
-        self_ -> 12
+        self_ -> 12,
+        main -> 13
     );
 
     #[track_caller]
@@ -106,7 +108,7 @@ impl SymbolId {
             "tried to get the interned value of a dummy `SymbolId`"
         );
 
-        interner.storage[self.private as usize]
+        interner.storage[*self]
     }
 
     pub fn intern(sym: &str) -> Self {
@@ -207,6 +209,7 @@ impl<'sess> Session<'sess> {
         f(&mut self.hir_map.borrow_mut())
     }
 
+    #[track_caller]
     pub fn hir<F, R>(&'sess self, f: F) -> R
     where
         F: FnOnce(&HirMap<'sess>) -> R,
@@ -410,32 +413,12 @@ impl<'sess> Session<'sess> {
 
         let mut fun_cx = FunCx::new(self);
         let hir = self.hir_ref();
-        let def = hir.get_def(def_id);
-        let (body_id, sym) = match def {
-            Node::BindItem(binditem) => {
-                if let BindItemKind::Fun { name, sig } = binditem.kind {
-                    (sig.body, name)
-                } else {
-                    panic!("called `typeck` not on a function")
-                }
-            }
+        let (sig, sym) = hir.expect_fn(def_id);
 
-            Node::Thing(thing) => {
-                if let ThingKind::Fn { name, sig } = thing.kind {
-                    (sig.body, name.interned)
-                } else {
-                    panic!("called `typeck` not on a function")
-                }
-            }
-
-            _ => panic!("called `typeck` not on a function"),
-        };
-
-        let body = hir.get_body(body_id);
+        let body = hir.get_body(sig.body);
 
         log::trace!("typeck'ing function: {}", sym.get_interned());
-        fun_cx.start(def_id, body_id);
-
+        fun_cx.start(def_id, sig.body);
         let table = TyCollector::new(fun_cx, self).visit(body);
 
         log::trace!(

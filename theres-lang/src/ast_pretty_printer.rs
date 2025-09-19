@@ -167,7 +167,6 @@ where
             ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
-            ThingKind::Interface(itr) => self.visit_interface(itr),
             ThingKind::Realm(r) => self.visit_realm(r),
         }
     }
