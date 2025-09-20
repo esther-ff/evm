@@ -13,7 +13,7 @@ use crate::driver::HirDump;
 use crate::hir::node::Universe as HirUniverse;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
-pub use lowering_ast::{HirId, HirMap, Mappings};
+pub use lowering_ast::{HirId, HirIdMap, HirMap, Mappings};
 
 pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &Universe) -> &'hir HirUniverse<'hir> {
     let mappings = name_res::resolve(sess, ast);

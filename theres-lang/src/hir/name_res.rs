@@ -750,10 +750,6 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                 rvalue,
                 mode: _,
             } => {
-                let (ExprType::Path(..) | ExprType::FieldAccess { .. }) = lvalue.ty else {
-                    todo!("error, can't assign to anything other than a variable or field access")
-                };
-
                 self.visit_expr(lvalue);
                 self.visit_expr(rvalue);
             }
