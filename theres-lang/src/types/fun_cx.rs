@@ -276,7 +276,6 @@ impl<'ty> FunCx<'ty> {
             ExprKind::Literal(lit) => self.typeck_expr_literal(lit),
             ExprKind::Binary { lhs, rhs, op } => self.typeck_expr_bin_op(lhs, rhs, op),
             ExprKind::Unary { target, op } => self.typeck_expr_un_op(target, op),
-            ExprKind::Paren { inner } => self.type_of(inner),
             ExprKind::Path(path) => self.typeck_expr_path(path),
             ExprKind::Block(block) => self.typeck_block(block),
             ExprKind::Field { src, field } => self.typeck_expr_field(src, field),
@@ -312,9 +311,8 @@ impl<'ty> FunCx<'ty> {
             ExprKind::If {
                 condition,
                 block,
-                else_ifs,
-                otherwise,
-            } => self.typeck_expr_if(condition, block, else_ifs, otherwise),
+                else_,
+            } => self.typeck_expr_if(condition, block, else_),
 
             ExprKind::Call { function, args } => {
                 let callable = self.type_of(function);
@@ -480,62 +478,23 @@ impl<'ty> FunCx<'ty> {
         &mut self,
         condition: &Expr<'_>,
         block: &Block<'_>,
-        else_ifs: &[(Block<'_>, Expr<'_>)],
-        otherwise: Option<&Block<'_>>,
+        else_: Option<&Expr<'_>>,
     ) -> Ty<'ty> {
-        let cond_ty = self.type_of(condition);
-        if *cond_ty != TyKind::Bool {
-            self.type_mismatch_err(self.s.bool(), cond_ty, condition.span);
+        let cond = self.type_of(condition);
+        if *cond != TyKind::Bool {
+            self.type_mismatch_err(self.s.bool(), cond, condition.span);
         }
 
-        let ret_ty = self.typeck_block(block);
+        let block_ty = self.typeck_block(block);
 
-        if otherwise.is_none() && self.unify(ret_ty, self.s.nil()).is_err() {
-            self.s.diag().emit_err(
-                TypingError::TypeMismatch(self.s.stringify_ty(ret_ty), "nil".into()),
-                block.span,
-            );
+        if let Some(else_block) = else_ {
+            let ty = self.type_of(else_block);
+
+            self.type_mismatch_err(block_ty, ty, else_block.span);
+            block_ty
+        } else {
+            self.s.nil()
         }
-
-        for (block, elsif) in else_ifs {
-            let block_ty = self.typeck_block(block);
-            if self.unify(block_ty, ret_ty).is_err() {
-                self.s.diag().emit_err(
-                    TypingError::TypeMismatch(
-                        self.s.stringify_ty(block_ty),
-                        self.s.stringify_ty(ret_ty),
-                    ),
-                    Span::between(block.span, elsif.span),
-                );
-            }
-
-            let elsif_ty = self.type_of(elsif);
-
-            if *elsif_ty != TyKind::Bool {
-                self.s.diag().emit_err(
-                    TypingError::TypeMismatch("bool".into(), self.s.stringify_ty(elsif_ty)),
-                    elsif.span,
-                );
-            }
-        }
-
-        let Some(otherwise_block) = otherwise else {
-            return self.s.nil();
-        };
-
-        let block_ty = self.typeck_block(otherwise_block);
-
-        if self.unify(ret_ty, block_ty).is_err() {
-            self.s.diag().emit_err(
-                TypingError::TypeMismatch(
-                    self.s.stringify_ty(block_ty),
-                    self.s.stringify_ty(ret_ty),
-                ),
-                otherwise_block.span,
-            );
-        }
-
-        ret_ty
     }
 
     fn typeck_expr_field(&mut self, src: &Expr<'_>, field_name: SymbolId) -> Ty<'ty> {
@@ -904,8 +863,6 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
 
             ExprKind::Unary { target, op: _ } => self.visit_expr(target),
 
-            ExprKind::Paren { inner } => self.visit_expr(inner),
-
             ExprKind::Assign { variable, value }
             | ExprKind::AssignWithOp {
                 variable,
@@ -939,18 +896,12 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
             ExprKind::If {
                 condition,
                 block,
-                else_ifs,
-                otherwise,
+                else_,
             } => {
                 self.visit_expr(condition);
                 self.visit_block(block);
 
-                for (block, expr) in *else_ifs {
-                    self.visit_block(block);
-                    self.visit_expr(expr);
-                }
-
-                crate::maybe_visit!(v: self, m: visit_block, otherwise);
+                crate::maybe_visit!(v: self, m: visit_expr, else_);
             }
 
             ExprKind::Return { expr } => crate::maybe_visit!(v: self, m: visit_expr, expr),

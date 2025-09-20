@@ -90,6 +90,6 @@ impl<'il> Cfg<'il> {
     pub fn cur(&self) -> BasicBlock {
         let len = self.bbs.len();
         assert!(len != 0);
-        BasicBlock::new_usize(len.checked_sub(1).unwrap_or(0))
+        BasicBlock::new_usize(len.saturating_sub(1))
     }
 }

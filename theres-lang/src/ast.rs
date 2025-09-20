@@ -503,7 +503,6 @@ impl Thing {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum ThingKind {
     Function(FnDecl),
-    Global(GlobalDecl),
     Instance(Instance),
     Realm(Realm),
     Bind(Bind),
@@ -520,16 +519,6 @@ impl ThingKind {
         })
     }
 
-    pub fn global(name: Name, initializer: Expr, ty: Ty, constant: bool, id: AstId) -> Self {
-        Self::Global(GlobalDecl {
-            name,
-            initializer,
-            ty,
-            constant,
-            id,
-        })
-    }
-
     pub fn instance(name: Name, span: Span, fields: Vec<Field>, id: AstId, ctor_id: AstId) -> Self {
         Self::Instance(Instance::new(name, span, fields, id, ctor_id))
     }
@@ -537,7 +526,6 @@ impl ThingKind {
     pub fn span(&self) -> Span {
         match self {
             Self::Function(f) => f.span,
-            Self::Global(g) => g.name.span,
             Self::Instance(i) => i.span,
             Self::Bind(a) => a.span,
             Self::Realm(r) => r.span,
@@ -713,7 +701,6 @@ pub trait Visitor<'a> {
         match val {
             ThingKind::Function(f) => self.visit_fn_decl(f),
             ThingKind::Realm(r) => self.visit_realm(r),
-            ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
         }

@@ -134,7 +134,6 @@ where
             ThingKind::Function(fndecl) => {
                 self.visit_fn_decl(fndecl);
             }
-            ThingKind::Global(global) => self.visit_global(global),
             ThingKind::Realm(realm) => self.visit_realm(realm),
             ThingKind::Instance(instance) => self.visit_instance(instance),
 
@@ -506,7 +505,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
         match &val.kind {
             ThingKind::Function(f) => self.visit_fn_decl(f),
             ThingKind::Realm(r) => self.visit_realm(r),
-            ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
         }

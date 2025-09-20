@@ -328,14 +328,13 @@ where
             ExprKind::If {
                 condition,
                 block,
-                else_ifs,
-                otherwise,
+                else_,
             } => {
                 let result_temp = result.unwrap_or_else(|| {
                     let ty = self.l.ty_table().type_of(*expr);
                     self.l.new_temporary(ty)
                 });
-                self.handle_if_expr(condition, block, else_ifs, otherwise, result_temp);
+                self.handle_if_expr(condition, block, else_, result_temp);
 
                 Operand::Variable(result_temp)
             }
@@ -361,8 +360,6 @@ where
 
                 Operand::Variable(self.l.altar_for_hir_var(hir_id))
             }
-
-            ExprKind::Paren { inner } => self.handle_expr(inner, result),
 
             ExprKind::Assign { variable, value } => {
                 let altar = self.get_altar_from_variable_expr(variable);
@@ -469,8 +466,7 @@ where
         &mut self,
         cond: &Expr<'_>,
         block: &Block<'_>,
-        elsifs: &[(Block<'_>, Expr<'_>)],
-        other: Option<&Block<'_>>,
+        else_: Option<&Expr<'_>>,
         result_temp: AltarId,
     ) {
         let cond_op = self.handle_expr(cond, None);
@@ -486,34 +482,30 @@ where
         self.ops.emit_goto(end_label);
         self.labels[false_label] = self.ops.tac().len();
 
-        for (block, expr) in elsifs {
-            self.handle_if_expr_inner(expr, block, result_temp, end_label);
-        }
-
-        if let Some(otherwise) = other {
-            self.handle_block(otherwise, Some(result_temp));
+        if let Some(otherwise) = else_ {
+            self.handle_expr(otherwise, Some(result_temp));
         }
 
         self.labels[end_label] = self.ops.tac().len();
     }
 
-    pub fn handle_if_expr_inner(
-        &mut self,
-        cond: &Expr<'_>,
-        block: &Block<'_>,
-        result_temp: AltarId,
-        end_label: LabelId,
-    ) {
-        let cond_op = self.handle_expr(cond, None);
-        let true_label = self.new_label();
-        let false_label = self.new_label();
+    // pub fn handle_if_expr_inner(
+    //     &mut self,
+    //     cond: &Expr<'_>,
+    //     block: &Block<'_>,
+    //     result_temp: AltarId,
+    //     end_label: LabelId,
+    // ) {
+    //     let cond_op = self.handle_expr(cond, None);
+    //     let true_label = self.new_label();
+    //     let false_label = self.new_label();
 
-        self.ops.emit_branch(cond_op, true_label, false_label);
-        self.labels[true_label] = self.ops.tac().len();
-        self.handle_block(block, Some(result_temp));
-        self.ops.emit_goto(end_label);
-        self.labels[false_label] = self.ops.tac().len();
-    }
+    //     self.ops.emit_branch(cond_op, true_label, false_label);
+    //     self.labels[true_label] = self.ops.tac().len();
+    //     self.handle_block(block, Some(result_temp));
+    //     self.ops.emit_goto(end_label);
+    //     self.labels[false_label] = self.ops.tac().len();
+    // }
 
     pub fn handle_block(&mut self, block: &Block<'_>, result: Option<AltarId>) {
         for stmt in block.stmts {

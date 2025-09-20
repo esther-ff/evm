@@ -203,8 +203,6 @@ pub trait HirVisitor<'hir> {
 
             ExprKind::Unary { target, op: _ } => self.visit_expr(target),
 
-            ExprKind::Paren { inner } => self.visit_expr(inner),
-
             ExprKind::Assign { variable, value }
             | ExprKind::AssignWithOp {
                 variable,
@@ -235,17 +233,11 @@ pub trait HirVisitor<'hir> {
             ExprKind::If {
                 condition,
                 block,
-                else_ifs,
-                otherwise,
+                else_,
             } => {
                 try_visit!(self.visit_expr(condition), self.visit_block(block));
 
-                for (block, expr) in *else_ifs {
-                    self.visit_block(block);
-                    self.visit_expr(expr);
-                }
-
-                maybe_visit!(v: self, m: visit_block, otherwise)
+                maybe_visit!(v: self, m: visit_expr, else_)
             }
 
             ExprKind::Return { expr } => maybe_visit!(v: self, m: visit_expr, expr),
@@ -254,14 +246,14 @@ pub trait HirVisitor<'hir> {
 
             ExprKind::Loop { body, reason: _ } => self.visit_block(body),
 
-            ExprKind::List(exprs) => visit_iter!(v: self, m: visit_expr, *exprs),
-
             ExprKind::Index {
                 index,
                 indexed_thing,
             } => try_visit!(self.visit_expr(index), self.visit_expr(indexed_thing)),
 
-            ExprKind::CommaSep(exprs) => visit_iter!(v: self, m: visit_expr, *exprs),
+            ExprKind::CommaSep(exprs) | ExprKind::List(exprs) => {
+                visit_iter!(v: self, m: visit_expr, *exprs)
+            }
 
             ExprKind::Path(path) => self.visit_path(path),
 

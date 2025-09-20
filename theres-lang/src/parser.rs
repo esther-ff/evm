@@ -101,7 +101,6 @@ impl<'a> Parser<'a> {
         log::trace!("declaration tok={tok:#?}");
         let decl = match tok.kind {
             TokenKind::Function => ThingKind::Function(self.function_declaration()?),
-            TokenKind::Global => self.global_variable_decl()?,
             TokenKind::Instance => self.instance_decl()?,
             TokenKind::Interface => unimplemented!(),
             TokenKind::Bind => ThingKind::Bind(self.bind_decl()?),
@@ -520,23 +519,6 @@ impl<'a> Parser<'a> {
             ty,
             self.new_id(),
         ))
-    }
-
-    fn global_variable_decl(&mut self) -> Result<ThingKind> {
-        self.expect_token(TokenKind::Global)?;
-
-        let constant = self.lexemes.peek_token().to_err_if_eof()?.kind == TokenKind::Const;
-        let name = self.expect_ident_as_name()?;
-
-        self.expect_token(TokenKind::Colon)?;
-
-        let ty = self.ty()?;
-        self.expect_token(TokenKind::Assign)?;
-
-        let init = self.expression()?;
-        self.expect_token(TokenKind::Semicolon)?;
-
-        Ok(ThingKind::global(name, init, ty, constant, self.new_id()))
     }
 
     fn statement(&mut self) -> Result<ExprOrStmt> {

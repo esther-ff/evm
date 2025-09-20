@@ -739,8 +739,6 @@ impl<'hir> AstLowerer<'hir> {
             ThingKind::Instance(inst) => self.lower_instance(inst, def_id),
             ThingKind::Bind(bind) => self.lower_bind(bind),
             ThingKind::Realm(realm) => self.lower_realm(realm),
-
-            _ => todo!("other parts "),
         };
 
         node::Thing::new(kind, thing.kind.span(), hir_id, def_id)

@@ -164,7 +164,6 @@ where
     fn visit_thing(&mut self, val: &'v Thing) -> Self::Result {
         match &val.kind {
             ThingKind::Function(f) => self.visit_fn_decl(f),
-            ThingKind::Global(g) => self.visit_global(g),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
             ThingKind::Realm(r) => self.visit_realm(r),
