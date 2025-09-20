@@ -152,7 +152,7 @@ where
     type Result = ();
 
     fn visit_realm(&mut self, val: &'v Realm) -> Self::Result {
-        self.write("Realm", val.span, val.id, Some(val.name), None);
+        self.write("Realm", val.span, AstId::DUMMY, Some(val.name), None);
 
         self.increase_indent(|this| {
             for t in &val.items {

@@ -134,7 +134,6 @@ impl<'a> Parser<'a> {
         let rcurly = self.expect(t!(RightCurlyBracket));
 
         let realm = Realm {
-            id: self.new_id(),
             items,
             name,
             span: Span::between(kw.span, rcurly.span),

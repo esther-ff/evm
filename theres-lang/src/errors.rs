@@ -175,7 +175,7 @@ impl<'a> DiagEmitterInner<'a> {
     #[allow(clippy::needless_pass_by_value)]
     #[track_caller]
     fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
-        dbg!(&span, std::panic::Location::caller());
+        // dbg!(&span, std::panic::Location::caller());
 
         let origin = span.line as usize;
         let line_nr_offset = origin.saturating_sub(EXTRA_LINES);
@@ -209,6 +209,9 @@ impl<'a> DiagEmitterInner<'a> {
         self.err_amount += 1;
 
         writeln!(self.stderr).unwrap();
+
+        // later remove
+        self.stderr.flush()?;
 
         Ok(())
     }

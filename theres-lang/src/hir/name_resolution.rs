@@ -36,6 +36,11 @@ pub enum Space {
     Values,
 }
 
+pub enum ItemPresent {
+    Yes,
+    No,
+}
+
 #[derive(Debug)]
 pub struct Scope {
     parent: Option<ScopeId>,
@@ -69,15 +74,21 @@ impl Scope {
         .copied()
     }
 
-    pub fn add(&mut self, name: &Name, res: Resolved<AstId>, ns: Space) {
+    pub fn add(&mut self, name: &Name, res: Resolved<AstId>, ns: Space) -> ItemPresent {
         // log::trace!(
         //     "Scope::add name={} res={res:?} ns={ns:?}",
         //     name.interned.get_interned()
         // );
-        match ns {
+        if match ns {
             Space::Types => self.types.insert(name.interned, res),
             Space::Values => self.bindings.insert(name.interned, res),
-        };
+        }
+        .is_some()
+        {
+            ItemPresent::Yes
+        } else {
+            ItemPresent::No
+        }
     }
 }
 
@@ -515,7 +526,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
         let Realm {
             items,
-            id: _,
             span: _,
             name,
         } = val;

@@ -536,7 +536,6 @@ impl ThingKind {
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub struct Bind {
     pub victim: Ty,
-    pub mask: Option<Path>,
     pub items: Vec<BindItem>,
     pub span: Span,
     pub id: AstId,
@@ -557,7 +556,6 @@ pub enum BindItemKind {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Realm {
     pub items: Vec<Thing>,
-    pub id: AstId,
     pub span: Span,
     pub name: Name,
 }
@@ -651,7 +649,7 @@ macro_rules! maybe_visit {
     (v: $v:expr, m: $m: ident, $($e:expr),*) => {$(
        {
         if let Some(thing) = $e {
-            try_visit!($v.$m(thing));
+            $crate::try_visit!($v.$m(thing));
 
             Self::Result::normal()
         } else {
@@ -682,7 +680,6 @@ pub trait Visitor<'a> {
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
         let Realm {
             items,
-            id: _,
             span: _,
             name,
         } = val;
@@ -774,7 +771,6 @@ pub trait Visitor<'a> {
 
     fn visit_bind(&mut self, val: &'a Bind) -> Self::Result {
         let Bind {
-            mask,
             victim,
             span: _,
             items,

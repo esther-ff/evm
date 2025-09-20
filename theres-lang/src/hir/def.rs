@@ -70,6 +70,12 @@ pub enum Resolved<Id> {
     Err,
 }
 
+impl<Id> Resolved<Id> {
+    pub fn is_err(&self) -> bool {
+        matches!(self, Resolved::Err)
+    }
+}
+
 pub struct Definitions<'hir> {
     defs: HashMap<SymbolId, (DefType, DefId)>,
     fn_to_body: HashMap<DefId, BodyId>,

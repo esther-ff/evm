@@ -6,6 +6,7 @@ pub mod name_resolution;
 pub mod node;
 pub mod visitor;
 pub use name_resolution::{LateResolver, ThingDefResolver};
+pub mod name_res;
 
 use crate::ast::Visitor;
 use crate::driver::HirDump;
@@ -18,6 +19,9 @@ pub fn lower_universe<'hir>(
     sess: &'hir Session<'hir>,
     ast: &crate::ast::Universe,
 ) -> (&'hir Universe<'hir>, Option<DefId>) {
+    name_res::resolve(sess, ast);
+
+    std::process::exit(0);
     let mut first_pass = ThingDefResolver::new();
     for decl in &ast.thingies {
         first_pass.visit_thing(decl);
