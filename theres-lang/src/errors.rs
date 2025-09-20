@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     cmp,
+    fmt::Display,
     io::{self, BufWriter, Stderr, Write},
     panic::Location,
 };
@@ -12,18 +13,42 @@ use crate::{
     sources::{SourceId, Sources},
 };
 
+pub enum Phase {
+    Lexing,
+    Parsing,
+    NameResolution,
+    LoweringAst,
+    TypeCk,
+    LoweringHir,
+}
+
+impl Display for Phase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Self::Lexing => "lexing",
+            Self::Parsing => "parsing",
+            Self::NameResolution => "name resolution",
+            Self::LoweringAst => "lowering the ast",
+            Self::TypeCk => "type checking",
+            Self::LoweringHir => "lowering the hir",
+        };
+
+        write!(f, "{str}")
+    }
+}
+
 pub trait TheresError {
     /// Phase of compilation the error was found in
     /// like "lexing" or "parsing"
-    fn phase() -> &'static str;
+    fn phase() -> Phase;
 
     /// Message describing the error
     fn message(&self) -> Cow<'static, str>;
 }
 
 impl TheresError for ParseError {
-    fn phase() -> &'static str {
-        "parsing"
+    fn phase() -> Phase {
+        Phase::Parsing
     }
 
     fn message(&self) -> Cow<'static, str> {
@@ -58,8 +83,8 @@ impl TheresError for ParseError {
 }
 
 impl TheresError for LexError {
-    fn phase() -> &'static str {
-        "lexing"
+    fn phase() -> Phase {
+        Phase::Lexing
     }
 
     fn message(&self) -> Cow<'static, str> {

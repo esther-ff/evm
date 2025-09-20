@@ -204,6 +204,7 @@ macro_rules! newtyped_index {
                 self.private as usize
             }
 
+            #[allow(dead_code)]
             pub fn is_dummy(self) -> bool {
                 self == Self::DUMMY
             }

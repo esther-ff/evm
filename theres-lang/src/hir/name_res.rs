@@ -4,7 +4,7 @@ use std::ops::Sub;
 
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
-use crate::errors::TheresError;
+use crate::errors::{Phase, TheresError};
 use crate::hir::Mappings;
 use crate::hir::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
 use crate::id::IdxVec;
@@ -25,8 +25,8 @@ enum ResError {
 }
 
 impl TheresError for ResError {
-    fn phase() -> &'static str {
-        "resolving"
+    fn phase() -> Phase {
+        Phase::NameResolution
     }
 
     fn message(&self) -> std::borrow::Cow<'static, str> {

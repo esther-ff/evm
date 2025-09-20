@@ -1,4 +1,4 @@
-use crate::errors::TheresError;
+use crate::errors::{Phase, TheresError};
 use crate::hir::def::{DefId, IntTy};
 use crate::hir::node::Constant;
 use crate::session::{Pooled, Session, SymbolId};
@@ -199,8 +199,8 @@ pub enum TypingError {
 }
 
 impl TheresError for TypingError {
-    fn phase() -> &'static str {
-        "typing"
+    fn phase() -> Phase {
+        Phase::TypeCk
     }
 
     fn message(&self) -> Cow<'static, str> {

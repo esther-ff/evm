@@ -1,26 +1,26 @@
 use crate::id::IdxVec;
 use std::{io, path::Path};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OneWayVec<T>(Vec<T>);
+// #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+// pub struct OneWayVec<T>(Vec<T>);
 
-impl<T> OneWayVec<T> {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
+// impl<T> OneWayVec<T> {
+//     pub fn new() -> Self {
+//         Self(Vec::new())
+//     }
 
-    pub fn push(&mut self, item: T) {
-        self.0.push(item);
-    }
+//     pub fn push(&mut self, item: T) {
+//         self.0.push(item);
+//     }
 
-    pub fn get(&self, idx: usize) -> Option<&T> {
-        self.0.get(idx)
-    }
+//     pub fn get(&self, idx: usize) -> Option<&T> {
+//         self.0.get(idx)
+//     }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-}
+//     pub fn len(&self) -> usize {
+//         self.0.len()
+//     }
+// }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LineSpan {

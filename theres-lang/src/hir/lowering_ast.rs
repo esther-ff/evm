@@ -5,7 +5,7 @@ use std::panic::Location;
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 
-use crate::errors::TheresError;
+use crate::errors::{Phase, TheresError};
 use crate::hir;
 use crate::hir::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
 use crate::hir::node::{self, Constant, ExprKind, Node, Param};
@@ -22,8 +22,8 @@ pub enum AstLowerError {
 }
 
 impl TheresError for AstLowerError {
-    fn phase() -> &'static str {
-        "ast lowering"
+    fn phase() -> Phase {
+        Phase::LoweringAst
     }
 
     fn message(&self) -> std::borrow::Cow<'static, str> {
@@ -40,7 +40,6 @@ pub struct Mappings {
     instance_to_bind: DefMap<Vec<AstId>>,
     binds_to_resolved_ty_id: AstIdMap<AstId>,
     binds_to_items: AstIdMap<Vec<AstId>>,
-    entry_point: Option<DefId>,
 
     self_ty_ast_id_to_ty: AstIdMap<Ty>,
 }
@@ -48,7 +47,6 @@ pub struct Mappings {
 impl Mappings {
     pub fn new(ast_id_to_def_id: AstIdMap<DefId>, def_id_to_ast_id: DefMap<AstId>) -> Self {
         Self {
-            entry_point: None,
             instance_to_field_list: HashMap::new(),
             field_id_to_instance: HashMap::new(),
             resolution_map: HashMap::new(),
@@ -59,14 +57,6 @@ impl Mappings {
             binds_to_items: HashMap::new(),
             self_ty_ast_id_to_ty: HashMap::new(),
         }
-    }
-
-    pub fn set_entry_point(&mut self, entry: DefId) {
-        self.entry_point.replace(entry);
-    }
-
-    pub fn entry_point(&self) -> Option<DefId> {
-        self.entry_point
     }
 
     pub fn debug_resolutions(&self) -> impl IntoIterator<Item = (&AstId, &Resolved<AstId>)> {
