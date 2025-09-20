@@ -1,17 +1,19 @@
 pub mod check;
 pub mod def;
-pub mod lowering_ast;
 pub mod node;
 pub mod visitor;
 
+mod lowering_ast;
 mod map_builder;
 mod name_res;
+mod passes;
 
 use crate::ast::Universe;
 use crate::driver::HirDump;
 use crate::hir::node::Universe as HirUniverse;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
+pub use lowering_ast::{HirId, HirMap, Mappings};
 
 pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &Universe) -> &'hir HirUniverse<'hir> {
     let mappings = name_res::resolve(sess, ast);

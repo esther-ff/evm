@@ -1,6 +1,6 @@
 use crate::ast::{BinOp, UnaryOp};
+use crate::hir::HirId;
 use crate::hir::def::{BodyId, DefId, DefType, Resolved};
-use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
     BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Node, Path, Stmt, StmtKind, Thing,
     ThingKind, Universe,

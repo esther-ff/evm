@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::hir::def::{DefId, DefType, Resolved};
-use crate::hir::lowering_ast::{HirId, HirIdMap};
 use crate::hir::node::{Block, Expr, ExprKind, HirLiteral, Local, Param, StmtKind, Universe};
+use crate::hir::{HirId, HirIdMap};
 use crate::pill::body::{AltarData, AltarId, Altars, IrFunc, LabelId, LabelVec, Proj};
 use crate::pill::cfg::Cfg;
 use crate::pill::instr::{InstrStream, Operand};

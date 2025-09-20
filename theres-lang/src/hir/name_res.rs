@@ -5,8 +5,8 @@ use std::ops::Sub;
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 use crate::errors::TheresError;
+use crate::hir::Mappings;
 use crate::hir::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
-use crate::hir::lowering_ast::Mappings;
 use crate::id::IdxVec;
 use crate::session::{Session, SymbolId};
 use crate::visitor_common::VisitorResult;
