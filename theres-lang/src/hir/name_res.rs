@@ -45,7 +45,7 @@ impl TheresError for ResError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Namespace {
     Types,
     Values,
@@ -86,7 +86,7 @@ impl ScopeData {
     fn new(anchor: Option<Scope>) -> Self {
         Self {
             values: HashMap::new(),
-            types: PRIMITIVES.iter().copied().collect(),
+            types: HashMap::new(),
             anchor,
         }
     }
@@ -412,7 +412,7 @@ impl<'cx> SecondPass<'cx> {
     fn get_name(&self, symbol: SymbolId, ns: Namespace) -> Resolved<AstId> {
         let scope = self.current_scope();
 
-        if let Some(found) = scope.get(ns, symbol) {
+        let result = if let Some(found) = scope.get(ns, symbol) {
             found
         } else {
             let mut cursor = scope.anchor;
@@ -425,6 +425,15 @@ impl<'cx> SecondPass<'cx> {
             }
 
             Resolved::Err
+        };
+
+        if result.is_err() && ns == Namespace::Types {
+            PRIMITIVES
+                .iter()
+                .find(|(sym, _)| *sym == symbol && ns == Namespace::Types)
+                .map_or(Resolved::Err, |(_, res)| *res)
+        } else {
+            result
         }
     }
 
