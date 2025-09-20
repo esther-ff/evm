@@ -549,10 +549,6 @@ impl<'a> Visitor<'a> for LateResolver<'_> {
     }
 
     fn visit_bind(&mut self, bind: &'a Bind) -> Self::Result {
-        if bind.mask.is_some() {
-            unimplemented!("interfaces!")
-        }
-
         self.current_bind_ty = Some(bind.victim.id);
 
         self.visit_ty(&bind.victim);

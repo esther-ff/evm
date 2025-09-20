@@ -17,7 +17,7 @@ impl FnLowerer<'_> {
             } => {
                 let altar = self.lower_as_altar(indexed_thing, bb);
                 let proj = Proj::Index(self.lower_as_operand(index, bb));
-                self.project_altar(altar, proj)
+                self.project_altar(altar, proj, expr.hir_id)
             }
 
             ExprKind::Field { src, field } => {
@@ -37,10 +37,11 @@ impl FnLowerer<'_> {
                         field: field_id,
                         source: altar_id,
                     },
+                    expr.hir_id,
                 )
             }
 
-            other => todo!("make temporaries"),
+            other => todo!("make temporaries {other:#?}"),
         }
     }
 }

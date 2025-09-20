@@ -373,7 +373,7 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenKind::With)?;
 
         // mask as interface
-        let mask = if self.lexemes.peek_token().kind == TokenKind::LeftParen {
+        let _ = if self.lexemes.peek_token().kind == TokenKind::LeftParen {
             None
         } else {
             Some(self.path()?)
@@ -388,7 +388,6 @@ impl<'a> Parser<'a> {
 
         Ok(Bind {
             victim: ty,
-            mask,
             items,
             span: Span::between(keyword.span, self.lexemes.previous().span),
             id: self.new_id(),

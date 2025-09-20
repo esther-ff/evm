@@ -204,12 +204,8 @@ impl Compiler {
         let ast = self.parse_to_ast(lexemes, &diags);
 
         session.enter(|session| {
-            let (uni, entry) = hir::lower_universe(session, &ast);
+            let uni = hir::lower_universe(session, &ast);
             typeck_universe(session, uni);
-
-            if let Some(entry) = entry {
-                todo!("check main fn {entry:?}")
-            }
 
             pill::lowering::lower_universe(session, uni);
         });

@@ -12,7 +12,7 @@ use crate::session::{Session, SymbolId};
 
 crate::newtyped_index!(Scope, ScopeMap, ScopeVec, ScopeSlice);
 
-pub enum ResError {
+enum ResError {
     DefinedAlready {
         name: SymbolId,
     },
@@ -45,7 +45,7 @@ impl TheresError for ResError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Namespace {
+enum Namespace {
     Types,
     Values,
 }
@@ -106,7 +106,7 @@ impl ScopeData {
     }
 }
 
-pub struct FirstPass<'cx> {
+struct FirstPass<'cx> {
     cx: &'cx Session<'cx>,
     scopes: ScopeVec<ScopeData>,
     path: Vec<Scope>,
@@ -122,7 +122,7 @@ pub struct FirstPass<'cx> {
 }
 
 impl<'cx> FirstPass<'cx> {
-    pub fn new(cx: &'cx Session<'cx>) -> Self {
+    fn new(cx: &'cx Session<'cx>) -> Self {
         let mut scopes = IdxVec::new();
         let current_scope = scopes.push(ScopeData::new(None));
 
@@ -143,8 +143,6 @@ impl<'cx> FirstPass<'cx> {
     #[track_caller]
     fn define(&mut self, ast_id: AstId, ty: DefType, _name: Name) -> DefId {
         let did = self.did_defs.push(ty);
-
-        dbg!(ast_id);
 
         assert!(self.ast_id_did.insert(ast_id, did).is_none());
         assert!(self.did_ast_id.insert(did, ast_id).is_none());
@@ -453,10 +451,10 @@ impl<'cx> SecondPass<'cx> {
                 // dbg!(&explored[scope]);
                 ret = explored[scope].get(last, seg_name).unwrap_or(Resolved::Err);
 
-                dbg!(ret);
                 if ret.is_err() {
                     self.emit_not_found(ast_path, segment_ix, last);
                 }
+
                 break;
             }
 
@@ -507,7 +505,6 @@ impl<'cx> SecondPass<'cx> {
     #[track_caller]
     #[inline]
     fn get_def_id(&self, ast_id: AstId) -> DefId {
-        dbg!(ast_id);
         self.maps.def_id_of(ast_id)
     }
 
@@ -571,10 +568,6 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
     }
 
     fn visit_bind(&mut self, bind: &'vis Bind) -> Self::Result {
-        if bind.mask.is_some() {
-            unimplemented!("interfaces!")
-        }
-
         self.current_bind_ty = Some(bind.victim.id);
 
         self.visit_ty(&bind.victim);
@@ -923,7 +916,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
     }
 }
 
-pub fn resolve<'cx>(cx: &'cx Session<'cx>, universe: &Universe) {
+pub fn resolve<'cx>(cx: &'cx Session<'cx>, universe: &Universe) -> Mappings {
     let mut first = FirstPass::new(cx);
     for thing in &universe.thingies {
         first.visit_thing(thing);
@@ -933,4 +926,6 @@ pub fn resolve<'cx>(cx: &'cx Session<'cx>, universe: &Universe) {
     for thing in &universe.thingies {
         second.visit_thing(thing);
     }
+
+    second.maps
 }

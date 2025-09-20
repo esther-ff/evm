@@ -778,7 +778,6 @@ pub trait Visitor<'a> {
         } = val;
 
         try_visit!(self.visit_ty(victim));
-        maybe_visit!(v: self, m: visit_path, mask);
         visit_iter!(v: self, m: visit_bind_item, items)
     }
 

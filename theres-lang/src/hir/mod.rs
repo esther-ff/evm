@@ -1,40 +1,20 @@
 pub mod check;
 pub mod def;
 pub mod lowering_ast;
-pub mod map_builder;
-pub mod name_resolution;
 pub mod node;
 pub mod visitor;
-pub use name_resolution::{LateResolver, ThingDefResolver};
-pub mod name_res;
 
-use crate::ast::Visitor;
+mod map_builder;
+mod name_res;
+
+use crate::ast::Universe;
 use crate::driver::HirDump;
-use crate::hir::def::DefId;
-use crate::hir::node::Universe;
+use crate::hir::node::Universe as HirUniverse;
 use crate::hir::visitor::HirVisitor;
 use crate::session::Session;
 
-pub fn lower_universe<'hir>(
-    sess: &'hir Session<'hir>,
-    ast: &crate::ast::Universe,
-) -> (&'hir Universe<'hir>, Option<DefId>) {
-    name_res::resolve(sess, ast);
-
-    std::process::exit(0);
-    let mut first_pass = ThingDefResolver::new();
-    for decl in &ast.thingies {
-        first_pass.visit_thing(decl);
-    }
-
-    let mut inner = LateResolver::new(first_pass, ast);
-    for decl in &ast.thingies {
-        inner.visit_thing(decl);
-    }
-
-    let mappings = inner.into_mappings();
-    let entry = mappings.entry_point();
-
+pub fn lower_universe<'hir>(sess: &'hir Session<'hir>, ast: &Universe) -> &'hir HirUniverse<'hir> {
+    let mappings = name_res::resolve(sess, ast);
     let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
 
     let hir_universe = ast_lowerer.lower_universe(ast);
@@ -61,5 +41,5 @@ pub fn lower_universe<'hir>(
         HirDump::None => {}
     }
 
-    (hir_universe, entry)
+    hir_universe
 }

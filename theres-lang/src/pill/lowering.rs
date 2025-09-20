@@ -74,12 +74,17 @@ impl<'il> FnLowerer<'il> {
         self.altars.borrow_mut().push(AltarData::new(ty))
     }
 
-    pub fn project_altar(&self, orig: AltarId, proj: Proj) -> AltarId {
-        let altar_data = self.altars.borrow();
+    pub fn project_altar(&self, orig: AltarId, proj: Proj, hir_id: HirId) -> AltarId {
+        let mut altar_data = self.altars.borrow_mut();
         let mut new_data = altar_data.get(orig).unwrap().clone();
         new_data.push_proj(proj);
 
-        self.altars.borrow_mut().push(new_data)
+        let new_altar = altar_data.push(new_data);
+        self.local_hir_ids_to_altar
+            .borrow_mut()
+            .insert(hir_id, new_altar);
+
+        new_altar
     }
 
     pub fn ty_table(&self) -> &TypeTable<'il> {
@@ -160,7 +165,7 @@ pub fn lower_universe<'il>(session: &'il Session<'il>, universe: &'il Universe<'
             ThingKind::Bind(bind) => {
                 for item in bind.items {
                     if let BindItemKind::Fun { sig: _, name: _ } = item.kind {
-                        builder.build_ir_fun(thing.def_id);
+                        builder.build_ir_fun(item.def_id);
                     }
                 }
             }
@@ -269,7 +274,7 @@ where
                     HirLiteral::Bool(bool) => Scalar::new_u8(u8::from(bool)),
                     HirLiteral::Uint(num) => Scalar::new_u64(num),
                     HirLiteral::Int(num) => Scalar::new_i64(num),
-                    HirLiteral::Float(_float) => todo!(),
+                    HirLiteral::Float(_float) => Scalar::new_u8(1), // todo!
                     HirLiteral::Str(_str) => todo!(),
                 };
 
@@ -409,6 +414,7 @@ where
                 field: field_id,
                 source: altar_id,
             },
+            src.hir_id,
         );
 
         Operand::Variable(projected)
@@ -541,13 +547,17 @@ where
     }
 
     pub fn get_altar_from_variable_expr(&self, expr: &Expr<'_>) -> AltarId {
-        let ExprKind::Path(path) = expr.kind else {
-            unreachable!("lhs of `assign` is not a path")
-        };
+        match expr.kind {
+            ExprKind::Field { .. } => self.l.altar_for_hir_var(expr.hir_id),
+            ExprKind::Path(path) => {
+                let Resolved::Local(hir_id) = path.res else {
+                    unreachable!("path assigned to doesn't point to a local")
+                };
 
-        match path.res {
-            Resolved::Local(id) => self.l.altar_for_hir_var(id),
-            _ => todo!("idk to explode or not"),
+                self.l.altar_for_hir_var(hir_id)
+            }
+
+            _ => unreachable!("not path or field expr passed to `get_altar_from_variable_expr`"),
         }
     }
 }
