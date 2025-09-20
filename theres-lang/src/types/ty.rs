@@ -81,6 +81,10 @@ impl<'ty> TyKind<'ty> {
         )
     }
 
+    pub fn is_error(self) -> bool {
+        matches!(self, TyKind::Error)
+    }
+
     pub fn is_signed_int(self) -> bool {
         matches!(self, TyKind::Int(..))
     }

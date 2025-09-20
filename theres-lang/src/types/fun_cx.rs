@@ -317,6 +317,10 @@ impl<'ty> FunCx<'ty> {
             ExprKind::Call { function, args } => {
                 let callable = self.type_of(function);
 
+                if callable.is_error() {
+                    return self.s.ty_err();
+                }
+
                 let TyKind::FnDef(def_id) = *callable.0 else {
                     self.s.diag().emit_err(
                         TypingError::CallingNotFn {
@@ -490,7 +494,10 @@ impl<'ty> FunCx<'ty> {
         if let Some(else_block) = else_ {
             let ty = self.type_of(else_block);
 
-            self.type_mismatch_err(block_ty, ty, else_block.span);
+            if self.unify(block_ty, ty).is_err() {
+                self.type_mismatch_err(block_ty, ty, else_block.span);
+            }
+
             block_ty
         } else {
             self.s.nil()
@@ -499,6 +506,10 @@ impl<'ty> FunCx<'ty> {
 
     fn typeck_expr_field(&mut self, src: &Expr<'_>, field_name: SymbolId) -> Ty<'ty> {
         let src_ty = self.type_of(src);
+        if src_ty.is_error() {
+            return self.s.ty_err();
+        }
+
         let err = if let TyKind::Instance(def) = src_ty.0 {
             if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
                 return self.s.def_type_of(found.def_id);
@@ -583,6 +594,10 @@ impl<'ty> FunCx<'ty> {
         expr_hir_id: HirId,
     ) -> Ty<'ty> {
         let recv_ty = self.type_of(receiver);
+        if recv_ty.is_error() {
+            return self.s.ty_err();
+        }
+
         let mut ret_ty = self.s.ty_err();
 
         self.s.binds_for_ty(recv_ty, |binds| {

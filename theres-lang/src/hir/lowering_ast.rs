@@ -617,12 +617,12 @@ impl<'hir> AstLowerer<'hir> {
                 })
                 .or_else(|| {
                     if let Some(expr) = otherwise {
-                        let expr = node::Expr::new(
+                        let new_expr = node::Expr::new(
                             node::ExprKind::Block(self.lower_block(expr)),
                             expr.span,
-                            self.next_hir_id(expr.id),
+                            self.new_hir_id(),
                         );
-                        return Some(self.session.arena().alloc(expr));
+                        return Some(self.session.arena().alloc(new_expr));
                     }
 
                     None

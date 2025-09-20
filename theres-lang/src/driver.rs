@@ -207,8 +207,8 @@ impl Compiler {
             let (uni, entry) = hir::lower_universe(session, &ast);
             typeck_universe(session, uni);
 
-            if entry.is_some() {
-                todo!("check main fn")
+            if let Some(entry) = entry {
+                todo!("check main fn {entry:?}")
             }
 
             pill::lowering::lower_universe(session, uni);
