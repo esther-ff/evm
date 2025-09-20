@@ -3,8 +3,8 @@ use std::io::{Stderr, Write, stderr, stdout};
 use std::path::Path;
 use std::sync::{Mutex, RwLock};
 
+use crate::ast::PrettyPrinter;
 use crate::ast::Universe;
-use crate::ast_pretty_printer::PrettyPrinter;
 use crate::errors::DiagEmitter;
 use crate::lexer::{Lexemes, Lexer};
 use crate::parser::Parser;

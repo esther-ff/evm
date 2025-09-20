@@ -8,7 +8,6 @@
 
 mod arena;
 mod ast;
-mod ast_pretty_printer;
 mod driver;
 mod errors;
 mod hir;
@@ -20,6 +19,7 @@ mod pill;
 mod session;
 mod sources;
 mod types;
+mod visitor_common;
 
 use std::fs::File;
 use std::io::{self, Read as _};

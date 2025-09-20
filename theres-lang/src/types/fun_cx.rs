@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, UnaryOp, VisitorResult};
+use crate::ast::{BinOp, UnaryOp};
 use crate::hir::def::{BodyId, DefId, DefType, Resolved};
 use crate::hir::lowering_ast::HirId;
 use crate::hir::node::{
@@ -10,6 +10,7 @@ use crate::lexer::Span;
 use crate::session::{Session, SymbolId};
 use crate::try_visit;
 use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
+use crate::visitor_common::VisitorResult;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

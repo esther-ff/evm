@@ -1,5 +1,4 @@
 use crate::{
-    ast::VisitorResult,
     hir::{
         def::Resolved,
         lowering_ast::HirId,
@@ -10,6 +9,8 @@ use crate::{
     },
     maybe_visit, try_visit, visit_iter,
 };
+
+use crate::visitor_common::VisitorResult;
 
 pub trait HirVisitor<'hir> {
     type Result: VisitorResult;

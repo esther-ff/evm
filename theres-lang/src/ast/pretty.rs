@@ -3,6 +3,7 @@ use crate::ast::{
     Instance, Name, Path, Realm, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
     VariableStmt, Visitor,
 };
+
 use crate::id::IndexId;
 use crate::lexer::Span;
 use crate::session::SymbolId;

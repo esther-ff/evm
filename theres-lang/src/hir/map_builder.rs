@@ -4,8 +4,7 @@ use crate::hir::node::{
     TyKind, Universe,
 };
 use crate::hir::visitor::HirVisitor;
-
-use crate::ast::VisitorResult;
+use crate::visitor_common::VisitorResult;
 use crate::{maybe_visit, try_visit, visit_iter};
 
 pub struct MapBuilder<'map, 'hir>

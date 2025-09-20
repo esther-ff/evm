@@ -9,6 +9,7 @@ use crate::hir::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
 use crate::hir::lowering_ast::Mappings;
 use crate::id::IdxVec;
 use crate::session::{Session, SymbolId};
+use crate::visitor_common::VisitorResult;
 
 crate::newtyped_index!(Scope, ScopeMap, ScopeVec, ScopeSlice);
 
