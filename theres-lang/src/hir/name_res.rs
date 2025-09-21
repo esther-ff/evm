@@ -725,6 +725,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
     fn visit_expr(&mut self, val: &'vis Expr) -> Self::Result {
         let ty = &val.ty;
         match ty {
+            ExprType::Return { ret } => crate::maybe_visit!(v: self, m: visit_expr, ret),
             ExprType::Path(path) => {
                 let res = self.process_path(path, Namespace::Values);
 
@@ -774,16 +775,14 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                 }
             }
 
-            ExprType::Return { ret: Some(expr) } => {
-                self.visit_expr(expr);
-            }
-
             ExprType::For {
-                iterable: _,
+                iterable,
                 pat: _,
-                body: _,
+                body,
             } => {
-                todo!("for loop")
+                crate::try_visit!(self.visit_expr(iterable), self.visit_block(body));
+
+                todo!("patterns?");
             }
 
             ExprType::Loop { body } => self.visit_block(body),
@@ -799,7 +798,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                 todo!("lambda")
             }
 
-            ExprType::Constant(..) => (),
+            ExprType::Constant(..) | ExprType::Break => (),
 
             ExprType::Block(b) => self.visit_block(b),
 
@@ -823,19 +822,11 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
                 crate::maybe_visit!(v: self, m: visit_block, otherwise);
             }
-
-            any => todo!("to-do expression kinds: {any:#?}"),
         }
     }
 
     fn visit_ty(&mut self, val: &'vis Ty) -> Self::Result {
-        let Ty {
-            kind,
-            span: _,
-            id: _,
-        } = val;
-
-        match kind {
+        match &val.kind {
             TyKind::Fn { args, ret } => {
                 for arg in args {
                     self.visit_ty(arg);

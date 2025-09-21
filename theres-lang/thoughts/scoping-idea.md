@@ -42,7 +42,7 @@ The "path" could be stored alongside my `ScopeStack` struct to allow switching b
 
 The entire switching of scopes could be elegantly handled by a higher-order function in a fashion like:
 ```rs
-fun path_forward(&mut self, work: F) -> R
+fn path_forward(&mut self, work: F) -> R
 where
     F: FnOnce(&mut Self) -> R
 {
@@ -120,5 +120,50 @@ fn function() -> i32 {
     b
 
     // fin!
+}
+```
+
+## Modules!
+
+modules give us a slight problem
+```rs
+mod italy {
+    const ROME: () = ();
+    const MESSINA: () = (); 
+}
+
+fn func() -> i32 {
+    italy::ROME
+}
+```
+
+how do we manage to resolve the paths correctly here?
+
+my rough idea looks like this
+we maintain a path for each module
+so
+
+```rs
+// let's consider the topmost module (a crate) as module 0
+// and the `italy` module as module 1
+
+// module 0: [#0]
+// we register to scope #0, a module named `italy`
+// and switch our realm 
+mod italy {
+    // module 1: [#0]
+    const ROME: () = ();
+    const MESSINA: () = ();
+    // we register to module 1's #0 scope that `ROME` and `MESSINA` exist 
+}
+// we exited the module and we are back in module 0
+
+
+fn func() -> i32 {
+    // module 1: [#0 -> #1]
+    // resolution of a path
+    // so we resolve the module italy
+    // then we check it's first scope for `ROME`
+    italy::ROME
 }
 ```

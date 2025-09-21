@@ -1,58 +1,79 @@
-# instance Simple (
-#     field: nil
-# )
+realm TestRealm {
+   instance Test (
+       field: nil
+   )
 
-# instance Vector (
-#     x: f32,
-#     y: f32
-# )
+   fun test() => nil {
+        {
+            {
+                {
+                   let a: nil = {}; 
+                };
+                a
+            }
+        }
+   }
+}
 
-# bind Vector with (
-#     fun mul(self, m: f32) => nil {
-#         self.x *= m;
-#         self.y *= m;
-#     }
-# )
+fun test() => nil {
+    TestRealm::test()
+}
 
-# fun inst() => Simple {
-#     Simple({})
-# }
+instance Simple (
+    field: nil
+)
 
-# fun main() => nil {
-#     let add: u64 = calc() + calc();
-#     let sub: u64 = calc() - calc();
-#     #dom ?
+instance Vector (
+    x: f32,
+    y: f32
+)
 
-#     let mul: u64 = calc() * calc();
-#     let div: u64 = calc() / calc();
+bind Vector with (
+    fun mul(self, m: f32) => nil {
+        # self.x *= m;
+        # self.y *= m;
+    }
+)
 
-#     div /= calc();
+fun inst() => Simple {
+    Simple({})
+}
+
+fun main() => nil {
+    let add: u64 = calc() + calc();
+    let sub: u64 = calc() - calc();
+    #dom ?
+
+    let mul: u64 = calc() * calc();
+    let div: u64 = calc() / calc();
+
+    div /= calc();
     
-#     let adt: Simple = inst();
-#     adt.field;
+    let adt: Simple = inst();
+    adt.field;
 
-#     let vector: Vector = Vector(1.0, 1.2);
-#     vector.mul(2.5);
+    let vector: Vector = Vector(1.0, 1.2);
+    vector.mul(2.5);
     
-#     vector.x;
-#     adt.field
-# }
+    vector.x;
+    adt.field
+}
 
-# fun calc() => u64 {
-#     1 + 1
-# }
+fun calc() => u64 {
+    1 + 1
+}
 
-# fun calc_a() => i64 {
-#     1 + 1
-# }
+fun calc_a() => i64 {
+    1 + 1
+}
 
-# fun calc_float() => f32 {
-#     1.0 + 1.0
-# }
+fun calc_float() => f32 {
+    1.0 + 1.0
+}
 
-# fun calc_double() => f64 {
-#     1.0 + 1.0
-# }
+fun calc_double() => f64 {
+    1.0 + 1.0
+}
 
 fun test_ifs() => i64 {
     # let null: nil = if 0 == 0 {
@@ -66,7 +87,7 @@ fun test_ifs() => i64 {
     } else if 1 == 1 {
         3
     } else {
-        4
+        1
     };
 
     num

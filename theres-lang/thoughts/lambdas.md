@@ -103,4 +103,39 @@ being filled out with upvars
 explained earlier, the obtained list of upvars would be used to create locals
 that lated would be referenced by `ExprKind::Upvar` and looked up.
 
+# Somehow inserting calls into kinda generic functions
+
+serve functions as zero-sized types
+closures as their structs
+to a singular unified Call stmt
+
+
+so i have a type like `fun(i32) => i32`
+and i think the idea to implement this is
+that i would generate generic IR for every function etc.
+and upon hitting a callsite i would prompt for generating a specialized version of it
+
+like imagine
+```rs
+fun m<T>(v: T, x: fun(T) => T) => T {
+    x(T)
+}
+```
+
+in a call
+```rs
+_1: i32 = Call(/* func ref */, [i32, fun(i32) => T]);
+```
+
+such a call terminator would trigger a monomorphization of the function
+to the required types (pseudo ir)
+
+```rs
+fun _m_func_mono_1(v: i32, x: fun(i32) => i32) => i32 {
+    _1: i32 = Call(x, [v]);
+    _0 = _1
+    return
+}
+```
+
 

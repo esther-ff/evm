@@ -54,8 +54,6 @@ macro_rules! try_visit {
 
 
        )*
-
-       Self::Result::normal()
         }
     };
 }
@@ -68,11 +66,7 @@ macro_rules! maybe_visit {
 
             $crate::try_visit!($v.$m(thing));
 
-            Self::Result::normal()
-        } else {
-            Self::Result::normal()
-        }
-    }
+        }     }
     )*};
 }
 
@@ -83,9 +77,7 @@ macro_rules! visit_iter {
             {
                 for entry in $i {
                     try_visit!($v.$m(entry));
-                }
-
-                Self::Result::normal()
+                };
             }
         )*
     };
