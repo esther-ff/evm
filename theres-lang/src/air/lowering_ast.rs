@@ -5,16 +5,16 @@ use std::panic::Location;
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 
+use crate::air;
+use crate::air::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
+use crate::air::node::{self, Constant, ExprKind, Node, Param};
 use crate::errors::{Phase, TheresError};
-use crate::hir;
-use crate::hir::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
-use crate::hir::node::{self, Constant, ExprKind, Node, Param};
 use crate::id::IdxVec;
 use crate::lexer::Span;
 use crate::parser::{AstId, AstIdMap};
 use crate::session::{Session, SymbolId};
 
-crate::newtyped_index!(HirId, HirIdMap, HirVec);
+crate::newtyped_index!(AirId, AirIdMap, AirVec);
 crate::newtyped_index!(LocalId, LocalMap, LocalVec);
 
 pub enum AstLowerError {
@@ -120,24 +120,24 @@ impl Mappings {
     }
 }
 
-pub struct HirMap<'hir> {
-    nodes: HirIdMap<Node<'hir>>,
+pub struct AirMap<'air> {
+    nodes: AirIdMap<Node<'air>>,
 
-    def_id_to_hir_id: DefMap<HirId>,
+    def_id_to_air_id: DefMap<AirId>,
 
-    bodies: BodyVec<&'hir node::Expr<'hir>>,
+    bodies: BodyVec<&'air node::Expr<'air>>,
     node_to_body: DefMap<BodyId>,
 
     field_to_instance: HashMap<DefId, DefId>,
     ctor_to_instance: HashMap<DefId, DefId>,
 }
 
-impl<'hir> HirMap<'hir> {
+impl<'air> AirMap<'air> {
     pub fn new() -> Self {
         Self {
             nodes: HashMap::new(),
 
-            def_id_to_hir_id: HashMap::new(),
+            def_id_to_air_id: HashMap::new(),
             bodies: IdxVec::new(),
             node_to_body: HashMap::new(),
             field_to_instance: HashMap::new(),
@@ -146,11 +146,11 @@ impl<'hir> HirMap<'hir> {
     }
 
     #[track_caller]
-    pub fn map_def_id_to_hir(&mut self, def_id: DefId, hir_id: HirId) {
-        let dbg = self.def_id_to_hir_id.insert(def_id, hir_id);
+    pub fn map_def_id_to_air(&mut self, def_id: DefId, air_id: AirId) {
+        let dbg = self.def_id_to_air_id.insert(def_id, air_id);
         assert!(
             dbg.is_none(),
-            "{def_id:?} already mapped to a HirId!, loc: {}",
+            "{def_id:?} already mapped to a AirId!, loc: {}",
             Location::caller()
         );
     }
@@ -166,28 +166,28 @@ impl<'hir> HirMap<'hir> {
             .expect("Field's DefId wasn't mapped to any instance")
     }
 
-    pub fn get_def(&'hir self, def_id: DefId) -> &'hir Node<'hir> {
+    pub fn get_def(&'air self, def_id: DefId) -> &'air Node<'air> {
         self.get_node(
-            self.def_id_to_hir_id
+            self.def_id_to_air_id
                 .get(&def_id)
                 .copied()
-                .expect("DefId wasn't mapped to any HirId"),
+                .expect("DefId wasn't mapped to any AirId"),
         )
     }
 
-    pub fn get_thing(&'hir self, def_id: DefId) -> &'hir node::Thing<'hir> {
+    pub fn get_thing(&'air self, def_id: DefId) -> &'air node::Thing<'air> {
         let Node::Thing(thing) = self.get_node(
-            self.def_id_to_hir_id
+            self.def_id_to_air_id
                 .get(&def_id)
                 .copied()
-                .expect("DefId wasn't mapped to any HirId"),
+                .expect("DefId wasn't mapped to any AirId"),
         ) else {
             dbg!(
                 self.get_node(
-                    self.def_id_to_hir_id
+                    self.def_id_to_air_id
                         .get(&def_id)
                         .copied()
-                        .expect("DefId wasn't mapped to any HirId"),
+                        .expect("DefId wasn't mapped to any AirId"),
                 )
             );
             panic!("`DefId` pointed to not a definition")
@@ -196,44 +196,44 @@ impl<'hir> HirMap<'hir> {
         thing
     }
 
-    pub fn get_local(&'hir self, hir_id: HirId) -> &'hir node::Local<'hir> {
-        let node::Node::Local(local) = self.get_node(hir_id) else {
-            panic!("hir id doesn't point to a stmt",)
+    pub fn get_local(&'air self, air_id: AirId) -> &'air node::Local<'air> {
+        let node::Node::Local(local) = self.get_node(air_id) else {
+            panic!("air id doesn't point to a stmt",)
         };
 
         local
     }
 
-    pub fn insert_node(&mut self, node: node::Node<'hir>, hir_id: HirId) {
-        self.nodes.insert(hir_id, node);
+    pub fn insert_node(&mut self, node: node::Node<'air>, air_id: AirId) {
+        self.nodes.insert(air_id, node);
     }
 
-    pub fn nodes(&self) -> impl IntoIterator<Item = &Node<'hir>> {
+    pub fn nodes(&self) -> impl IntoIterator<Item = &Node<'air>> {
         self.nodes.values()
     }
 
-    pub fn get_node(&'hir self, hir_id: HirId) -> &'hir Node<'hir> {
-        log::trace!("get_node hir_id={hir_id}");
-        match self.nodes.get(&hir_id) {
+    pub fn get_node(&'air self, air_id: AirId) -> &'air Node<'air> {
+        log::trace!("get_node air_id={air_id}");
+        match self.nodes.get(&air_id) {
             None => panic!(
-                "Invalid `HirId` ({hir_id:?}) given to `get_node`! loc: {}",
+                "Invalid `AirId` ({air_id:?}) given to `get_node`! loc: {}",
                 Location::caller()
             ),
             Some(node) => node,
         }
     }
 
-    pub fn insert_body_of(&mut self, body: &'hir node::Expr<'hir>, body_owner: DefId) -> BodyId {
+    pub fn insert_body_of(&mut self, body: &'air node::Expr<'air>, body_owner: DefId) -> BodyId {
         let body_id = self.bodies.push(body);
         self.node_to_body.insert(body_owner, body_id);
         body_id
     }
 
-    pub fn bodies(&self) -> &[&node::Expr<'hir>] {
+    pub fn bodies(&self) -> &[&node::Expr<'air>] {
         self.bodies.as_slice()
     }
 
-    pub fn get_body(&self, body: BodyId) -> &'hir node::Expr<'hir> {
+    pub fn get_body(&self, body: BodyId) -> &'air node::Expr<'air> {
         let Some(expr_body) = self.bodies.get(body).copied() else {
             panic!("Invalid `BodyId` given ({body:#?}), no function body mapped to it!",)
         };
@@ -241,7 +241,7 @@ impl<'hir> HirMap<'hir> {
         expr_body
     }
 
-    pub fn expect_fn(&'hir self, def_id: DefId) -> (&'hir node::FnSig<'hir>, SymbolId) {
+    pub fn expect_fn(&'air self, def_id: DefId) -> (&'air node::FnSig<'air>, SymbolId) {
         match self.get_def(def_id) {
             Node::Thing(thing) => {
                 let node::ThingKind::Fn { sig, name } = thing.kind else {
@@ -269,7 +269,7 @@ impl<'hir> HirMap<'hir> {
         }
     }
 
-    pub fn expect_instance(&'hir self, def_id: DefId) -> (&'hir [node::Field<'hir>], Name) {
+    pub fn expect_instance(&'air self, def_id: DefId) -> (&'air [node::Field<'air>], Name) {
         let node::ThingKind::Instance {
             fields,
             name,
@@ -306,49 +306,49 @@ enum DesugarLoop {
     Until,
 }
 
-pub struct AstLowerer<'hir> {
-    session: &'hir Session<'hir>,
+pub struct AstLowerer<'air> {
+    session: &'air Session<'air>,
 
     map: Mappings,
 
-    hir_id_counter: u32,
+    air_id_counter: u32,
 
-    ast_id_to_hir_id: AstIdMap<HirId>,
+    ast_id_to_air_id: AstIdMap<AirId>,
 
     current_instance: Option<DefId>,
 
-    current_bind_ty: Option<&'hir node::Ty<'hir>>,
+    current_bind_ty: Option<&'air node::Ty<'air>>,
 }
 
-impl<'hir> AstLowerer<'hir> {
-    pub fn new(map: Mappings, session: &'hir Session<'hir>) -> Self {
+impl<'air> AstLowerer<'air> {
+    pub fn new(map: Mappings, session: &'air Session<'air>) -> Self {
         Self {
             map,
             current_instance: None,
             current_bind_ty: None,
             session,
 
-            hir_id_counter: 0,
-            ast_id_to_hir_id: HashMap::new(),
+            air_id_counter: 0,
+            ast_id_to_air_id: HashMap::new(),
         }
     }
 
     /// Returns the next id that will be valid
-    /// after inserting a node into the HIR map
+    /// after inserting a node into the air map
     ///
     /// Panics if the same `AstId` is again used for this function
-    /// as it maps `AstId`s to `HirId`s for lowering `Resolved`s
+    /// as it maps `AstId`s to `AirId`s for lowering `Resolved`s
     #[track_caller]
-    pub fn next_hir_id(&mut self, ast_id: AstId) -> HirId {
-        log::trace!("next_hir_id ast_id={} loc={}", ast_id, Location::caller());
+    pub fn next_air_id(&mut self, ast_id: AstId) -> AirId {
+        log::trace!("next_air_id ast_id={} loc={}", ast_id, Location::caller());
 
-        let hir_id = HirId::new(self.hir_id_counter);
-        self.hir_id_counter += 1;
-        let ret = self.ast_id_to_hir_id.insert(ast_id, hir_id);
+        let air_id = AirId::new(self.air_id_counter);
+        self.air_id_counter += 1;
+        let ret = self.ast_id_to_air_id.insert(ast_id, air_id);
 
         assert!(
             ret.is_none(),
-            "duplicate `AstId` given to `next_hir_id` ({} -> {})\nat loc: {:?}",
+            "duplicate `AstId` given to `next_air_id` ({} -> {})\nat loc: {:?}",
             ast_id,
             ret.unwrap(),
             Location::caller()
@@ -356,29 +356,29 @@ impl<'hir> AstLowerer<'hir> {
 
         if let Some(def_id) = self.map.ast_id_to_def_id.get(&ast_id) {
             self.session
-                .hir_mut(|map| map.map_def_id_to_hir(*def_id, hir_id));
+                .air_mut(|map| map.map_def_id_to_air(*def_id, air_id));
         }
 
-        hir_id
+        air_id
     }
 
-    /// Generates another `HirId`
+    /// Generates another `AirId`
     /// with no requirements
-    fn new_hir_id(&mut self) -> HirId {
-        let hir_id = HirId::new(self.hir_id_counter);
-        self.hir_id_counter += 1;
-        hir_id
+    fn new_air_id(&mut self) -> AirId {
+        let air_id = AirId::new(self.air_id_counter);
+        self.air_id_counter += 1;
+        air_id
     }
 
     #[track_caller]
-    fn map_ast_id_to_hir_id(&self, ast_id: AstId) -> HirId {
-        self.ast_id_to_hir_id
+    fn map_ast_id_to_air_id(&self, ast_id: AstId) -> AirId {
+        self.ast_id_to_air_id
             .get(&ast_id)
             .copied()
-            .expect("AstId wasn't mapped to any HirId!")
+            .expect("AstId wasn't mapped to any AirId!")
     }
 
-    fn lower_args<'a>(&mut self, a: impl Iterator<Item = &'a Expr>) -> &'hir [node::Expr<'hir>] {
+    fn lower_args<'a>(&mut self, a: impl Iterator<Item = &'a Expr>) -> &'air [node::Expr<'air>] {
         self.session
             .arena()
             .alloc_from_iter(a.map(|arg| self.lower_expr_noalloc(arg)))
@@ -386,10 +386,10 @@ impl<'hir> AstLowerer<'hir> {
 
     #[allow(clippy::too_many_lines)]
     #[track_caller]
-    fn lower_expr_noalloc(&mut self, expr: &Expr) -> node::Expr<'hir> {
-        let hir_id = self.next_hir_id(expr.id);
+    fn lower_expr_noalloc(&mut self, expr: &Expr) -> node::Expr<'air> {
+        let air_id = self.next_air_id(expr.id);
 
-        let hir_expr_kind = match &expr.ty {
+        let air_expr_kind = match &expr.ty {
             ExprType::Break => node::ExprKind::Break,
 
             ExprType::Index { indexed, index } => node::ExprKind::Index {
@@ -450,10 +450,10 @@ impl<'hir> AstLowerer<'hir> {
 
             ExprType::Constant(val) => {
                 let lit = match val {
-                    ConstantExpr::Int(v) => node::HirLiteral::Int(*v),
-                    ConstantExpr::Str(v) => node::HirLiteral::Str(*v),
-                    ConstantExpr::Float(v) => node::HirLiteral::Float(*v),
-                    ConstantExpr::Bool(v) => node::HirLiteral::Bool(*v),
+                    ConstantExpr::Int(v) => node::AirLiteral::Int(*v),
+                    ConstantExpr::Str(v) => node::AirLiteral::Str(*v),
+                    ConstantExpr::Float(v) => node::AirLiteral::Float(*v),
+                    ConstantExpr::Bool(v) => node::AirLiteral::Bool(*v),
                 };
 
                 node::ExprKind::Literal(lit)
@@ -500,7 +500,7 @@ impl<'hir> AstLowerer<'hir> {
                 expr: ret.as_ref().map(|expr| self.lower_expr(expr)),
             },
 
-            ExprType::Lambda { args: _, body: _ } => todo!("Lambdas in HIR!"),
+            ExprType::Lambda { args: _, body: _ } => todo!("Lambdas in air!"),
 
             ExprType::FieldAccess { source, field } => node::ExprKind::Field {
                 src: self.lower_expr(source),
@@ -519,7 +519,7 @@ impl<'hir> AstLowerer<'hir> {
             } => self.lower_expr_if(cond, if_block, else_ifs, otherwise.as_ref()),
         };
 
-        node::Expr::new(hir_expr_kind, expr.span, hir_id)
+        node::Expr::new(air_expr_kind, expr.span, air_id)
     }
 
     fn lower_while_or_until_loop(
@@ -527,16 +527,16 @@ impl<'hir> AstLowerer<'hir> {
         cond: &Expr,
         body: &Block,
         desugar: DesugarLoop,
-    ) -> &'hir node::Block<'hir> {
+    ) -> &'air node::Block<'air> {
         log::debug!("lower while or until loop");
         let cond_block = node::Block::new(
             Span::DUMMY,
             &[],
-            self.new_hir_id(),
+            self.new_air_id(),
             Some(self.session.arena().alloc(node::Expr::new(
                 node::ExprKind::Break,
                 Span::DUMMY,
-                self.new_hir_id(),
+                self.new_air_id(),
             ))),
         );
 
@@ -549,7 +549,7 @@ impl<'hir> AstLowerer<'hir> {
                             op: UnaryOp::Not,
                         },
                         cond.span,
-                        self.new_hir_id(),
+                        self.new_air_id(),
                     )),
 
                     DesugarLoop::Until => self.lower_expr(cond),
@@ -558,7 +558,7 @@ impl<'hir> AstLowerer<'hir> {
                 else_: None,
             },
             cond.span,
-            self.new_hir_id(),
+            self.new_air_id(),
         );
 
         let loop_body = match &body.expr {
@@ -567,11 +567,11 @@ impl<'hir> AstLowerer<'hir> {
                 self.session
                     .arena()
                     .alloc_from_iter(body.stmts.iter().map(|stmt| self.lower_stmt(stmt))),
-                self.next_hir_id(body.id),
+                self.next_air_id(body.id),
                 Some(self.session.arena().alloc(condition)),
             ),
             Some(expr) => {
-                let block_id = self.next_hir_id(body.id);
+                let block_id = self.next_air_id(body.id);
                 let lowered = self.lower_expr(expr);
 
                 node::Block::new(
@@ -581,7 +581,7 @@ impl<'hir> AstLowerer<'hir> {
                             core::iter::once(node::Stmt::new(
                                 expr.span,
                                 node::StmtKind::Expr(lowered),
-                                lowered.hir_id,
+                                lowered.air_id,
                             )),
                         ),
                     ),
@@ -601,7 +601,7 @@ impl<'hir> AstLowerer<'hir> {
         if_block: &Block,
         else_ifs: &[ElseIf],
         otherwise: Option<&Block>,
-    ) -> hir::node::ExprKind<'hir> {
+    ) -> air::node::ExprKind<'air> {
         let first = else_ifs.first();
         let rest = else_ifs.get(1..).unwrap_or(&[]);
 
@@ -614,7 +614,7 @@ impl<'hir> AstLowerer<'hir> {
                     let expr = node::Expr::new(
                         expr_kind,
                         Span::between(first.cond.span, first.body.span),
-                        self.new_hir_id(),
+                        self.new_air_id(),
                     );
 
                     self.session.arena().alloc(expr)
@@ -624,7 +624,7 @@ impl<'hir> AstLowerer<'hir> {
                         let new_expr = node::Expr::new(
                             node::ExprKind::Block(self.lower_block(expr)),
                             expr.span,
-                            self.new_hir_id(),
+                            self.new_air_id(),
                         );
                         return Some(self.session.arena().alloc(new_expr));
                     }
@@ -635,12 +635,12 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     #[track_caller]
-    fn lower_expr(&mut self, expr: &Expr) -> &'hir node::Expr<'hir> {
+    fn lower_expr(&mut self, expr: &Expr) -> &'air node::Expr<'air> {
         log::debug!("lower_expr expr.id={} loc={}", expr.id, Location::caller());
         self.session.arena().alloc(self.lower_expr_noalloc(expr))
     }
 
-    fn lower_block_noalloc(&mut self, block: &Block) -> node::Block<'hir> {
+    fn lower_block_noalloc(&mut self, block: &Block) -> node::Block<'air> {
         let Block {
             stmts,
             expr,
@@ -653,19 +653,19 @@ impl<'hir> AstLowerer<'hir> {
             self.session
                 .arena()
                 .alloc_from_iter(stmts.iter().map(|stmt| self.lower_stmt(stmt))),
-            self.next_hir_id(*id),
+            self.next_air_id(*id),
             expr.as_ref().map(|expr| self.lower_expr(expr)),
         )
     }
 
-    fn lower_block(&mut self, block: &Block) -> &'hir node::Block<'hir> {
+    fn lower_block(&mut self, block: &Block) -> &'air node::Block<'air> {
         self.session.arena().alloc(self.lower_block_noalloc(block))
     }
 
-    fn lower_stmt(&mut self, stmt: &Stmt) -> node::Stmt<'hir> {
+    fn lower_stmt(&mut self, stmt: &Stmt) -> node::Stmt<'air> {
         let Stmt { kind, span, id } = stmt;
 
-        let hir_id = self.next_hir_id(*id);
+        let air_id = self.next_air_id(*id);
 
         let new_kind = match kind {
             StmtKind::Expr(expr) => node::StmtKind::Expr(self.lower_expr(expr)),
@@ -675,10 +675,10 @@ impl<'hir> AstLowerer<'hir> {
             }
         };
 
-        node::Stmt::new(*span, new_kind, hir_id)
+        node::Stmt::new(*span, new_kind, air_id)
     }
 
-    fn lower_variable_stmt(&mut self, var: &VariableStmt) -> &'hir node::Local<'hir> {
+    fn lower_variable_stmt(&mut self, var: &VariableStmt) -> &'air node::Local<'air> {
         let mutability = match var.mode {
             VarMode::Let => Constant::No,
             VarMode::Const => Constant::Yes,
@@ -686,12 +686,12 @@ impl<'hir> AstLowerer<'hir> {
 
         let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
         let ty = self.lower_ty(&var.ty);
-        let local = node::Local::new(mutability, var.name, self.next_hir_id(var.id), ty, init);
+        let local = node::Local::new(mutability, var.name, self.next_air_id(var.id), ty, init);
 
         self.session.arena().alloc(local)
     }
 
-    fn lower_ty(&mut self, ty: &Ty) -> &'hir node::Ty<'hir> {
+    fn lower_ty(&mut self, ty: &Ty) -> &'air node::Ty<'air> {
         let kind = match &ty.kind {
             TyKind::Fn { args: _, ret: _ } => todo!(),
             TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(inner)),
@@ -699,7 +699,7 @@ impl<'hir> AstLowerer<'hir> {
                 if let Some(bind_ty) = self.current_bind_ty {
                     return self.session.arena().alloc(node::Ty::new(
                         ty.span,
-                        self.next_hir_id(ty.id),
+                        self.next_air_id(ty.id),
                         bind_ty.kind,
                     ));
                 }
@@ -711,11 +711,11 @@ impl<'hir> AstLowerer<'hir> {
             TyKind::Err => node::TyKind::Err,
         };
 
-        let ty = node::Ty::new(ty.span, self.next_hir_id(ty.id), kind);
+        let ty = node::Ty::new(ty.span, self.next_air_id(ty.id), kind);
         self.session.arena().alloc(ty)
     }
 
-    fn lower_path(&mut self, path: &Path) -> &'hir node::Path<'hir> {
+    fn lower_path(&mut self, path: &Path) -> &'air node::Path<'air> {
         let segments = self
             .session
             .arena()
@@ -727,16 +727,16 @@ impl<'hir> AstLowerer<'hir> {
             self.lower_resolved(res),
             segments,
             path.span,
-            self.next_hir_id(path.id),
+            self.next_air_id(path.id),
         ))
     }
 
-    fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'hir> {
+    fn lower_thing(&mut self, thing: &Thing) -> node::Thing<'air> {
         let def_id = self.map.def_id_of(thing.id);
-        let hir_id = self.next_hir_id(thing.id);
+        let air_id = self.next_air_id(thing.id);
 
         self.session
-            .hir_mut(|x| x.def_id_to_hir_id.insert(def_id, hir_id));
+            .air_mut(|x| x.def_id_to_air_id.insert(def_id, air_id));
 
         let kind = match &thing.kind {
             ThingKind::Function(decl) => self.lower_fn_decl(decl, def_id),
@@ -745,10 +745,10 @@ impl<'hir> AstLowerer<'hir> {
             ThingKind::Realm(realm) => self.lower_realm(realm),
         };
 
-        node::Thing::new(kind, thing.kind.span(), hir_id, def_id)
+        node::Thing::new(kind, thing.kind.span(), air_id, def_id)
     }
 
-    fn lower_bind(&mut self, bind: &Bind) -> node::ThingKind<'hir> {
+    fn lower_bind(&mut self, bind: &Bind) -> node::ThingKind<'air> {
         let ty = self.lower_ty(&bind.victim);
         self.current_bind_ty.replace(ty);
 
@@ -765,7 +765,7 @@ impl<'hir> AstLowerer<'hir> {
         bind_node
     }
 
-    fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'hir> {
+    fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'air> {
         let (lowered_kind, _, span) = match &kind.kind {
             BindItemKind::Const(variable) => (
                 node::BindItemKind::Const {
@@ -784,16 +784,16 @@ impl<'hir> AstLowerer<'hir> {
 
             BindItemKind::Fun(fn_decl) => {
                 let sig =
-                    self.lower_fn_sig(&fn_decl.sig, self.session.hir(|map| map.bodies.future_id()));
+                    self.lower_fn_sig(&fn_decl.sig, self.session.air(|map| map.bodies.future_id()));
 
                 let body = self.session.arena().alloc(node::Expr::new(
                     node::ExprKind::Block(self.lower_block(&fn_decl.block)),
                     fn_decl.span,
-                    self.new_hir_id(),
+                    self.new_air_id(),
                 ));
 
                 let def_id = self.map.def_id_of(kind.id);
-                self.session.hir_mut(|map| map.insert_body_of(body, def_id));
+                self.session.air_mut(|map| map.insert_body_of(body, def_id));
 
                 log::trace!("after fn decl in bind");
 
@@ -809,28 +809,28 @@ impl<'hir> AstLowerer<'hir> {
         };
 
         node::BindItem::new(
-            self.next_hir_id(kind.id),
+            self.next_air_id(kind.id),
             self.map.def_id_of(kind.id),
             span,
             lowered_kind,
         )
     }
 
-    fn lower_fn_decl(&mut self, fn_decl: &FnDecl, def_id: DefId) -> node::ThingKind<'hir> {
+    fn lower_fn_decl(&mut self, fn_decl: &FnDecl, def_id: DefId) -> node::ThingKind<'air> {
         let params =
             self.session
                 .arena()
                 .alloc_from_iter(fn_decl.sig.args.iter().map(|arg| {
-                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_hir_id(arg.id))
+                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_air_id(arg.id))
                 }));
 
         let body = self.lower_block(&fn_decl.block);
-        let body_id = self.session.hir_mut(|hir| {
-            hir.insert_body_of(
+        let body_id = self.session.air_mut(|air| {
+            air.insert_body_of(
                 self.session.arena().alloc(node::Expr::new(
                     node::ExprKind::Block(body),
                     body.span,
-                    body.hir_id,
+                    body.air_id,
                 )),
                 def_id,
             )
@@ -847,22 +847,22 @@ impl<'hir> AstLowerer<'hir> {
         }
     }
 
-    fn lower_fn_sig(&mut self, sig: &FnSig, body_id: BodyId) -> &'hir node::FnSig<'hir> {
-        let hir_sig = node::FnSig::new(
+    fn lower_fn_sig(&mut self, sig: &FnSig, body_id: BodyId) -> &'air node::FnSig<'air> {
+        let air_sig = node::FnSig::new(
             sig.span,
             self.lower_ty(&sig.ret_type),
             self.session
                 .arena()
                 .alloc_from_iter(sig.args.iter().map(|arg| {
-                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_hir_id(arg.id))
+                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_air_id(arg.id))
                 })),
             body_id,
         );
 
-        self.session.arena().alloc(hir_sig)
+        self.session.arena().alloc(air_sig)
     }
 
-    fn lower_realm(&mut self, realm: &Realm) -> node::ThingKind<'hir> {
+    fn lower_realm(&mut self, realm: &Realm) -> node::ThingKind<'air> {
         node::ThingKind::Realm {
             name: realm.name,
             things: self
@@ -873,10 +873,10 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     #[track_caller]
-    fn lower_instance(&mut self, inst: &Instance, def_id: DefId) -> node::ThingKind<'hir> {
+    fn lower_instance(&mut self, inst: &Instance, def_id: DefId) -> node::ThingKind<'air> {
         self.current_instance.replace(def_id);
 
-        let ctor_hir_id = self.next_hir_id(inst.ctor_id);
+        let ctor_air_id = self.next_air_id(inst.ctor_id);
         let ctor_def_id = self.map.def_id_of(inst.ctor_id);
 
         let kind = node::ThingKind::Instance {
@@ -886,30 +886,30 @@ impl<'hir> AstLowerer<'hir> {
                     .map(|ast_field| self.lower_field(ast_field, def_id)),
             ),
             name: inst.name,
-            ctor_id: (ctor_hir_id, ctor_def_id),
+            ctor_id: (ctor_air_id, ctor_def_id),
         };
 
         self.session
-            .hir_mut(|map| map.ctor_to_instance.insert(ctor_def_id, def_id));
+            .air_mut(|map| map.ctor_to_instance.insert(ctor_def_id, def_id));
 
         self.current_instance.take();
 
         kind
     }
 
-    pub fn lower_field(&mut self, field: &Field, current_instance: DefId) -> node::Field<'hir> {
+    pub fn lower_field(&mut self, field: &Field, current_instance: DefId) -> node::Field<'air> {
         let def_id = self.map.def_id_of(field.id);
 
-        let hir_id = self.next_hir_id(field.id);
+        let air_id = self.next_air_id(field.id);
 
-        self.session.hir_mut(|x| {
+        self.session.air_mut(|x| {
             x.field_to_instance.insert(def_id, current_instance);
         });
 
         node::Field::new(
             [Constant::No, Constant::Yes][usize::from(field.constant)],
             field.span,
-            hir_id,
+            air_id,
             field.name,
             def_id,
             self.lower_ty(&field.ty),
@@ -917,17 +917,17 @@ impl<'hir> AstLowerer<'hir> {
     }
 
     #[track_caller]
-    pub fn lower_resolved(&mut self, res: Resolved<AstId>) -> Resolved<HirId> {
+    pub fn lower_resolved(&mut self, res: Resolved<AstId>) -> Resolved<AirId> {
         match res {
-            Resolved::Local(ast_id) => Resolved::Local(self.map_ast_id_to_hir_id(ast_id)),
+            Resolved::Local(ast_id) => Resolved::Local(self.map_ast_id_to_air_id(ast_id)),
             Resolved::Def(id, deftype) => Resolved::Def(id, deftype),
             Resolved::Prim(ty) => Resolved::Prim(ty),
             Resolved::Err => Resolved::Err,
         }
     }
 
-    pub fn lower_universe(&mut self, universe: &Universe) -> &'hir node::Universe<'hir> {
-        let id = self.next_hir_id(universe.id);
+    pub fn lower_universe(&mut self, universe: &Universe) -> &'air node::Universe<'air> {
+        let id = self.next_air_id(universe.id);
         let universe = node::Universe::new(
             id,
             self.session.arena().alloc_from_iter(

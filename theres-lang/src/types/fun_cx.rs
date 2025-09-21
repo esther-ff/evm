@@ -1,11 +1,11 @@
-use crate::ast::{BinOp, UnaryOp};
-use crate::hir::HirId;
-use crate::hir::def::{BodyId, DefId, DefType, Resolved};
-use crate::hir::node::{
-    BindItemKind, Block, Expr, ExprKind, HirLiteral, Local, Node, Path, Stmt, StmtKind, Thing,
+use crate::air::AirId;
+use crate::air::def::{BodyId, DefId, DefType, Resolved};
+use crate::air::node::{
+    AirLiteral, BindItemKind, Block, Expr, ExprKind, Local, Node, Path, Stmt, StmtKind, Thing,
     ThingKind, Universe,
 };
-use crate::hir::visitor::HirVisitor;
+use crate::air::visitor::AirVisitor;
+use crate::ast::{BinOp, UnaryOp};
 use crate::lexer::Span;
 use crate::session::{Session, SymbolId};
 use crate::try_visit;
@@ -37,7 +37,7 @@ impl<'ty> ItemGatherer<'ty> {
     }
 }
 
-impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
+impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
     type Result = ();
 
     fn visit_thing(&mut self, thing: &'vis Thing<'vis>) -> Self::Result {
@@ -46,7 +46,7 @@ impl<'vis> HirVisitor<'vis> for ItemGatherer<'_> {
                 self.sess.lower_fn_sig(*sig, thing.def_id);
 
                 // We have to traverse the fn body for nested functions
-                let body = self.sess.hir_ref().get_body(sig.body);
+                let body = self.sess.air_ref().get_body(sig.body);
                 self.visit_expr(body);
             }
 
@@ -91,15 +91,15 @@ pub struct FunCx<'ty> {
 
     fn_ret_ty: Option<Ty<'ty>>,
 
-    node_type: HashMap<HirId, Ty<'ty>>,
+    node_type: HashMap<AirId, Ty<'ty>>,
 
     ty_var_types: HashMap<InferId, Ty<'ty>>,
 
     infer_ty_counter: u32,
 
-    resolved_method_calls: HashMap<HirId, DefId>,
+    resolved_method_calls: HashMap<AirId, DefId>,
 
-    local_tys: HashMap<HirId, Ty<'ty>>,
+    local_tys: HashMap<AirId, Ty<'ty>>,
 
     obligations: RefCell<HashMap<InferId, Vec<Obligation>>>,
 }
@@ -124,8 +124,8 @@ impl<'ty> FunCx<'ty> {
         let sig = self.s.fn_sig_for(sig_id);
         self.fn_ret_ty = Some(sig.output);
 
-        let body = self.s.hir_ref().get_body(body);
-        let fn_sig_span = self.s.hir_ref().expect_fn(sig_id).0.span;
+        let body = self.s.air_ref().get_body(body);
+        let fn_sig_span = self.s.air_ref().expect_fn(sig_id).0.span;
 
         let actual_ret_ty = self.typeck_expr(body);
 
@@ -240,7 +240,7 @@ impl<'ty> FunCx<'ty> {
 
     fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
         log::trace!("entering `typeck_local`");
-        if let Some(local_ty) = self.local_tys.get(&local.hir_id) {
+        if let Some(local_ty) = self.local_tys.get(&local.air_id) {
             return *local_ty;
         }
 
@@ -253,7 +253,7 @@ impl<'ty> FunCx<'ty> {
             self.type_mismatch_err(local_decl_ty, ty, local.ty.span);
         }
 
-        self.local_tys.insert(local.hir_id, local_decl_ty);
+        self.local_tys.insert(local.air_id, local_decl_ty);
         local_decl_ty
     }
 
@@ -380,10 +380,10 @@ impl<'ty> FunCx<'ty> {
                 receiver,
                 method,
                 args,
-            } => self.typeck_expr_meth_call(receiver, method, args, expr.hir_id),
+            } => self.typeck_expr_meth_call(receiver, method, args, expr.air_id),
         };
 
-        self.node_type.insert(expr.hir_id, ty);
+        self.node_type.insert(expr.air_id, ty);
         ty
     }
 
@@ -464,18 +464,18 @@ impl<'ty> FunCx<'ty> {
         *inner_ty
     }
 
-    fn typeck_expr_literal(&mut self, lit: HirLiteral) -> Ty<'ty> {
+    fn typeck_expr_literal(&mut self, lit: AirLiteral) -> Ty<'ty> {
         match lit {
-            HirLiteral::Bool(..) => self.s.bool(),
-            HirLiteral::Uint(..) | HirLiteral::Int(..) => {
+            AirLiteral::Bool(..) => self.s.bool(),
+            AirLiteral::Uint(..) | AirLiteral::Int(..) => {
                 let new = self.new_infer_var(InferKind::Integer);
                 log::trace!("new infer ty for integer: {new:?}");
                 new
             }
 
-            HirLiteral::Str(_sym) => todo!("idk how to type strings yet"),
+            AirLiteral::Str(_sym) => todo!("idk how to type strings yet"),
 
-            HirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
+            AirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
         }
     }
 
@@ -541,10 +541,10 @@ impl<'ty> FunCx<'ty> {
                 self.s.intern_ty(TyKind::FnDef(ctor_def_id))
             }
 
-            Resolved::Local(hir_id) => {
-                let hir = self.s.hir_ref();
+            Resolved::Local(air_id) => {
+                let air = self.s.air_ref();
 
-                match hir.get_node(hir_id) {
+                match air.get_node(air_id) {
                     Node::Local(local) => self.typeck_local(local),
                     Node::FnParam(param) => self.s.lower_ty(param.ty),
 
@@ -592,7 +592,7 @@ impl<'ty> FunCx<'ty> {
         receiver: &Expr<'_>,
         method: SymbolId,
         args: &[Expr<'_>],
-        expr_hir_id: HirId,
+        expr_air_id: AirId,
     ) -> Ty<'ty> {
         let recv_ty = self.type_of(receiver);
         if recv_ty.is_error() {
@@ -624,7 +624,7 @@ impl<'ty> FunCx<'ty> {
                 return;
             };
 
-            self.resolved_method_calls.insert(expr_hir_id, def_id);
+            self.resolved_method_calls.insert(expr_air_id, def_id);
 
             ret_ty = self.verify_arguments_for_method_call(
                 def_id,
@@ -648,12 +648,12 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn type_of(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
-        if let Some(ty) = self.node_type.get(&expr.hir_id) {
+        if let Some(ty) = self.node_type.get(&expr.air_id) {
             return *ty;
         }
 
         let expr_ty = self.typeck_expr(expr);
-        self.node_type.insert(expr.hir_id, expr_ty);
+        self.node_type.insert(expr.air_id, expr_ty);
         expr_ty
     }
 
@@ -746,9 +746,9 @@ impl<'ty> FunCx<'ty> {
 
 #[derive(Debug)]
 pub struct TypeTable<'ty> {
-    expr_tys: HashMap<HirId, Ty<'ty>>,
-    resolved_method_calls: HashMap<HirId, DefId>,
-    local_variables: HashMap<HirId, Ty<'ty>>,
+    expr_tys: HashMap<AirId, Ty<'ty>>,
+    resolved_method_calls: HashMap<AirId, DefId>,
+    local_variables: HashMap<AirId, Ty<'ty>>,
 }
 
 impl<'ty> TypeTable<'ty> {
@@ -765,27 +765,27 @@ impl<'ty> TypeTable<'ty> {
     pub fn type_of(&self, expr: Expr<'_>) -> Ty<'ty> {
         log::trace!("`type_of` executed");
         self.expr_tys
-            .get(&expr.hir_id)
+            .get(&expr.air_id)
             .copied()
             .expect("expr given to `type_of` has no type assoc'd with it")
     }
 
     #[track_caller]
     #[inline]
-    pub fn local_var_ty(&self, id: HirId) -> Ty<'ty> {
+    pub fn local_var_ty(&self, id: AirId) -> Ty<'ty> {
         self.local_variables
             .get(&id)
             .copied()
-            .expect("hir id given to `local_var_ty` has no type assoc'd with it")
+            .expect("air id given to `local_var_ty` has no type assoc'd with it")
     }
 
     #[track_caller]
     #[inline]
-    pub fn resolve_method(&self, id: HirId) -> DefId {
+    pub fn resolve_method(&self, id: AirId) -> DefId {
         self.resolved_method_calls
             .get(&id)
             .copied()
-            .expect("hir id given to `resolve_method` was invalid")
+            .expect("air id given to `resolve_method` was invalid")
     }
 }
 
@@ -818,16 +818,16 @@ impl<'ty> TyCollector<'ty> {
     }
 }
 
-impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
+impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
     type Result = ();
 
     fn visit_local(&mut self, local: &'vis Local<'vis>) -> Self::Result {
         let val = self
             .cx
             .local_tys
-            .get(&local.hir_id)
+            .get(&local.air_id)
             .expect("Trying to get type of a local that isn't there?");
-        self.table.local_variables.insert(local.hir_id, *val);
+        self.table.local_variables.insert(local.air_id, *val);
     }
 
     fn visit_stmt(&mut self, stmt: &'vis Stmt<'vis>) -> Self::Result {
@@ -859,15 +859,15 @@ impl<'vis> HirVisitor<'vis> for TyCollector<'_> {
                         InferKind::Regular => todo!("regular variables aren't used yet"),
                     };
 
-                    self.table.expr_tys.insert(expr.hir_id, insert_ty);
+                    self.table.expr_tys.insert(expr.air_id, insert_ty);
                     return;
                 };
 
-                self.table.expr_tys.insert(expr.hir_id, infer_resolved);
+                self.table.expr_tys.insert(expr.air_id, infer_resolved);
             }
 
             _ => {
-                self.table.expr_tys.insert(expr.hir_id, ty);
+                self.table.expr_tys.insert(expr.air_id, ty);
             }
         }
 

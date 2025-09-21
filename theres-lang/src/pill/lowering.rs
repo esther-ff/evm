@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use crate::hir::def::{DefId, DefType, Resolved};
-use crate::hir::node::{Block, Expr, ExprKind, HirLiteral, Local, Param, StmtKind, Universe};
-use crate::hir::{HirId, HirIdMap};
+use crate::air::def::{DefId, DefType, Resolved};
+use crate::air::node::{AirLiteral, Block, Expr, ExprKind, Local, Param, StmtKind, Universe};
+use crate::air::{AirId, AirIdMap};
 use crate::pill::body::{AltarData, AltarId, Altars, IrFunc, LabelId, LabelVec, Proj};
 use crate::pill::cfg::Cfg;
 use crate::pill::instr::{InstrStream, Operand};
@@ -43,7 +43,7 @@ pub struct FnLowerer<'il> {
     altars: RefCell<Altars<'il>>,
     pub(crate) cfg: Cfg<'il>,
 
-    local_hir_ids_to_altar: RefCell<HirIdMap<AltarId>>,
+    local_air_ids_to_altar: RefCell<AirIdMap<AltarId>>,
 }
 
 impl<'il> FnLowerer<'il> {
@@ -53,14 +53,14 @@ impl<'il> FnLowerer<'il> {
             session,
             types: TypeTable::new(),
             altars: Altars::new().into(),
-            local_hir_ids_to_altar: HashMap::new().into(),
+            local_air_ids_to_altar: HashMap::new().into(),
         }
     }
 
     #[track_caller]
     pub fn lower_fn(mut self, def_id: DefId) -> IrFunc<'il> {
         self.types = self.session.typeck(def_id);
-        let hir = self.session.hir_ref();
+        let hir = self.session.air_ref();
         let (sig, name) = hir.expect_fn(def_id);
         let body = hir.get_body(sig.body);
 
@@ -74,15 +74,15 @@ impl<'il> FnLowerer<'il> {
         self.altars.borrow_mut().push(AltarData::new(ty))
     }
 
-    pub fn project_altar(&self, orig: AltarId, proj: Proj, hir_id: HirId) -> AltarId {
+    pub fn project_altar(&self, orig: AltarId, proj: Proj, air_id: AirId) -> AltarId {
         let mut altar_data = self.altars.borrow_mut();
         let mut new_data = altar_data.get(orig).unwrap().clone();
         new_data.push_proj(proj);
 
         let new_altar = altar_data.push(new_data);
-        self.local_hir_ids_to_altar
+        self.local_air_ids_to_altar
             .borrow_mut()
-            .insert(hir_id, new_altar);
+            .insert(air_id, new_altar);
 
         new_altar
     }
@@ -112,12 +112,12 @@ impl<'il> FnLowerer<'il> {
     ) -> (LabelVec<usize>, InstrStream<'il>) {
         let mut altars = self.altars.borrow_mut();
         altars.push(AltarData::new(ret_ty));
-        let mut map = self.local_hir_ids_to_altar.borrow_mut();
+        let mut map = self.local_air_ids_to_altar.borrow_mut();
 
         for input in inputs {
             let input_ty = self.session.lower_ty(input.ty);
             let altar_id = altars.push(AltarData::new(input_ty));
-            map.insert(input.hir_id, altar_id);
+            map.insert(input.air_id, altar_id);
         }
 
         block
@@ -130,11 +130,11 @@ impl<'il> FnLowerer<'il> {
                 None
             })
             .map(|local| {
-                let altar_ty = self.types.local_var_ty(local.hir_id);
-                (altars.push(AltarData::new(altar_ty)), local.hir_id)
+                let altar_ty = self.types.local_var_ty(local.air_id);
+                (altars.push(AltarData::new(altar_ty)), local.air_id)
             })
-            .for_each(|(alt_id, hir_id)| {
-                map.insert(hir_id, alt_id);
+            .for_each(|(alt_id, air_id)| {
+                map.insert(air_id, alt_id);
             });
 
         drop(altars);
@@ -143,17 +143,17 @@ impl<'il> FnLowerer<'il> {
         TacGenerator::new(self.session, self).generate(block)
     }
 
-    pub fn altar_for_hir_var(&self, hir_id: HirId) -> AltarId {
-        self.local_hir_ids_to_altar
+    pub fn altar_for_hir_var(&self, air_id: AirId) -> AltarId {
+        self.local_air_ids_to_altar
             .borrow()
-            .get(&hir_id)
+            .get(&air_id)
             .copied()
-            .expect("given `HirId` wasn't mapped to any Altar!")
+            .expect("given `AirId` wasn't mapped to any Altar!")
     }
 }
 
 pub fn lower_universe<'il>(session: &'il Session<'il>, universe: &'il Universe<'il>) {
-    use crate::hir::node::{BindItemKind, ThingKind};
+    use crate::air::node::{BindItemKind, ThingKind};
     let mut builder = IrBuilder::new(session);
 
     for thing in universe.things {
@@ -221,7 +221,7 @@ where
                 method: _, // not needed
                 args,
             } => {
-                let method_def_id = self.l.ty_table().resolve_method(expr.hir_id);
+                let method_def_id = self.l.ty_table().resolve_method(expr.air_id);
                 let altar = result.unwrap_or_else(|| {
                     let ty = self.s.fn_sig_for(method_def_id).output;
                     self.l.new_temporary(ty)
@@ -271,11 +271,11 @@ where
 
             ExprKind::Literal(literal) => {
                 let scalar = match literal {
-                    HirLiteral::Bool(bool) => Scalar::new_u8(u8::from(bool)),
-                    HirLiteral::Uint(num) => Scalar::new_u64(num),
-                    HirLiteral::Int(num) => Scalar::new_i64(num),
-                    HirLiteral::Float(_float) => Scalar::new_u8(1), // todo!
-                    HirLiteral::Str(_str) => todo!(),
+                    AirLiteral::Bool(bool) => Scalar::new_u8(u8::from(bool)),
+                    AirLiteral::Uint(num) => Scalar::new_u64(num),
+                    AirLiteral::Int(num) => Scalar::new_i64(num),
+                    AirLiteral::Float(_float) => Scalar::new_u8(1), // todo!
+                    AirLiteral::Str(_str) => todo!(),
                 };
 
                 Operand::Immediate(scalar)
@@ -359,11 +359,11 @@ where
 
             ExprKind::Path(path) => {
                 log::debug!("path.res={:#?}", path.res);
-                let Resolved::Local(hir_id) = path.res else {
+                let Resolved::Local(air_id) = path.res else {
                     unreachable!()
                 };
 
-                Operand::Variable(self.l.altar_for_hir_var(hir_id))
+                Operand::Variable(self.l.altar_for_hir_var(air_id))
             }
 
             ExprKind::Assign { variable, value } => {
@@ -414,7 +414,7 @@ where
                 field: field_id,
                 source: altar_id,
             },
-            src.hir_id,
+            src.air_id,
         );
 
         Operand::Variable(projected)
@@ -543,18 +543,18 @@ where
     }
 
     pub fn get_altar(&mut self, loc: &Local<'_>) -> AltarId {
-        self.l.altar_for_hir_var(loc.hir_id)
+        self.l.altar_for_hir_var(loc.air_id)
     }
 
     pub fn get_altar_from_variable_expr(&self, expr: &Expr<'_>) -> AltarId {
         match expr.kind {
-            ExprKind::Field { .. } => self.l.altar_for_hir_var(expr.hir_id),
+            ExprKind::Field { .. } => self.l.altar_for_hir_var(expr.air_id),
             ExprKind::Path(path) => {
-                let Resolved::Local(hir_id) = path.res else {
+                let Resolved::Local(air_id) = path.res else {
                     unreachable!("path assigned to doesn't point to a local")
                 };
 
-                self.l.altar_for_hir_var(hir_id)
+                self.l.altar_for_hir_var(air_id)
             }
 
             _ => unreachable!("not path or field expr passed to `get_altar_from_variable_expr`"),

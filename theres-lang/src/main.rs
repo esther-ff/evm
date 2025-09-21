@@ -6,11 +6,11 @@
 #![warn(clippy::correctness)]
 #![allow(dead_code)]
 
+mod air;
 mod arena;
 mod ast;
 mod driver;
 mod errors;
-mod hir;
 mod id;
 mod lexer;
 mod parser;

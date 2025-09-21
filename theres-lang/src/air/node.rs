@@ -1,9 +1,9 @@
 use crate::{
-    ast::{AssignMode, BinOp, Name, UnaryOp},
-    hir::{
+    air::{
+        AirId,
         def::{BodyId, DefId, Resolved},
-        lowering_ast::HirId,
     },
+    ast::{AssignMode, BinOp, Name, UnaryOp},
     lexer::Span,
     session::SymbolId,
 };
@@ -40,15 +40,15 @@ impl<'h> Node<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Universe<'h> {
-    pub hir_id: HirId,
+    pub air_id: AirId,
     pub things: &'h [Thing<'h>],
     pub span: Span,
 }
 
 impl<'h> Universe<'h> {
-    pub fn new(hir_id: HirId, things: &'h [Thing<'h>], span: Span) -> Self {
+    pub fn new(air_id: AirId, things: &'h [Thing<'h>], span: Span) -> Self {
         Self {
-            hir_id,
+            air_id,
             things,
             span,
         }
@@ -59,12 +59,12 @@ impl<'h> Universe<'h> {
 pub struct Expr<'h> {
     pub kind: ExprKind<'h>,
     pub span: Span,
-    pub hir_id: HirId,
+    pub air_id: AirId,
 }
 
 impl<'h> Expr<'h> {
-    pub fn new(kind: ExprKind<'h>, span: Span, hir_id: HirId) -> Self {
-        Self { kind, span, hir_id }
+    pub fn new(kind: ExprKind<'h>, span: Span, air_id: AirId) -> Self {
+        Self { kind, span, air_id }
     }
 }
 
@@ -184,7 +184,7 @@ pub enum ExprKind<'h> {
         reason: LoopDesugarKind,
     },
 
-    Literal(HirLiteral),
+    Literal(AirLiteral),
 
     List(&'h [Expr<'h>]),
 
@@ -201,7 +201,7 @@ pub enum ExprKind<'h> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum HirLiteral {
+pub enum AirLiteral {
     Bool(bool),
     Float(f64),
     Uint(u64),
@@ -214,14 +214,14 @@ pub struct Block<'h> {
     pub stmts: &'h [Stmt<'h>],
     pub expr: Option<&'h Expr<'h>>,
     pub span: Span,
-    pub hir_id: HirId,
+    pub air_id: AirId,
 }
 
 impl<'h> Block<'h> {
     pub fn new(
         span: Span,
         stmts: &'h [Stmt<'h>],
-        hir_id: HirId,
+        air_id: AirId,
         expr: Option<&'h Expr<'h>>,
     ) -> Self {
         Self {
@@ -230,7 +230,7 @@ impl<'h> Block<'h> {
             expr,
             span,
 
-            hir_id,
+            air_id,
         }
     }
 }
@@ -239,12 +239,12 @@ impl<'h> Block<'h> {
 pub struct Stmt<'h> {
     pub span: Span,
     pub kind: StmtKind<'h>,
-    pub hir_id: HirId,
+    pub air_id: AirId,
 }
 
 impl<'h> Stmt<'h> {
-    pub fn new(span: Span, kind: StmtKind<'h>, hir_id: HirId) -> Self {
-        Self { span, kind, hir_id }
+    pub fn new(span: Span, kind: StmtKind<'h>, air_id: AirId) -> Self {
+        Self { span, kind, air_id }
     }
 }
 
@@ -267,14 +267,14 @@ pub struct Local<'h> {
     pub name: Name,
     pub init: Option<&'h Expr<'h>>,
     pub ty: &'h Ty<'h>,
-    pub hir_id: HirId,
+    pub air_id: AirId,
 }
 
 impl<'h> Local<'h> {
     pub fn new(
         mutability: Constant,
         name: Name,
-        hir_id: HirId,
+        air_id: AirId,
         ty: &'h Ty<'h>,
         init: Option<&'h Expr<'h>>,
     ) -> Self {
@@ -285,7 +285,7 @@ impl<'h> Local<'h> {
             init,
             ty,
 
-            hir_id,
+            air_id,
         }
     }
 }
@@ -294,17 +294,17 @@ impl<'h> Local<'h> {
 pub struct Thing<'h> {
     pub kind: ThingKind<'h>,
     pub span: Span,
-    pub hir_id: HirId,
+    pub air_id: AirId,
     pub def_id: DefId,
 }
 
 impl<'h> Thing<'h> {
-    pub fn new(kind: ThingKind<'h>, span: Span, id: HirId, def_id: DefId) -> Self {
+    pub fn new(kind: ThingKind<'h>, span: Span, id: AirId, def_id: DefId) -> Self {
         Self {
             span,
             kind,
 
-            hir_id: id,
+            air_id: id,
             def_id,
         }
     }
@@ -328,7 +328,7 @@ pub enum ThingKind<'h> {
     Instance {
         fields: &'h [Field<'h>],
         name: Name,
-        ctor_id: (HirId, DefId),
+        ctor_id: (AirId, DefId),
     },
 
     Realm {
@@ -355,16 +355,16 @@ pub struct Bind<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BindItem<'h> {
-    pub hir_id: HirId,
+    pub air_id: AirId,
     pub def_id: DefId,
     pub span: Span,
     pub kind: BindItemKind<'h>,
 }
 
 impl<'h> BindItem<'h> {
-    pub fn new(hir_id: HirId, def_id: DefId, span: Span, kind: BindItemKind<'h>) -> Self {
+    pub fn new(air_id: AirId, def_id: DefId, span: Span, kind: BindItemKind<'h>) -> Self {
         Self {
-            hir_id,
+            air_id,
             def_id,
             span,
             kind,
@@ -414,25 +414,25 @@ impl<'h> FnSig<'h> {
 pub struct Param<'h> {
     pub name: Name,
     pub ty: &'h Ty<'h>,
-    pub hir_id: HirId,
+    pub air_id: AirId,
 }
 
 impl<'h> Param<'h> {
-    pub fn new(name: Name, ty: &'h Ty<'h>, hir_id: HirId) -> Self {
-        Self { name, ty, hir_id }
+    pub fn new(name: Name, ty: &'h Ty<'h>, air_id: AirId) -> Self {
+        Self { name, ty, air_id }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Ty<'h> {
     pub span: Span,
-    pub hir_id: HirId,
+    pub air_id: AirId,
     pub kind: TyKind<'h>,
 }
 
 impl<'a> Ty<'a> {
-    pub fn new(span: Span, hir_id: HirId, kind: TyKind<'a>) -> Self {
-        Self { span, hir_id, kind }
+    pub fn new(span: Span, air_id: AirId, kind: TyKind<'a>) -> Self {
+        Self { span, air_id, kind }
     }
 }
 
@@ -447,19 +447,19 @@ pub enum TyKind<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Path<'h> {
-    pub res: Resolved<HirId>,
+    pub res: Resolved<AirId>,
     pub segments: &'h [SymbolId],
     pub span: Span,
-    pub hir_id: HirId,
+    pub air_id: AirId,
 }
 
 impl<'h> Path<'h> {
-    pub fn new(res: Resolved<HirId>, segments: &'h [SymbolId], span: Span, hir_id: HirId) -> Self {
+    pub fn new(res: Resolved<AirId>, segments: &'h [SymbolId], span: Span, air_id: AirId) -> Self {
         Self {
             res,
             segments,
             span,
-            hir_id,
+            air_id,
         }
     }
 }
@@ -469,7 +469,7 @@ pub struct Field<'h> {
     pub mutability: Constant,
     pub name: Name,
     pub span: Span,
-    pub hir_id: HirId,
+    pub air_id: AirId,
     pub def_id: DefId,
     pub ty: &'h Ty<'h>,
 }
@@ -478,7 +478,7 @@ impl<'h> Field<'h> {
     pub fn new(
         mutability: Constant,
         span: Span,
-        hir_id: HirId,
+        air_id: AirId,
         name: Name,
         def_id: DefId,
         ty: &'h Ty<'h>,
@@ -489,7 +489,7 @@ impl<'h> Field<'h> {
             name,
 
             span,
-            hir_id,
+            air_id,
             def_id,
 
             ty,

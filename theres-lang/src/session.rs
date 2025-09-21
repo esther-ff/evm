@@ -6,12 +6,12 @@ use std::ops::Deref;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 
+use crate::air::AirMap;
+use crate::air::def::{DefId, DefType, IntTy, PrimTy, Resolved};
+use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
 use crate::arena::Arena;
-use crate::driver::{Flags, HirDump};
+use crate::driver::Flags;
 use crate::errors::DiagEmitter;
-use crate::hir::HirMap;
-use crate::hir::def::{DefId, DefType, IntTy, PrimTy, Resolved};
-use crate::hir::node::{self, BindItemKind, Field, Node, ThingKind};
 use crate::id::{IdxSlice, IdxVec};
 use crate::types::fun_cx::{FunCx, TyCollector, TypeTable};
 use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
@@ -155,7 +155,7 @@ type Pool<'a, T> = HashMap<T, Pooled<'a, T>>;
 pub struct Session<'sess> {
     arena: Arena,
 
-    hir_map: RefCell<HirMap<'sess>>,
+    air_map: RefCell<AirMap<'sess>>,
 
     types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
@@ -174,7 +174,7 @@ impl<'sess> Session<'sess> {
         Self {
             arena: Arena::new(),
             def_id_to_instance_interned: RefCell::new(HashMap::new()),
-            hir_map: RefCell::new(HirMap::new()),
+            air_map: RefCell::new(AirMap::new()),
             types: RefCell::new(Pool::new()),
             instances: RefCell::new(Pool::new()),
             fn_sigs: RefCell::new(HashMap::new()),
@@ -183,7 +183,7 @@ impl<'sess> Session<'sess> {
         }
     }
 
-    pub fn dump_hir_mode(&self) -> HirDump {
+    pub fn dump_air_mode(&self) -> crate::driver::HirDump {
         self.flags.dump_hir
     }
 
@@ -202,23 +202,23 @@ impl<'sess> Session<'sess> {
         self.diags
     }
 
-    pub fn hir_mut<F, R>(&'sess self, f: F) -> R
+    pub fn air_mut<F, R>(&'sess self, f: F) -> R
     where
-        F: FnOnce(&mut HirMap<'sess>) -> R,
+        F: FnOnce(&mut AirMap<'sess>) -> R,
     {
-        f(&mut self.hir_map.borrow_mut())
+        f(&mut self.air_map.borrow_mut())
     }
 
     #[track_caller]
-    pub fn hir<F, R>(&'sess self, f: F) -> R
+    pub fn air<F, R>(&'sess self, f: F) -> R
     where
-        F: FnOnce(&HirMap<'sess>) -> R,
+        F: FnOnce(&AirMap<'sess>) -> R,
     {
-        f(&self.hir_map.borrow())
+        f(&self.air_map.borrow())
     }
 
-    pub fn hir_ref(&self) -> Ref<'_, HirMap<'sess>> {
-        self.hir_map.borrow()
+    pub fn air_ref(&self) -> Ref<'_, AirMap<'sess>> {
+        self.air_map.borrow()
     }
 
     pub fn arena(&self) -> &Arena {
@@ -250,7 +250,7 @@ impl<'sess> Session<'sess> {
     #[track_caller]
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
         log::trace!("def_type_of def_id={def_id}");
-        self.hir(|map| match map.get_def(def_id) {
+        self.air(|map| match map.get_def(def_id) {
             Node::Thing(thing) => match thing.kind {
                 ThingKind::Fn { .. } => self.intern_ty(TyKind::FnDef(def_id)),
                 ThingKind::Instance {
@@ -290,7 +290,7 @@ impl<'sess> Session<'sess> {
     pub fn reify_fn_sig_for_ctor_of(&'sess self, def_id: DefId) {
         log::trace!("reify_fn_sig_for_ctof_of def_id={def_id}");
 
-        let instance = self.hir_ref().get_instance_of_ctor(def_id);
+        let instance = self.air_ref().get_instance_of_ctor(def_id);
         let instance_def = self.instance_def(instance);
 
         let sig = FnSig {
@@ -308,7 +308,7 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
-        self.hir_ref().is_ctor(def_id)
+        self.air_ref().is_ctor(def_id)
     }
 
     pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
@@ -328,9 +328,9 @@ impl<'sess> Session<'sess> {
     where
         F: FnOnce(Vec<node::Bind<'_>>) -> R,
     {
-        let hir = self.hir_ref();
+        let air = self.air_ref();
         work(
-            hir.nodes()
+            air.nodes()
                 .into_iter()
                 .filter_map(node::Node::get_thing)
                 .filter_map(node::Thing::get_bind)
@@ -344,8 +344,8 @@ impl<'sess> Session<'sess> {
             return *v;
         }
 
-        let hir = self.hir_ref();
-        let (fields, name) = hir.expect_instance(def_id);
+        let air = self.air_ref();
+        let (fields, name) = air.expect_instance(def_id);
 
         let instance_def = InstanceDef {
             fields: IdxSlice::new(self.arena().alloc_from_iter(fields.iter().map(|field| {
@@ -412,10 +412,10 @@ impl<'sess> Session<'sess> {
         log::trace!("`typeck` executed");
 
         let mut fun_cx = FunCx::new(self);
-        let hir = self.hir_ref();
-        let (sig, sym) = hir.expect_fn(def_id);
+        let air = self.air_ref();
+        let (sig, sym) = air.expect_fn(def_id);
 
-        let body = hir.get_body(sig.body);
+        let body = air.get_body(sig.body);
 
         log::trace!("typeck'ing function: {}", sym.get_interned());
         fun_cx.start(def_id, sig.body);
