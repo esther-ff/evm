@@ -5,8 +5,8 @@ mod private {
 pub use private::BasicBlock;
 
 use crate::{
+    air::def::DefId,
     ast::{BinOp, UnaryOp},
-    hir::def::DefId,
     pill::{body::AltarId, instr::Operand},
     types::ty::Instance,
 };

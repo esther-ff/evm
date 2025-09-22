@@ -1,4 +1,4 @@
-use crate::air::airId;
+use crate::air::AirId;
 use crate::air::def::Resolved;
 use crate::air::node::{
     self, BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Local, Param, Path, Stmt,
@@ -42,7 +42,7 @@ pub trait AirVisitor<'air>: Sized {
         walk_path(self, path)
     }
 
-    fn visit_resolved(&mut self, _: &'air Resolved<airId>) -> Self::Result {
+    fn visit_resolved(&mut self, _: &'air Resolved<AirId>) -> Self::Result {
         Self::Result::normal()
     }
 

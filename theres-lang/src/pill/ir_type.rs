@@ -1,4 +1,4 @@
-use crate::hir::def::IntTy;
+use crate::air::def::IntTy;
 
 /// Lowest level representation of a Theres type.
 pub enum IrType<'il> {

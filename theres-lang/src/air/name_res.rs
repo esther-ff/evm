@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Sub;
 
+use crate::air::Mappings;
+use crate::air::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 use crate::errors::{Phase, TheresError};
-use crate::hir::Mappings;
-use crate::hir::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
 use crate::id::IdxVec;
 use crate::session::{Session, SymbolId};
 use crate::visitor_common::VisitorResult;

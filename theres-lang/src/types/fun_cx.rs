@@ -81,9 +81,16 @@ impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub enum Obligation {
+enum Obligation {
     /// Type must be able to be negated via `!`
-    Neg,
+    Neg, // UnOp {
+         //     op: UnaryOp,
+         // },
+
+         // BinOp {
+         //     op: BinOp,
+         //     rhs: Ty<'ty>,
+         // },
 }
 
 pub struct FunCx<'ty> {

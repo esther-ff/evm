@@ -1,11 +1,11 @@
 use std::iter::once;
 
 use crate::{
-    ast::BinOp,
-    hir::{
+    air::{
         def::{DefType, Resolved},
-        node::{Expr, ExprKind, HirLiteral},
+        node::{AirLiteral, Expr, ExprKind},
     },
+    ast::BinOp,
     pill::{
         body::AltarId,
         cfg::{BasicBlock, BlockExit, Rvalue, Stmt},
@@ -53,7 +53,7 @@ impl FnLowerer<'_> {
                 method,
                 args,
             } => {
-                let method_def_id = self.ty_table().resolve_method(expr.hir_id);
+                let method_def_id = self.ty_table().resolve_method(expr.air_id);
 
                 let ty = self.session.fn_sig_for(method_def_id).output;
                 let dest = self.new_temporary(ty);
@@ -77,11 +77,11 @@ impl FnLowerer<'_> {
 
             ExprKind::Literal(lit) => {
                 let scalar = match lit {
-                    HirLiteral::Bool(bool) => Scalar::new_u8(u8::from(bool)),
-                    HirLiteral::Uint(num) => Scalar::new_u64(num),
-                    HirLiteral::Int(num) => Scalar::new_i64(num),
-                    HirLiteral::Float(_float) => todo!(),
-                    HirLiteral::Str(_str) => todo!(),
+                    AirLiteral::Bool(bool) => Scalar::new_u8(u8::from(bool)),
+                    AirLiteral::Uint(num) => Scalar::new_u64(num),
+                    AirLiteral::Int(num) => Scalar::new_i64(num),
+                    AirLiteral::Float(_float) => todo!(),
+                    AirLiteral::Str(_str) => todo!(),
                 };
 
                 Operand::Immediate(scalar)

@@ -1,5 +1,5 @@
+use crate::air::def::DefId;
 use crate::ast::{BinOp, UnaryOp};
-use crate::hir::def::DefId;
 use crate::pill::body::{AltarId, LabelId};
 use crate::pill::scalar::Scalar;
 use crate::types::fun_cx::FieldId;

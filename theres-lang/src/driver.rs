@@ -11,7 +11,7 @@ use crate::parser::Parser;
 use crate::session::Session;
 use crate::sources::{FileManager, SourceId, Sources};
 use crate::types::fun_cx::typeck_universe;
-use crate::{hir, pill};
+use crate::{air, pill};
 
 use log::{Level, Log};
 
@@ -204,7 +204,7 @@ impl Compiler {
         let ast = self.parse_to_ast(lexemes, &diags);
 
         session.enter(|session| {
-            let uni = hir::lower_universe(session, &ast);
+            let uni = air::lower_universe(session, &ast);
             typeck_universe(session, uni);
 
             pill::lowering::lower_universe(session, uni);

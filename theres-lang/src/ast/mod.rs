@@ -659,7 +659,9 @@ pub trait Visitor<'a> {
 
         try_visit!(self.visit_name(name), self.visit_ty(ty));
 
-        maybe_visit!(v: self, m: visit_expr, initializer)
+        maybe_visit!(v: self, m: visit_expr, initializer);
+
+        Self::Result::normal()
     }
 
     fn visit_ty(&mut self, val: &'a Ty) -> Self::Result {
@@ -671,9 +673,11 @@ pub trait Visitor<'a> {
 
         match kind {
             TyKind::Fn { args, ret } => {
-                try_visit!(visit_iter!(v: self, m: visit_ty, args));
+                visit_iter!(v: self, m: visit_ty, args);
 
-                maybe_visit!(v: self, m: visit_ty, ret)
+                maybe_visit!(v: self, m: visit_ty, ret);
+
+                Self::Result::normal()
             }
 
             TyKind::Array(ty) => self.visit_ty(ty),
@@ -693,7 +697,8 @@ pub trait Visitor<'a> {
         } = val;
 
         try_visit!(self.visit_ty(victim));
-        visit_iter!(v: self, m: visit_bind_item, items)
+        visit_iter!(v: self, m: visit_bind_item, items);
+        Self::Result::normal()
     }
 
     fn visit_bind_item(&mut self, val: &'a BindItem) -> Self::Result {
@@ -710,7 +715,10 @@ pub trait Visitor<'a> {
 
         match ty {
             PatType::Ident { name } => self.visit_name(name),
-            PatType::Tuple { pats } => visit_iter!(v: self, m: visit_pat, pats),
+            PatType::Tuple { pats } => {
+                visit_iter!(v: self, m: visit_pat, pats);
+                Self::Result::normal()
+            }
 
             PatType::Wild => Self::Result::normal(),
         }
@@ -721,7 +729,8 @@ pub trait Visitor<'a> {
 
         match ty {
             ExprType::Index { indexed, index } => {
-                try_visit!(self.visit_expr(indexed), self.visit_expr(index))
+                try_visit!(self.visit_expr(indexed), self.visit_expr(index));
+                Self::Result::normal()
             }
             ExprType::Break | ExprType::Constant(..) => Self::Result::normal(),
 
@@ -735,7 +744,10 @@ pub trait Visitor<'a> {
 
             ExprType::Group(e) => self.visit_expr(e),
 
-            ExprType::CommaGroup(exprs) => visit_iter!(v: self, m: visit_expr, exprs),
+            ExprType::CommaGroup(exprs) => {
+                visit_iter!(v: self, m: visit_expr, exprs);
+                Self::Result::normal()
+            }
 
             ExprType::Assign {
                 lvalue,
@@ -748,7 +760,8 @@ pub trait Visitor<'a> {
 
             ExprType::FunCall { callee, args } => {
                 try_visit!(self.visit_expr(callee));
-                visit_iter!(v: self, m: visit_expr, args)
+                visit_iter!(v: self, m: visit_expr, args);
+                Self::Result::normal()
             }
 
             ExprType::MethodCall {
@@ -792,11 +805,14 @@ pub trait Visitor<'a> {
                     self.visit_block(body);
                 }
 
-                maybe_visit!(v: self, m: visit_block, otherwise)
+                maybe_visit!(v: self, m: visit_block, otherwise);
+
+                Self::Result::normal()
             }
 
             ExprType::List(exprs) => {
-                visit_iter!(v: self, m: visit_expr, exprs)
+                visit_iter!(v: self, m: visit_expr, exprs);
+                Self::Result::normal()
             }
 
             ExprType::FieldAccess { source, field } => {
@@ -813,7 +829,10 @@ pub trait Visitor<'a> {
                 }
             }
 
-            ExprType::Return { ret } => maybe_visit!(v: self, m: visit_expr, ret),
+            ExprType::Return { ret } => {
+                maybe_visit!(v: self, m: visit_expr, ret);
+                Self::Result::normal()
+            }
 
             ExprType::Block(b) => self.visit_block(b),
         }
@@ -825,7 +844,8 @@ pub trait Visitor<'a> {
             span: _,
             id: _,
         } = val;
-        visit_iter!(v: self, m: visit_generic_param, params)
+        visit_iter!(v: self, m: visit_generic_param, params);
+        Self::Result::normal()
     }
 
     fn visit_generic_param(&mut self, val: &'a GenericParam) -> Self::Result {
@@ -837,7 +857,9 @@ pub trait Visitor<'a> {
 
         try_visit!(self.visit_name(ident));
 
-        visit_iter!(v: self, m: visit_bound, bounds)
+        visit_iter!(v: self, m: visit_bound, bounds);
+
+        Self::Result::normal()
     }
 
     fn visit_bound(&mut self, val: &'a Bound) -> Self::Result {
@@ -857,7 +879,9 @@ pub trait Visitor<'a> {
             id: _,
         } = val;
 
-        visit_iter!(v: self, m: visit_path_seg, path)
+        visit_iter!(v: self, m: visit_path_seg, path);
+
+        Self::Result::normal()
     }
 
     fn visit_path_seg(&mut self, val: &'a PathSeg) -> Self::Result {
@@ -914,7 +938,9 @@ pub trait Visitor<'a> {
         } = val;
 
         visit_iter!(v: self, m: visit_stmt, stmts);
-        maybe_visit!(v: self, m: visit_expr, expr)
+        maybe_visit!(v: self, m: visit_expr, expr);
+
+        Self::Result::normal()
     }
 
     fn visit_stmt(&mut self, val: &'a Stmt) -> Self::Result {
