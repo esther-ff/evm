@@ -81,22 +81,9 @@ impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-enum Constraint<'ty> {
-    Eq {
-        lhs: Ty<'ty>,
-        rhs: Ty<'ty>,
-    },
-
-    Unary {
-        op: UnaryOp,
-        ty: Ty<'ty>,
-    },
-
-    BinOp {
-        op: BinOp,
-        lhs: Ty<'ty>,
-        rhs: Ty<'ty>,
-    },
+pub enum Obligation {
+    /// Type must be able to be negated via `!`
+    Neg,
 }
 
 pub struct FunCx<'ty> {
@@ -114,7 +101,7 @@ pub struct FunCx<'ty> {
 
     local_tys: HashMap<AirId, Ty<'ty>>,
 
-    constraints: Vec<Constraint<'ty>>,
+    obligations: HashMap<InferId, Vec<Obligation>>,
 }
 
 pub struct UnifyError;
@@ -129,46 +116,8 @@ impl<'ty> FunCx<'ty> {
             node_type: HashMap::new(),
             resolved_method_calls: HashMap::new(),
             local_tys: HashMap::new(),
-            constraints: Vec::new(),
+            obligations: HashMap::default(),
         }
-    }
-
-    // ???
-    fn solve_constraints(&mut self) {
-        let list = mem::take(&mut self.constraints);
-
-        for constraint in list {
-            match constraint {
-                Constraint::Eq { lhs, rhs } => {
-                    // whatever
-                    if self.unify(lhs, rhs).is_err() {
-                        todo!()
-                    }
-                }
-                Constraint::Unary { op, ty } => {
-                    // IDK !
-                    todo!("unops")
-                }
-                Constraint::BinOp { op, lhs, rhs } => {
-                    // IDK !
-
-                    todo!("binops")
-                }
-            }
-        }
-        todo!()
-    }
-
-    fn eq(&mut self, l: Ty<'ty>, r: Ty<'ty>) {
-        self.constraints.push(Constraint::Eq { lhs: l, rhs: r });
-    }
-
-    fn un_op(&mut self, ty: Ty<'ty>, op: UnaryOp) {
-        self.constraints.push(Constraint::Unary { op, ty });
-    }
-
-    fn bin_op(&mut self, lhs: Ty<'ty>, rhs: Ty<'ty>, op: BinOp) {
-        self.constraints.push(Constraint::BinOp { op, lhs, rhs });
     }
 
     pub fn start(&mut self, sig_id: DefId, body: BodyId) {
@@ -193,6 +142,37 @@ impl<'ty> FunCx<'ty> {
             vid: InferId::new(id),
             kind,
         }))
+    }
+
+    fn obligation_for(&mut self, vid: InferId, oblig: Obligation) {
+        if let Some(entry) = self.obligations.get_mut(&vid) {
+            return entry.push(oblig);
+        }
+
+        self.obligations.insert(vid, vec![oblig]);
+    }
+
+    fn process_obligs_of_ty(&mut self, vid: InferId, concrete_ty: Ty<'_>) {
+        let Some(obligs) = self.obligations.get_mut(&vid) else {
+            return;
+        };
+
+        let obligations = mem::take(obligs);
+
+        // if we get more just do a match
+        // rn it's just `Neg`
+        for _obligation in &obligations {
+            if let Some(inferty) = concrete_ty.maybe_infer() {
+                self.obligation_for(inferty.vid, Obligation::Neg);
+                continue;
+            }
+
+            if !concrete_ty.is_signed_int() {
+                todo!("only signed ints can be neg")
+            }
+        }
+
+        *self.obligations.get_mut(&vid).unwrap() = obligations;
     }
 
     fn unify(&mut self, expected: Ty<'ty>, got: Ty<'ty>) -> Result<(), UnifyError> {
@@ -223,7 +203,7 @@ impl<'ty> FunCx<'ty> {
                 }
 
                 let concrete_ref = self.s.intern_ty(concrete);
-
+                self.process_obligs_of_ty(infer.vid, concrete_ref);
 
                 if let Some(ty) = self.ty_var_types.get(&infer.vid) {
                     return self.unify(*ty, concrete_ref)
@@ -434,32 +414,30 @@ impl<'ty> FunCx<'ty> {
         }
     }
 
-    fn typeck_expr_un_op(&mut self, target: &Expr<'_>, op: UnaryOp) -> Ty<'ty> {
+    fn typeck_expr_un_op(&mut self, target: &Expr<'_>, _op: UnaryOp) -> Ty<'ty> {
         let ty = self.type_of(target);
 
         if let TyKind::Bool = *ty {
             return ty;
         }
 
-        match (op, ty.0) {
-            (UnaryOp::Negation, TyKind::Int(..) | TyKind::Bool) => ty,
-            (UnaryOp::Not, ty_inner) if ty_inner.is_integer_like() => ty,
-            (op, TyKind::InferTy(infer)) if infer.is_integer() => {
-                self.un_op(ty, op);
-                ty
+        match ty.0 {
+            TyKind::Bool | TyKind::Int(..) => (),
+            TyKind::InferTy(inferty) if inferty.is_integer() => {
+                self.obligation_for(inferty.id(), Obligation::Neg);
+                return ty;
             }
-            _ => {
-                // later do some sort of operator overloading
-                self.s.diag().emit_err(
-                    TypingError::NoUnaryOp {
-                        on: self.s.stringify_ty(ty),
-                    },
-                    target.span,
-                );
-
-                self.s.ty_err()
-            }
+            _ => return ty,
         }
+
+        self.s.diag().emit_err(
+            TypingError::NoUnaryOp {
+                on: self.s.stringify_ty(ty),
+            },
+            target.span,
+        );
+
+        self.s.ty_err()
     }
 
     fn typeck_expr_index(
@@ -568,9 +546,9 @@ impl<'ty> FunCx<'ty> {
             }
 
             Resolved::Local(air_id) => {
-                let air = self.s.air_ref();
+                let hir = self.s.air_ref();
 
-                match air.get_node(air_id) {
+                match hir.get_node(air_id) {
                     Node::Local(local) => self.typeck_local(local),
                     Node::FnParam(param) => self.s.lower_ty(param.ty),
 
@@ -802,7 +780,7 @@ impl<'ty> TypeTable<'ty> {
         self.local_variables
             .get(&id)
             .copied()
-            .expect("air id given to `local_var_ty` has no type assoc'd with it")
+            .expect("hir id given to `local_var_ty` has no type assoc'd with it")
     }
 
     #[track_caller]
@@ -811,7 +789,7 @@ impl<'ty> TypeTable<'ty> {
         self.resolved_method_calls
             .get(&id)
             .copied()
-            .expect("air id given to `resolve_method` was invalid")
+            .expect("hir id given to `resolve_method` was invalid")
     }
 }
 

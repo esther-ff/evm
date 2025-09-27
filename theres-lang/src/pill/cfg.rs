@@ -50,6 +50,11 @@ pub enum Stmt<'il> {
         args: Vec<Operand>,
     },
 
+    // TailCall {
+    //     fun: Operand,
+    //     ret: AltarId,
+    //     args: Vec<Operand>,
+    // }
     Nop,
 
     LocalLive(AltarId),

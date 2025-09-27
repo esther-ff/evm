@@ -338,9 +338,8 @@ impl<'air> AstLowerer<'air> {
     ///
     /// Panics if the same `AstId` is again used for this function
     /// as it maps `AstId`s to `AirId`s for lowering `Resolved`s
-    #[track_caller]
     pub fn next_air_id(&mut self, ast_id: AstId) -> AirId {
-        log::trace!("next_air_id ast_id={} loc={}", ast_id, Location::caller());
+        log::trace!("next_air_id ast_id={}", ast_id);
 
         let air_id = AirId::new(self.air_id_counter);
         self.air_id_counter += 1;
@@ -348,10 +347,9 @@ impl<'air> AstLowerer<'air> {
 
         assert!(
             ret.is_none(),
-            "duplicate `AstId` given to `next_air_id` ({} -> {})\nat loc: {:?}",
+            "duplicate `AstId` given to `next_air_id` ({} -> {})\n",
             ast_id,
             ret.unwrap(),
-            Location::caller()
         );
 
         if let Some(def_id) = self.map.ast_id_to_def_id.get(&ast_id) {
