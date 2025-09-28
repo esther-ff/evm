@@ -11,7 +11,6 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub enum Node<'h> {
     Local(&'h Local<'h>),
-
     BindItem(&'h BindItem<'h>),
     Thing(&'h Thing<'h>),
     Expr(&'h Expr<'h>),
@@ -128,12 +127,24 @@ pub enum LoopDesugarKind {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct Lambda<'h> {
+    pub did: DefId,
+    pub inputs: &'h [Ty<'h>],
+
+    // if `None` - infer return
+    // if `Some` typeck against the type
+    pub output: Option<Ty<'h>>,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum ExprKind<'h> {
     Binary {
         lhs: &'h Expr<'h>,
         rhs: &'h Expr<'h>,
         op: BinOp,
     },
+
+    Lambda(&'h Lambda<'h>),
 
     Unary {
         target: &'h Expr<'h>,
