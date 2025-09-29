@@ -129,7 +129,7 @@ pub enum LoopDesugarKind {
 #[derive(Debug, Clone, Copy)]
 pub struct Lambda<'h> {
     pub did: DefId,
-    pub inputs: &'h [Ty<'h>],
+    pub inputs: &'h [Param<'h>],
 
     // if `None` - infer return
     // if `Some` typeck against the type

@@ -499,24 +499,36 @@ impl<'air> AstLowerer<'air> {
             },
 
             ExprType::Lambda { args, body } => {
-                // help
-                let desc = Lambda {
-                    did: self.map.def_id_of(expr.id),
-                    inputs: self.session.arena().alloc_from_iter(args.iter().map(|arg| {
-                        // Param::new(
-                        //     arg.ident,
-                        //     self.lower_ty(arg.ty.as_ref().expect("fn args must have types")),
-                        //     self.next_air_id(arg.id),
-                        // )
+                let did = self.map.def_id_of(expr.id);
+                let body_block = match body {
+                    LambdaBody::Block(block) => {
+                        let lowered_block = self.lower_block(block);
 
-                        // arg.ty.map_or(node::Ty { span: Span::DUMMY, air_id: AirId, kind: () }, f)
-                        todo!()
+                        self.session.arena().alloc(node::Expr::new(
+                            node::ExprKind::Block(lowered_block),
+                            lowered_block.span,
+                            lowered_block.air_id,
+                        ))
+                    }
+
+                    LambdaBody::Expr(expr) => self.lower_expr(expr),
+                };
+
+                let body = self
+                    .session
+                    .air_mut(|air| air.insert_body_of(body_block, did));
+
+                let lambda_desc = Lambda {
+                    did,
+                    inputs: self.session.arena().alloc_from_iter(args.iter().map(|arg| {
+                        let id = self.next_air_id(arg.id);
+                        Param::new(arg.ident, self.lower_ty(&arg.ty), id)
                     })),
-                    body: BodyId::DUMMY,
+                    body,
                     output: None,
                 };
 
-                todo!("lowering a lambda")
+                node::ExprKind::Lambda(self.session.arena().alloc(lambda_desc))
             }
 
             ExprType::FieldAccess { source, field } => node::ExprKind::Field {
@@ -709,16 +721,16 @@ impl<'air> AstLowerer<'air> {
     }
 
     fn lower_ty(&mut self, ty: &Ty) -> &'air node::Ty<'air> {
+        self.session.arena().alloc(self.lower_ty_noalloc(ty))
+    }
+
+    fn lower_ty_noalloc(&mut self, ty: &Ty) -> node::Ty<'air> {
         let kind = match &ty.kind {
             TyKind::Fn { args: _, ret: _ } => todo!(),
             TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(inner)),
             TyKind::MethodSelf => {
                 if let Some(bind_ty) = self.current_bind_ty {
-                    return self.session.arena().alloc(node::Ty::new(
-                        ty.span,
-                        self.next_air_id(ty.id),
-                        bind_ty.kind,
-                    ));
+                    return node::Ty::new(ty.span, self.next_air_id(ty.id), bind_ty.kind);
                 }
 
                 log::error!("self ty outside bind");
@@ -729,8 +741,7 @@ impl<'air> AstLowerer<'air> {
             TyKind::Infer => node::TyKind::Infer,
         };
 
-        let ty = node::Ty::new(ty.span, self.next_air_id(ty.id), kind);
-        self.session.arena().alloc(ty)
+        node::Ty::new(ty.span, self.next_air_id(ty.id), kind)
     }
 
     fn lower_path(&mut self, path: &Path) -> &'air node::Path<'air> {
