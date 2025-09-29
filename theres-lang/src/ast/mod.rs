@@ -217,7 +217,7 @@ pub enum ExprType {
     List(Vec<Expr>),
 
     Lambda {
-        args: Vec<Pat>,
+        args: Vec<Arg>,
         body: LambdaBody,
     },
 
@@ -304,6 +304,9 @@ pub enum TyKind {
     /// `self` argument
     /// in methods
     MethodSelf,
+
+    /// Inference!
+    Infer,
 
     /// failed parsing
     Err,
@@ -684,7 +687,7 @@ pub trait Visitor<'a> {
 
             TyKind::Path(p) => self.visit_path(p),
 
-            TyKind::MethodSelf | TyKind::Err => Self::Result::normal(),
+            TyKind::MethodSelf | TyKind::Infer | TyKind::Err => Self::Result::normal(),
         }
     }
 
@@ -744,7 +747,7 @@ pub trait Visitor<'a> {
 
             ExprType::Group(e) => self.visit_expr(e),
 
-            ExprType::CommaGroup(exprs) => {
+            ExprType::CommaGroup(exprs) | ExprType::List(exprs) => {
                 visit_iter!(v: self, m: visit_expr, exprs);
                 Self::Result::normal()
             }
@@ -810,18 +813,15 @@ pub trait Visitor<'a> {
                 Self::Result::normal()
             }
 
-            ExprType::List(exprs) => {
-                visit_iter!(v: self, m: visit_expr, exprs);
-                Self::Result::normal()
-            }
-
             ExprType::FieldAccess { source, field } => {
                 try_visit!(self.visit_expr(source));
                 self.visit_name(field)
             }
 
             ExprType::Lambda { args, body } => {
-                visit_iter!(v: self, m: visit_pat, args);
+                for args in args {
+                    self.visit_arg(args);
+                }
 
                 match body {
                     LambdaBody::Block(b) => self.visit_block(b),

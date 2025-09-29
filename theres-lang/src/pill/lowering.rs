@@ -211,6 +211,7 @@ where
     #[allow(clippy::too_many_lines)]
     pub fn handle_expr(&mut self, expr: &Expr<'_>, result: Option<AltarId>) -> Operand {
         match expr.kind {
+            ExprKind::Lambda(..) => todo!(),
             ExprKind::Index {
                 index: _,
                 indexed_thing: _,

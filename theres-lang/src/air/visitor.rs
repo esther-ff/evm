@@ -92,9 +92,16 @@ pub fn walk_ty<'vis, V: AirVisitor<'vis>>(v: &mut V, ty: &'vis Ty<'vis>) -> V::R
     } = ty;
 
     match kind {
-        TyKind::MethodSelf | TyKind::Err => V::Result::normal(),
+        TyKind::Err => V::Result::normal(),
+        TyKind::Fun { inputs, output } => {
+            visit_iter!(v: v, m: visit_ty, *inputs);
+            maybe_visit!(v: v, m: visit_ty, *output);
+
+            V::Result::normal()
+        }
         TyKind::Array(ty) => v.visit_ty(ty),
         TyKind::Path(path) => v.visit_path(path),
+        TyKind::Infer => V::Result::normal(),
     }
 }
 
@@ -250,6 +257,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
     } = expr;
 
     match kind {
+        ExprKind::Lambda(lambda) => todo!("walk lambda"),
         ExprKind::Binary { lhs, rhs, op: _ } => {
             try_visit!(v.visit_expr(lhs), v.visit_expr(rhs));
         }

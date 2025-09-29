@@ -16,7 +16,7 @@ crate::newtyped_index!(AstId, AstIdMap, AstIdVec);
 
 type Result<T, E = ParseError> = core::result::Result<T, E>;
 
-pub enum ParseOutput {
+enum ParseOutput {
     Failed,
     Normal,
 }
@@ -35,18 +35,24 @@ pub enum ParseError {
     InvalidPattern,
 }
 
-pub enum FunctionPart {
+enum FunctionPart {
     Signature(FnSig),
     Full(FnDecl),
 }
 
-pub enum ExprOrStmt {
+enum ExprOrStmt {
     Stmt(Stmt),
     Expr(Expr),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum NeedTy {
+    Yes,
+    No,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum VariableReq {
+enum VariableReq {
     None,
     ConstAndInit,
 }
@@ -93,6 +99,10 @@ impl<'a> Parser<'a> {
             thingies: self.decls,
             span: Span::DUMMY,
         }
+    }
+
+    fn is_next(&self, tok: TokenKind) -> bool {
+        self.lexemes.peek_token().kind == tok
     }
 
     fn declaration(&mut self) -> Result<ThingKind> {
@@ -205,7 +215,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub fn parse_function_type(&mut self) -> Result<Ty> {
+    fn parse_function_type(&mut self) -> Result<Ty> {
         let fun_ident = self.expect_token(TokenKind::Function)?;
         self.expect_token(TokenKind::LeftParen)?;
 
@@ -229,7 +239,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub fn parse_array_type(&mut self) -> Result<Ty> {
+    fn parse_array_type(&mut self) -> Result<Ty> {
         let left_sq = self.expect_token(TokenKind::LeftSqBracket)?;
         let ty = self.ty().map(Box::new)?;
 
@@ -302,21 +312,31 @@ impl<'a> Parser<'a> {
         }
 
         if self.lexemes.peek_token().kind != TokenKind::RightParen {
-            args.push(self.arg()?);
+            args.push(self.arg(NeedTy::Yes)?);
 
             while self.consume_if(TokenKind::Comma) {
-                args.push(self.arg()?);
+                args.push(self.arg(NeedTy::Yes)?);
             }
         }
 
         Ok(args)
     }
 
-    fn arg(&mut self) -> Result<Arg> {
+    fn arg(&mut self, req: NeedTy) -> Result<Arg> {
         let name = self.expect_ident_as_name()?;
 
-        self.expect_token(TokenKind::Colon)?;
-        let ty = self.ty()?;
+        let ty = match req {
+            NeedTy::No => Ty {
+                kind: TyKind::Infer,
+                id: self.new_id(),
+                span: Span::DUMMY,
+            },
+            NeedTy::Yes => {
+                self.expect_token(TokenKind::Colon)?;
+                self.ty()?
+            }
+        };
+
         let id = self.new_id();
         Ok(Arg::new(name, ty, id))
     }
@@ -343,7 +363,8 @@ impl<'a> Parser<'a> {
                     id: self.new_id(),
                     kind: TyKind::MethodSelf,
                     span: tok.span,
-                },
+                }
+                .into(),
                 self.new_id(),
             );
 
@@ -742,23 +763,23 @@ impl<'a> Parser<'a> {
 
     pub fn lambda_expr(&mut self) -> Result<Expr> {
         let slash = self.expect(TokenKind::Backslash);
+        let mut args = Vec::new();
 
-        let pat = self.pat()?;
-        let mut args = vec![pat];
-        while self.consume_if(TokenKind::Comma) {
-            args.push(self.pat()?);
+        if !self.is_next(t!(RightArrow)) {
+            args.push(self.arg(NeedTy::No)?);
+            while self.consume_if(TokenKind::Comma) {
+                args.push(self.arg(NeedTy::No)?);
+            }
         }
 
         self.expect(TokenKind::RightArrow);
-
-        let body = if self.lexemes.peek_token().kind == TokenKind::LeftCurlyBracket {
+        let body = if self.is_next(t!(LeftCurlyBracket)) {
             LambdaBody::Block(self.block()?)
         } else {
             LambdaBody::Expr(self.expression().map(Box::new)?)
         };
 
         let span = Span::between(slash.span, body.span());
-
         Ok(Expr {
             ty: ExprType::Lambda { args, body },
             id: self.new_id(),
@@ -1156,7 +1177,6 @@ impl<'a> Parser<'a> {
         Ok(lvalue)
     }
 
-    #[track_caller]
     fn fun_call(&mut self) -> Result<Expr> {
         let callee = self.primary()?;
 
@@ -1356,7 +1376,6 @@ impl<'a> Parser<'a> {
     }
 
     // except eof
-    #[track_caller]
     fn expect_token(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
         let tok = self.expect_any_token()?;
 

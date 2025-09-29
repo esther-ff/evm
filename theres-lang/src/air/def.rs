@@ -31,6 +31,9 @@ pub enum DefType {
 
     /// Constructor of an `instance`
     AdtCtor,
+
+    /// Enviroment of a lambda
+    Lambda,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]

@@ -112,7 +112,6 @@ struct FirstPass<'cx> {
     scopes: ScopeVec<ScopeData>,
     path: Vec<Scope>,
     current_scope: Scope,
-    // sym_defs: SymbolMap<DefId>,
     did_defs: DefVec<DefType>,
     realm_scopes: DefMap<(ScopeVec<ScopeData>, Vec<Scope>)>,
 
@@ -338,6 +337,16 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
             }
         });
     }
+
+    fn visit_expr(&mut self, val: &'vis Expr) -> Self::Result {
+        if let ExprType::Lambda { body, .. } = &val.ty {
+            self.define(val.id, DefType::Lambda, Name::DUMMY);
+            match body {
+                LambdaBody::Block(bl) => self.visit_block(bl),
+                LambdaBody::Expr(expr) => self.with_new_scope(|this| this.visit_expr(expr)),
+            }
+        }
+    }
 }
 
 struct SecondPass<'cx> {
@@ -457,8 +466,6 @@ impl<'cx> SecondPass<'cx> {
             let seg_name = segment.name.interned;
 
             if segment_ix == segments.len().sub(1) {
-                // println!("Exiting here");
-                // dbg!(&explored[scope]);
                 ret = explored[scope].get(last, seg_name).unwrap_or(Resolved::Err);
 
                 if ret.is_err() {
@@ -501,19 +508,15 @@ impl<'cx> SecondPass<'cx> {
         ret
     }
 
-    #[track_caller]
     fn path_forward(&mut self) {
-        self.current_scope = self.path.next().unwrap();
+        self.current_scope = self.path.next().expect("went beyond the path");
     }
 
-    #[track_caller]
-    #[inline]
     fn current_item(&self) -> AstId {
         self.current_item.expect("not inside of an item!")
     }
 
     #[track_caller]
-    #[inline]
     fn get_def_id(&self, ast_id: AstId) -> DefId {
         self.maps.def_id_of(ast_id)
     }
@@ -794,8 +797,23 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
             ExprType::FieldAccess { source, field: _ } => self.visit_expr(source),
 
-            ExprType::Lambda { args: _, body: _ } => {
-                todo!("lambda")
+            ExprType::Lambda { args, body } => {
+                for arg in args {
+                    self.visit_ty(&arg.ty)
+                }
+
+                self.arg_stack.extend(
+                    args.iter()
+                        .map(|arg| (arg.ident.interned, Resolved::Local(arg.id))),
+                );
+
+                match body {
+                    LambdaBody::Block(bl) => self.visit_block(bl),
+                    LambdaBody::Expr(expr) => {
+                        self.path_forward();
+                        self.visit_expr(expr);
+                    }
+                }
             }
 
             ExprType::Constant(..) | ExprType::Break => (),
@@ -847,12 +865,13 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
             }
 
             TyKind::MethodSelf => {
-                let Some(_cur) = self.current_bind_item else {
-                    todo!("self ty outside bind!");
+                // just not to fail silenty
+                let Some(..) = self.current_bind_item else {
+                    unreachable!("self ty outside bind!");
                 };
             }
 
-            TyKind::Err => (), // explicit matching in case i add smth new
+            TyKind::Err | TyKind::Infer => (), // explicit matching in case i add smth new
         }
     }
 

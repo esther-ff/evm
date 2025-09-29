@@ -1,8 +1,8 @@
 use crate::air::AirId;
 use crate::air::def::{BodyId, DefId, DefType, Resolved};
 use crate::air::node::{
-    AirLiteral, BindItemKind, Block, Expr, ExprKind, Local, Node, Path, Stmt, StmtKind, Thing,
-    ThingKind, Universe,
+    AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Node, Path, Stmt, StmtKind,
+    Thing, ThingKind, Universe,
 };
 use crate::air::visitor::AirVisitor;
 use crate::ast::{BinOp, UnaryOp};
@@ -278,6 +278,7 @@ impl<'ty> FunCx<'ty> {
     fn typeck_expr(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
         log::trace!("entering `typeck_expr`");
         let ty = match expr.kind {
+            ExprKind::Lambda(lambda) => self.typeck_lambda(lambda),
             ExprKind::Literal(lit) => self.typeck_expr_literal(lit),
             ExprKind::Binary { lhs, rhs, op } => self.typeck_expr_bin_op(lhs, rhs, op),
             ExprKind::Unary { target, op } => self.typeck_expr_un_op(target, op),
@@ -481,6 +482,10 @@ impl<'ty> FunCx<'ty> {
 
             AirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
         }
+    }
+
+    fn typeck_lambda(&mut self, lambda: &Lambda<'_>) -> Ty<'ty> {
+        todo!()
     }
 
     fn typeck_expr_if(
@@ -875,84 +880,11 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
             }
         }
 
-        match &expr.kind {
-            ExprKind::Binary { lhs, rhs, op: _ } => {
-                self.visit_expr(lhs);
-                self.visit_expr(rhs);
-            }
-
-            ExprKind::Unary { target, op: _ } => self.visit_expr(target),
-
-            ExprKind::Assign { variable, value }
-            | ExprKind::AssignWithOp {
-                variable,
-                value,
-                op: _,
-            } => {
-                self.visit_expr(variable);
-                self.visit_expr(value);
-            }
-
-            ExprKind::Call { function, args } => {
-                self.visit_expr(function);
-                crate::visit_iter!(v: self, m: visit_expr, *args);
-            }
-
-            ExprKind::MethodCall {
-                receiver,
-                method: _,
-                args,
-            } => try_visit!(
-                self.visit_expr(receiver),
-                crate::visit_iter!(v: self, m: visit_expr, *args)
-            ),
-
-            ExprKind::Block(block) => {
-                crate::visit_iter!(v: self, m: visit_stmt, block.stmts);
-                log::debug!("block stmts: {:#?}", block.stmts);
-                crate::maybe_visit!(v: self, m: visit_expr, block.expr);
-            }
-
-            ExprKind::If {
-                condition,
-                block,
-                else_,
-            } => {
-                self.visit_expr(condition);
-                self.visit_block(block);
-
-                crate::maybe_visit!(v: self, m: visit_expr, else_);
-            }
-
-            ExprKind::Return { expr } => crate::maybe_visit!(v: self, m: visit_expr, expr),
-
-            ExprKind::Field { src, field: _ } => self.visit_expr(src),
-
-            ExprKind::Loop { body, reason: _ } => self.visit_block(body),
-
-            ExprKind::List(exprs) => {
-                crate::visit_iter!(v: self, m: visit_expr, *exprs);
-            }
-
-            ExprKind::Index {
-                index,
-                indexed_thing,
-            } => {
-                self.visit_expr(index);
-                self.visit_expr(indexed_thing);
-            }
-
-            ExprKind::CommaSep(exprs) => crate::visit_iter!(v: self, m: visit_expr, *exprs),
-
-            ExprKind::Path(path) => self.visit_path(path),
-
-            ExprKind::Literal(..) | ExprKind::Break => Self::Result::normal(),
-        }
+        crate::air::visitor::walk_expr(self, expr)
     }
 }
 
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
-    log::trace!("typeck_universe");
     ItemGatherer::new(session).visit_universe(universe);
 
     for thing in universe.things {
@@ -971,6 +903,4 @@ pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>)
             _ => {}
         }
     }
-
-    log::trace!("typeck_universe exited");
 }

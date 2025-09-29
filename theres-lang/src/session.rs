@@ -374,7 +374,11 @@ impl<'sess> Session<'sess> {
         'sess: 'a,
     {
         let tykind = match ty.kind {
-            node::TyKind::MethodSelf => todo!("get rid of this"),
+            node::TyKind::Fun {
+                inputs: _,
+                output: _,
+            } => todo!(),
+            node::TyKind::Infer => panic!("lowered an Infer ty"),
             node::TyKind::Err => TyKind::Error,
             node::TyKind::Array(array_ty) => TyKind::Array(self.lower_ty(array_ty)),
             node::TyKind::Path(path) => match path.res {

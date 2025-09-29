@@ -7,7 +7,7 @@ use crate::ast::*;
 
 use crate::air;
 use crate::air::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
-use crate::air::node::{self, Constant, ExprKind, Node, Param};
+use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
 use crate::lexer::Span;
@@ -339,7 +339,7 @@ impl<'air> AstLowerer<'air> {
     /// Panics if the same `AstId` is again used for this function
     /// as it maps `AstId`s to `AirId`s for lowering `Resolved`s
     pub fn next_air_id(&mut self, ast_id: AstId) -> AirId {
-        log::trace!("next_air_id ast_id={}", ast_id);
+        log::trace!("next_air_id ast_id={ast_id}");
 
         let air_id = AirId::new(self.air_id_counter);
         self.air_id_counter += 1;
@@ -498,7 +498,26 @@ impl<'air> AstLowerer<'air> {
                 expr: ret.as_ref().map(|expr| self.lower_expr(expr)),
             },
 
-            ExprType::Lambda { args: _, body: _ } => todo!("Lambdas in air!"),
+            ExprType::Lambda { args, body } => {
+                // help
+                let desc = Lambda {
+                    did: self.map.def_id_of(expr.id),
+                    inputs: self.session.arena().alloc_from_iter(args.iter().map(|arg| {
+                        // Param::new(
+                        //     arg.ident,
+                        //     self.lower_ty(arg.ty.as_ref().expect("fn args must have types")),
+                        //     self.next_air_id(arg.id),
+                        // )
+
+                        // arg.ty.map_or(node::Ty { span: Span::DUMMY, air_id: AirId, kind: () }, f)
+                        todo!()
+                    })),
+                    body: BodyId::DUMMY,
+                    output: None,
+                };
+
+                todo!("lowering a lambda")
+            }
 
             ExprType::FieldAccess { source, field } => node::ExprKind::Field {
                 src: self.lower_expr(source),
@@ -707,6 +726,7 @@ impl<'air> AstLowerer<'air> {
             }
             TyKind::Path(path) => node::TyKind::Path(self.lower_path(path)),
             TyKind::Err => node::TyKind::Err,
+            TyKind::Infer => node::TyKind::Infer,
         };
 
         let ty = node::Ty::new(ty.span, self.next_air_id(ty.id), kind);

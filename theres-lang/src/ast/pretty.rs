@@ -344,6 +344,7 @@ fn ty_kind_to_string(kind: &TyKind) -> String {
         TyKind::Array(ty) => ty_kind_to_string(&ty.kind),
 
         TyKind::Err => "{type err}".to_string(),
+        TyKind::Infer => "{infer}".to_string(),
     }
 }
 

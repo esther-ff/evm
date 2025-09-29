@@ -134,6 +134,7 @@ pub struct Lambda<'h> {
     // if `None` - infer return
     // if `Some` typeck against the type
     pub output: Option<Ty<'h>>,
+    pub body: BodyId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -449,9 +450,14 @@ impl<'a> Ty<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum TyKind<'h> {
-    MethodSelf,
     Array(&'h Ty<'h>),
     Path(&'h Path<'h>),
+    Fun {
+        inputs: &'h [Ty<'h>],
+        output: Option<&'h Ty<'h>>,
+    },
+
+    Infer,
 
     Err,
 }
