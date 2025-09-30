@@ -1,8 +1,8 @@
 use crate::air::AirId;
 use crate::air::def::Resolved;
 use crate::air::node::{
-    self, BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Local, Param, Path, Stmt,
-    StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
+    self, BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Lambda, Local, Param, Path,
+    Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
 };
 use crate::visitor_common::VisitorResult;
 use crate::{maybe_visit, try_visit, visit_iter};
@@ -92,7 +92,7 @@ pub fn walk_ty<'vis, V: AirVisitor<'vis>>(v: &mut V, ty: &'vis Ty<'vis>) -> V::R
     } = ty;
 
     match kind {
-        TyKind::Err => V::Result::normal(),
+        TyKind::Err | TyKind::Infer => V::Result::normal(),
         TyKind::Fun { inputs, output } => {
             visit_iter!(v: v, m: visit_ty, *inputs);
             maybe_visit!(v: v, m: visit_ty, *output);
@@ -101,7 +101,6 @@ pub fn walk_ty<'vis, V: AirVisitor<'vis>>(v: &mut V, ty: &'vis Ty<'vis>) -> V::R
         }
         TyKind::Array(ty) => v.visit_ty(ty),
         TyKind::Path(path) => v.visit_path(path),
-        TyKind::Infer => V::Result::normal(),
     }
 }
 
@@ -110,7 +109,7 @@ pub fn walk_fn_sig<'vis, V: AirVisitor<'vis>>(v: &mut V, fn_sig: &'vis FnSig<'vi
         span: _,
         return_type,
         arguments,
-        body,
+        body: _,
     } = fn_sig;
 
     try_visit!(v.visit_ty(return_type));
@@ -257,7 +256,17 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
     } = expr;
 
     match kind {
-        ExprKind::Lambda(lambda) => todo!("walk lambda"),
+        ExprKind::Lambda(lambda) => {
+            let Lambda {
+                did: _,
+                inputs,
+                output,
+                body: _,
+            } = lambda;
+
+            visit_iter!(v: v, m: visit_param, *inputs);
+            maybe_visit!(v: v, m: visit_ty, output);
+        }
         ExprKind::Binary { lhs, rhs, op: _ } => {
             try_visit!(v.visit_expr(lhs), v.visit_expr(rhs));
         }
@@ -275,7 +284,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
 
         ExprKind::Call { function, args } => {
             try_visit!(v.visit_expr(function));
-            visit_iter!(v: v, m: visit_expr, *args)
+            visit_iter!(v: v, m: visit_expr, *args);
         }
 
         ExprKind::MethodCall {
@@ -284,7 +293,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
             args,
         } => {
             try_visit!(v.visit_expr(receiver));
-            visit_iter!(v: v, m: visit_expr, *args)
+            visit_iter!(v: v, m: visit_expr, *args);
         }
 
         ExprKind::Block(block) => return v.visit_block(block),
@@ -296,7 +305,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
         } => {
             try_visit!(v.visit_expr(condition), v.visit_block(block));
 
-            maybe_visit!(v: v, m: visit_expr, else_)
+            maybe_visit!(v: v, m: visit_expr, else_);
         }
 
         ExprKind::Return { expr } => maybe_visit!(v: v, m: visit_expr, expr),
@@ -311,13 +320,13 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
         } => try_visit!(v.visit_expr(index), v.visit_expr(indexed_thing)),
 
         ExprKind::CommaSep(exprs) | ExprKind::List(exprs) => {
-            visit_iter!(v: v, m: visit_expr, *exprs)
+            visit_iter!(v: v, m: visit_expr, *exprs);
         }
 
         ExprKind::Path(path) => return v.visit_path(path),
 
         ExprKind::Literal(..) | ExprKind::Break => (),
-    };
+    }
 
     V::Result::normal()
 }
