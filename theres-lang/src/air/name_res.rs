@@ -341,11 +341,13 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
     fn visit_expr(&mut self, val: &'vis Expr) -> Self::Result {
         if let ExprType::Lambda { body, .. } = &val.ty {
             self.define(val.id, DefType::Lambda, Name::DUMMY);
-            match body {
+            return match body {
                 LambdaBody::Block(bl) => self.visit_block(bl),
                 LambdaBody::Expr(expr) => self.with_new_scope(|this| this.visit_expr(expr)),
-            }
+            };
         }
+
+        crate::ast::walk_expr(self, val);
     }
 }
 
@@ -381,6 +383,8 @@ impl<'cx> SecondPass<'cx> {
             did_ast_id,
             thing_ast_id: _,
         } = resolver;
+
+        dbg!(&path);
 
         Self {
             cx,
@@ -799,7 +803,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
             ExprType::Lambda { args, body } => {
                 for arg in args {
-                    self.visit_ty(&arg.ty)
+                    self.visit_ty(&arg.ty);
                 }
 
                 self.arg_stack.extend(
@@ -811,6 +815,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                     LambdaBody::Block(bl) => self.visit_block(bl),
                     LambdaBody::Expr(expr) => {
                         self.path_forward();
+                        // add args to scope
                         self.visit_expr(expr);
                     }
                 }

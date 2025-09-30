@@ -592,7 +592,7 @@ impl Name {
     }
 }
 
-pub trait Visitor<'a> {
+pub trait Visitor<'a>: Sized {
     type Result: VisitorResult;
 
     fn visit_realm(&mut self, val: &'a Realm) -> Self::Result {
@@ -728,114 +728,7 @@ pub trait Visitor<'a> {
     }
 
     fn visit_expr(&mut self, val: &'a Expr) -> Self::Result {
-        let Expr { ty, span: _, id: _ } = val;
-
-        match ty {
-            ExprType::Index { indexed, index } => {
-                try_visit!(self.visit_expr(indexed), self.visit_expr(index));
-                Self::Result::normal()
-            }
-            ExprType::Break | ExprType::Constant(..) => Self::Result::normal(),
-
-            ExprType::BinaryExpr { lhs, rhs, op: _ } => {
-                try_visit!(self.visit_expr(lhs), self.visit_expr(rhs));
-
-                Self::Result::normal()
-            }
-
-            ExprType::UnaryExpr { op: _, target } => self.visit_expr(target),
-
-            ExprType::Group(e) => self.visit_expr(e),
-
-            ExprType::CommaGroup(exprs) | ExprType::List(exprs) => {
-                visit_iter!(v: self, m: visit_expr, exprs);
-                Self::Result::normal()
-            }
-
-            ExprType::Assign {
-                lvalue,
-                rvalue,
-                mode: _,
-            } => {
-                try_visit!(self.visit_expr(lvalue));
-                self.visit_expr(rvalue)
-            }
-
-            ExprType::FunCall { callee, args } => {
-                try_visit!(self.visit_expr(callee));
-                visit_iter!(v: self, m: visit_expr, args);
-                Self::Result::normal()
-            }
-
-            ExprType::MethodCall {
-                receiver,
-                args,
-                name,
-            } => {
-                try_visit!(self.visit_expr(receiver));
-                visit_iter!(v: self, m: visit_expr, args);
-                self.visit_name(name)
-            }
-
-            ExprType::Path(p) => self.visit_path(p),
-
-            ExprType::While { cond, body } | ExprType::Until { cond, body } => {
-                try_visit!(self.visit_expr(cond));
-                self.visit_block(body)
-            }
-
-            ExprType::For {
-                iterable,
-                pat,
-                body,
-            } => {
-                try_visit!(self.visit_expr(iterable), self.visit_pat(pat));
-                self.visit_block(body)
-            }
-
-            ExprType::Loop { body } => self.visit_block(body),
-
-            ExprType::If {
-                cond,
-                if_block,
-                else_ifs,
-                otherwise,
-            } => {
-                try_visit!(self.visit_expr(cond), self.visit_block(if_block));
-
-                for ElseIf { cond, body } in else_ifs {
-                    self.visit_expr(cond);
-                    self.visit_block(body);
-                }
-
-                maybe_visit!(v: self, m: visit_block, otherwise);
-
-                Self::Result::normal()
-            }
-
-            ExprType::FieldAccess { source, field } => {
-                try_visit!(self.visit_expr(source));
-                self.visit_name(field)
-            }
-
-            ExprType::Lambda { args, body } => {
-                for args in args {
-                    self.visit_arg(args);
-                }
-
-                match body {
-                    LambdaBody::Block(b) => self.visit_block(b),
-                    LambdaBody::Expr(e) => self.visit_expr(e),
-                }
-            }
-
-            ExprType::Return { ret } => {
-                maybe_visit!(v: self, m: visit_expr, ret);
-                Self::Result::normal()
-            }
-
-            ExprType::Block(b) => self.visit_block(b),
-        }
+        walk_expr(self, val)
     }
 
     fn visit_generics(&mut self, val: &'a Generics) -> Self::Result {
@@ -976,5 +869,116 @@ pub trait Visitor<'a> {
 
     fn visit_name(&mut self, _: &'a Name) -> Self::Result {
         Self::Result::normal()
+    }
+}
+
+pub fn walk_expr<'vis, V: Visitor<'vis>>(v: &mut V, expr: &'vis Expr) -> V::Result {
+    let Expr { ty, span: _, id: _ } = expr;
+
+    match ty {
+        ExprType::Index { indexed, index } => {
+            try_visit!(v.visit_expr(indexed), v.visit_expr(index));
+            V::Result::normal()
+        }
+        ExprType::Break | ExprType::Constant(..) => V::Result::normal(),
+
+        ExprType::BinaryExpr { lhs, rhs, op: _ } => {
+            try_visit!(v.visit_expr(lhs), v.visit_expr(rhs));
+
+            V::Result::normal()
+        }
+
+        ExprType::UnaryExpr { op: _, target } => v.visit_expr(target),
+
+        ExprType::Group(e) => v.visit_expr(e),
+
+        ExprType::CommaGroup(exprs) | ExprType::List(exprs) => {
+            visit_iter!(v: v, m: visit_expr, exprs);
+            V::Result::normal()
+        }
+
+        ExprType::Assign {
+            lvalue,
+            rvalue,
+            mode: _,
+        } => {
+            try_visit!(v.visit_expr(lvalue));
+            v.visit_expr(rvalue)
+        }
+
+        ExprType::FunCall { callee, args } => {
+            try_visit!(v.visit_expr(callee));
+            visit_iter!(v: v, m: visit_expr, args);
+            V::Result::normal()
+        }
+
+        ExprType::MethodCall {
+            receiver,
+            args,
+            name,
+        } => {
+            try_visit!(v.visit_expr(receiver));
+            visit_iter!(v: v, m: visit_expr, args);
+            v.visit_name(name)
+        }
+
+        ExprType::Path(p) => v.visit_path(p),
+
+        ExprType::While { cond, body } | ExprType::Until { cond, body } => {
+            try_visit!(v.visit_expr(cond));
+            v.visit_block(body)
+        }
+
+        ExprType::For {
+            iterable,
+            pat,
+            body,
+        } => {
+            try_visit!(v.visit_expr(iterable), v.visit_pat(pat));
+            v.visit_block(body)
+        }
+
+        ExprType::Loop { body } => v.visit_block(body),
+
+        ExprType::If {
+            cond,
+            if_block,
+            else_ifs,
+            otherwise,
+        } => {
+            try_visit!(v.visit_expr(cond), v.visit_block(if_block));
+
+            for ElseIf { cond, body } in else_ifs {
+                v.visit_expr(cond);
+                v.visit_block(body);
+            }
+
+            maybe_visit!(v: v, m: visit_block, otherwise);
+
+            V::Result::normal()
+        }
+
+        ExprType::FieldAccess { source, field } => {
+            try_visit!(v.visit_expr(source));
+            v.visit_name(field)
+        }
+
+        ExprType::Lambda { args, body } => {
+            for args in args {
+                v.visit_arg(args);
+            }
+
+            match body {
+                LambdaBody::Block(b) => v.visit_block(b),
+                LambdaBody::Expr(e) => v.visit_expr(e),
+            }
+        }
+
+        ExprType::Return { ret } => {
+            maybe_visit!(v: v, m: visit_expr, ret);
+            V::Result::normal()
+        }
+
+        ExprType::Block(b) => v.visit_block(b),
     }
 }

@@ -90,8 +90,8 @@ fn opts() -> sap::Result<(Flags, PathBuf)> {
 
                 for dump_opt in options {
                     match dump_opt {
-                        "hir_items" => flags.dump_hir = HirDump::OnlyItems,
-                        "hir" => flags.dump_hir = HirDump::All,
+                        "air_items" => flags.dump_hir = HirDump::OnlyItems,
+                        "air" => flags.dump_hir = HirDump::All,
                         "ast" => flags.dump_ast = true,
                         "types" => flags.dump_types = true,
 

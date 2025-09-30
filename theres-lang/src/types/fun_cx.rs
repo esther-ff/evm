@@ -543,6 +543,7 @@ impl<'ty> FunCx<'ty> {
     fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
         let res = path.res;
 
+        dbg!(path.res);
         match res {
             Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
 

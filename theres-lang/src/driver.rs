@@ -207,7 +207,7 @@ impl Compiler {
             let uni = air::lower_universe(session, &ast);
             typeck_universe(session, uni);
 
-            pill::lowering::lower_universe(session, uni);
+            // pill::lowering::lower_universe(session, uni);
         });
     }
 

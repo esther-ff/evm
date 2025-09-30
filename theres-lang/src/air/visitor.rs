@@ -110,7 +110,7 @@ pub fn walk_fn_sig<'vis, V: AirVisitor<'vis>>(v: &mut V, fn_sig: &'vis FnSig<'vi
         span: _,
         return_type,
         arguments,
-        body: _,
+        body,
     } = fn_sig;
 
     try_visit!(v.visit_ty(return_type));
@@ -183,7 +183,7 @@ pub fn walk_thing<'vis, V: AirVisitor<'vis>>(v: &mut V, thing: &'vis Thing<'vis>
             name: _,
             ctor_id: _,
         } => {
-            visit_iter!(v: v, m: visit_field, *fields)
+            visit_iter!(v: v, m: visit_field, *fields);
         }
         ThingKind::Realm { name: _, things } => visit_iter!(v: v, m: visit_thing, *things),
         ThingKind::Global {
@@ -201,9 +201,9 @@ pub fn walk_thing<'vis, V: AirVisitor<'vis>>(v: &mut V, thing: &'vis Thing<'vis>
             items,
         }) => {
             try_visit!(v.visit_ty(with));
-            visit_iter!(v: v, m: visit_bind_item, *items)
+            visit_iter!(v: v, m: visit_bind_item, *items);
         }
-    };
+    }
 
     V::Result::normal()
 }
