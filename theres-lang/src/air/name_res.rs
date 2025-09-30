@@ -377,7 +377,7 @@ impl<'cx> SecondPass<'cx> {
             scopes,
             path,
             current_scope,
-            did_defs: _,
+            did_defs,
             realm_scopes,
             ast_id_did,
             did_ast_id,
@@ -388,7 +388,7 @@ impl<'cx> SecondPass<'cx> {
 
         Self {
             cx,
-            maps: Mappings::new(ast_id_did, did_ast_id),
+            maps: Mappings::new(ast_id_did, did_ast_id, did_defs),
             current_instance: None,
             current_bind_ty: None,
             current_bind_item: None,

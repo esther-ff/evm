@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 
-use crate::air::AirMap;
 use crate::air::def::{DefId, DefType, IntTy, PrimTy, Resolved};
 use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
+use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
 use crate::driver::Flags;
 use crate::errors::DiagEmitter;
@@ -245,6 +245,14 @@ impl<'sess> Session<'sess> {
         let new = Pooled(self.arena().alloc(def));
         instances.insert(def, new);
         new
+    }
+
+    pub fn def_type(&self, did: DefId) -> DefType {
+        self.air_map.borrow().def_type(did)
+    }
+
+    pub fn upvars_of(&'sess self, did: DefId) -> &'sess HashSet<AirId> {
+        crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
     #[track_caller]

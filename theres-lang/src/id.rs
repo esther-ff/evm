@@ -136,6 +136,12 @@ impl<I, T> core::ops::Deref for IdxVec<I, T> {
     }
 }
 
+impl<I, T> Default for IdxVec<I, T> {
+    fn default() -> Self {
+        Self::new_from_vec(vec![])
+    }
+}
+
 impl<I: IndexId, T> Index<I> for IdxVec<I, T> {
     type Output = T;
 
@@ -143,6 +149,7 @@ impl<I: IndexId, T> Index<I> for IdxVec<I, T> {
         &self.inner[index.idx()]
     }
 }
+
 impl<I: IndexId, T> IndexMut<I> for IdxVec<I, T> {
     fn index_mut(&mut self, index: I) -> &mut T {
         &mut self.inner[index.idx()]

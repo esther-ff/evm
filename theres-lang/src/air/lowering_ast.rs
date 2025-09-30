@@ -6,7 +6,7 @@ use std::panic::Location;
 use crate::ast::*;
 
 use crate::air;
-use crate::air::def::{BodyId, BodyVec, DefId, DefMap, Resolved};
+use crate::air::def::{BodyId, BodyVec, DefId, DefMap, DefType, DefVec, Resolved};
 use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
@@ -42,10 +42,15 @@ pub struct Mappings {
     binds_to_items: AstIdMap<Vec<AstId>>,
 
     self_ty_ast_id_to_ty: AstIdMap<Ty>,
+    pub(super) def_types: DefVec<DefType>,
 }
 
 impl Mappings {
-    pub fn new(ast_id_to_def_id: AstIdMap<DefId>, def_id_to_ast_id: DefMap<AstId>) -> Self {
+    pub fn new(
+        ast_id_to_def_id: AstIdMap<DefId>,
+        def_id_to_ast_id: DefMap<AstId>,
+        def_types: DefVec<DefType>,
+    ) -> Self {
         Self {
             instance_to_field_list: HashMap::new(),
             field_id_to_instance: HashMap::new(),
@@ -56,6 +61,7 @@ impl Mappings {
             binds_to_resolved_ty_id: HashMap::new(),
             binds_to_items: HashMap::new(),
             self_ty_ast_id_to_ty: HashMap::new(),
+            def_types,
         }
     }
 
@@ -130,6 +136,8 @@ pub struct AirMap<'air> {
 
     field_to_instance: HashMap<DefId, DefId>,
     ctor_to_instance: HashMap<DefId, DefId>,
+
+    pub(super) def_types: DefVec<DefType>,
 }
 
 impl<'air> AirMap<'air> {
@@ -142,6 +150,7 @@ impl<'air> AirMap<'air> {
             node_to_body: HashMap::new(),
             field_to_instance: HashMap::new(),
             ctor_to_instance: HashMap::new(),
+            def_types: IdxVec::new(),
         }
     }
 
@@ -229,6 +238,11 @@ impl<'air> AirMap<'air> {
         body_id
     }
 
+    pub fn body_of(&self, body: DefId) -> &'air node::Expr<'air> {
+        let id = self.node_to_body[&body];
+        self.get_body(id)
+    }
+
     pub fn bodies(&self) -> &[&node::Expr<'air>] {
         self.bodies.as_slice()
     }
@@ -288,15 +302,14 @@ impl<'air> AirMap<'air> {
     }
 
     pub fn get_instance_of_ctor(&self, ctor_def_id: DefId) -> DefId {
-        log::trace!("get_instance_of_ctor ctor_def_id={ctor_def_id}");
-        let ret = self
-            .ctor_to_instance
+        self.ctor_to_instance
             .get(&ctor_def_id)
             .copied()
-            .expect("this `DefId` of a ctor wasn't mapped to any Instance");
+            .expect("this `DefId` of a ctor wasn't mapped to any Instance")
+    }
 
-        log::trace!("returned: {ret}");
-        ret
+    pub fn def_type(&self, did: DefId) -> DefType {
+        self.def_types[did]
     }
 }
 

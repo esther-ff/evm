@@ -21,6 +21,7 @@ pub enum Node<'h> {
     Field(&'h Field<'h>),
     Path(&'h Path<'h>),
     FnParam(&'h Param<'h>),
+    Lambda(&'h Lambda<'h>),
 }
 
 impl<'h> Node<'h> {

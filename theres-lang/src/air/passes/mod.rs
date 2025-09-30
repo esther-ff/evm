@@ -1,2 +1,2 @@
-mod entry_point;
-mod upvar_analysis;
+pub mod entry_point;
+pub mod upvar_analysis;

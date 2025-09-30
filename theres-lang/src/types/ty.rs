@@ -19,6 +19,13 @@ pub struct FnSig<'ty> {
     pub output: Ty<'ty>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LambdaEnv<'ty> {
+    pub all_inputs: &'ty [Ty<'ty>],
+    pub output: &'ty [Ty<'ty>],
+    pub did: DefId,
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TyKind<'ty> {
     Bool,
@@ -54,6 +61,8 @@ pub enum TyKind<'ty> {
 
     /// For inference
     InferTy(InferTy),
+
+    Lambda(&'ty LambdaEnv<'ty>),
 }
 
 impl<'ty> TyKind<'ty> {
@@ -277,6 +286,7 @@ fn stringfy_string_helper<'a>(session: &'a Session<'a>, buf: &mut String, ty: Ty
     use std::fmt::Write;
 
     let push = match ty {
+        TyKind::Lambda(..) => todo!(),
         TyKind::Bool => "bool",
         TyKind::Uint(size) => match size {
             IntTy::N8 => "u8",
