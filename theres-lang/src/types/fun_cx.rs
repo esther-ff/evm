@@ -208,16 +208,29 @@ impl<'ty> FunCx<'ty> {
         }
 
         let init_ty = local.init.map(|expr| self.typeck_expr(expr));
-        let local_decl_ty = self.s.lower_ty(local.ty);
+        match (local.ty, init_ty) {
+            (None, Some(ty)) => {
+                self.local_tys.insert(local.air_id, ty);
+                ty
+            }
 
-        if let Some(ty) = init_ty
-            && let Err(..) = self.unify(ty, local_decl_ty)
-        {
-            self.type_mismatch_err(local_decl_ty, ty, local.ty.span);
+            (Some(air_ty), Some(ty)) => {
+                let lowered = self.s.lower_ty(air_ty);
+                if self.unify(lowered, ty).is_err() {
+                    self.type_mismatch_err(lowered, ty, air_ty.span);
+                }
+
+                lowered
+            }
+
+            (Some(air_ty), None) => {
+                let lowered = self.s.lower_ty(air_ty);
+                self.local_tys.insert(local.air_id, lowered);
+                lowered
+            }
+
+            (None, None) => self.new_infer_var(InferKind::Regular),
         }
-
-        self.local_tys.insert(local.air_id, local_decl_ty);
-        local_decl_ty
     }
 
     fn typeck_stmt(&mut self, stmt: &Stmt<'_>) {
@@ -444,7 +457,7 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_lambda(&mut self, _lambda: &Lambda<'_>) -> Ty<'ty> {
-        self.s.u8()
+        todo!()
     }
 
     fn typeck_expr_if(
@@ -727,7 +740,7 @@ impl<'ty> TypeTable<'ty> {
         }
     }
 
-    pub fn type_of(&self, expr: Expr<'_>) -> Ty<'ty> {
+    pub fn type_of(&self, expr: &Expr<'_>) -> Ty<'ty> {
         log::trace!("`type_of` executed");
         self.air_node_tys
             .get(&expr.air_id)

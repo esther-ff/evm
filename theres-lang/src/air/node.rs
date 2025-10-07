@@ -279,7 +279,7 @@ pub struct Local<'h> {
     pub mutability: Constant,
     pub name: Name,
     pub init: Option<&'h Expr<'h>>,
-    pub ty: &'h Ty<'h>,
+    pub ty: Option<&'h Ty<'h>>,
     pub air_id: AirId,
 }
 
@@ -288,7 +288,7 @@ impl<'h> Local<'h> {
         mutability: Constant,
         name: Name,
         air_id: AirId,
-        ty: &'h Ty<'h>,
+        ty: Option<&'h Ty<'h>>,
         init: Option<&'h Expr<'h>>,
     ) -> Self {
         Self {

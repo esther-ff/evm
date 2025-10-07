@@ -728,8 +728,8 @@ impl<'air> AstLowerer<'air> {
             VarMode::Const => Constant::Yes,
         };
 
-        let init = var.initializer.as_ref().map(|x| self.lower_expr(x));
-        let ty = self.lower_ty(&var.ty);
+        let init = var.init.as_ref().map(|expr| self.lower_expr(expr));
+        let ty = var.ty.as_ref().map(|ty| self.lower_ty(ty));
         let local = node::Local::new(mutability, var.name, self.next_air_id(var.id), ty, init);
 
         self.session.arena().alloc(local)
@@ -813,10 +813,10 @@ impl<'air> AstLowerer<'air> {
         let (lowered_kind, _, span) = match &kind.kind {
             BindItemKind::Const(variable) => (
                 node::BindItemKind::Const {
-                    ty: self.lower_ty(&variable.ty),
+                    ty: self.lower_ty(variable.ty.as_ref().expect("consts should have types")),
                     expr: self.lower_expr(
                         variable
-                            .initializer
+                            .init
                             .as_ref()
                             .expect("guarantee broken: all associated consts have an init expr"),
                     ),

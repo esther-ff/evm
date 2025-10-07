@@ -397,21 +397,9 @@ pub enum VarMode {
 pub struct VariableStmt {
     pub mode: VarMode,
     pub name: Name,
-    pub initializer: Option<Expr>,
-    pub ty: Ty,
+    pub init: Option<Expr>,
+    pub ty: Option<Ty>,
     pub id: AstId,
-}
-
-impl VariableStmt {
-    pub fn new(mode: VarMode, name: Name, initializer: Option<Expr>, ty: Ty, id: AstId) -> Self {
-        Self {
-            mode,
-            name,
-            initializer,
-            ty,
-            id,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -654,15 +642,14 @@ pub trait Visitor<'a>: Sized {
     fn visit_var_stmt(&mut self, val: &'a VariableStmt) -> Self::Result {
         let VariableStmt {
             mode: _,
-            name,
-            initializer,
+            name: _,
+            init,
             ty,
             id: _,
         } = val;
 
-        try_visit!(self.visit_name(name), self.visit_ty(ty));
-
-        maybe_visit!(v: self, m: visit_expr, initializer);
+        maybe_visit!(v: self, m: visit_ty, ty);
+        maybe_visit!(v: self, m: visit_expr, init);
 
         Self::Result::normal()
     }

@@ -7,6 +7,7 @@ use crate::ast::{
 use crate::id::IndexId;
 use crate::lexer::Span;
 use crate::session::SymbolId;
+use crate::visitor_common::VisitorResult;
 
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
@@ -282,13 +283,14 @@ where
 
     fn visit_var_stmt(&mut self, val: &'v VariableStmt) -> Self::Result {
         self.write("Binding", val.name.span, val.id, Some(val.name), None);
-        self.increase_indent(|t| {
-            t.visit_ty(&val.ty);
+        self.increase_indent(|this| {
+            crate::maybe_visit!(v:this, m: visit_ty, &val.ty);
 
-            if let Some(init) = &val.initializer {
-                t.visit_expr(init);
+            if let Some(init) = &val.init {
+                this.visit_expr(init);
             }
         });
+
         let _ = writeln!(self);
     }
 

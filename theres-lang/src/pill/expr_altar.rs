@@ -21,7 +21,7 @@ impl FnLowerer<'_> {
             }
 
             ExprKind::Field { src, field } => {
-                let src_instance = self.ty_table().type_of(*src).expect_instance();
+                let src_instance = self.ty_table().type_of(src).expect_instance();
                 let field_id = src_instance
                     .fields
                     .iter()
@@ -42,7 +42,7 @@ impl FnLowerer<'_> {
             }
 
             other => {
-                let ty = self.ty_table().type_of(*expr);
+                let ty = self.ty_table().type_of(expr);
                 let temp = self.new_temporary(ty);
 
                 let op = self.lower_as_operand(expr, bb);

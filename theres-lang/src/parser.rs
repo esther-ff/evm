@@ -363,7 +363,8 @@ impl<'a> Parser<'a> {
                     id: self.new_id(),
                     kind: TyKind::MethodSelf,
                     span: tok.span,
-                },
+                }
+                .into(),
                 self.new_id(),
             );
 
@@ -485,7 +486,6 @@ impl<'a> Parser<'a> {
 
     fn local_variable_stmt(&mut self, req: VariableReq) -> Result<VariableStmt> {
         let tok = self.lexemes.next_token().to_err_if_eof()?;
-
         let mode = match tok.kind {
             TokenKind::Const => VarMode::Const,
             TokenKind::Let => {
@@ -508,35 +508,27 @@ impl<'a> Parser<'a> {
         };
 
         let name = self.expect_ident_as_name()?;
+        let ty = self.consume_if(t!(Colon)).then(|| self.ty()).transpose()?;
 
-        self.expect(t!(Colon));
-
-        let ty = self.ty()?;
-        let tok = self.lexemes.peek_token().to_err_if_eof()?;
-
-        let initializer: Option<Expr> = if tok.kind == TokenKind::Semicolon {
-            self.lexemes.advance();
-            None
-        } else {
+        let mut init = None;
+        if !self.consume_if(TokenKind::Semicolon) {
             self.expect(t!(Assign));
-
-            let expr = self.expression()?.into();
-
+            let expr = self.expression()?;
             self.expect(t!(Semicolon));
-            expr
-        };
+            init = Some(expr);
+        }
 
-        if req == VariableReq::ConstAndInit && initializer.is_none() {
+        if req == VariableReq::ConstAndInit && init.is_none() {
             return self.error_out(ParseError::ExpectedExpr, tok.span);
         }
 
-        Ok(VariableStmt::new(
+        Ok(VariableStmt {
             mode,
             name,
-            initializer,
+            init,
             ty,
-            self.new_id(),
-        ))
+            id: self.new_id(),
+        })
     }
 
     fn statement(&mut self) -> Result<ExprOrStmt> {

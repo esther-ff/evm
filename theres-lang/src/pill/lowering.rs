@@ -287,7 +287,7 @@ where
                 let rhs = self.handle_expr(rhs, None);
 
                 let altar = result.unwrap_or_else(|| {
-                    let ty = self.l.ty_table().type_of(*expr);
+                    let ty = self.l.ty_table().type_of(expr);
                     self.l.new_temporary(ty)
                 });
 
@@ -300,7 +300,7 @@ where
                 let target = self.handle_expr(target, None);
 
                 let altar = result.unwrap_or_else(|| {
-                    let ty = self.l.ty_table().type_of(*expr);
+                    let ty = self.l.ty_table().type_of(expr);
                     self.l.new_temporary(ty)
                 });
 
@@ -314,7 +314,7 @@ where
                 op,
             } => {
                 let altar = result.unwrap_or_else(|| {
-                    let ty = self.l.ty_table().type_of(*expr);
+                    let ty = self.l.ty_table().type_of(expr);
                     self.l.new_temporary(ty)
                 });
                 let var = self.handle_expr(variable, None);
@@ -337,7 +337,7 @@ where
                 else_,
             } => {
                 let result_temp = result.unwrap_or_else(|| {
-                    let ty = self.l.ty_table().type_of(*expr);
+                    let ty = self.l.ty_table().type_of(expr);
                     self.l.new_temporary(ty)
                 });
                 self.handle_if_expr(condition, block, else_, result_temp);
@@ -347,7 +347,7 @@ where
 
             ExprKind::Block(block) => {
                 let result_temp = result.unwrap_or_else(|| {
-                    let ty = self.l.ty_table().type_of(*expr);
+                    let ty = self.l.ty_table().type_of(expr);
                     self.l.new_temporary(ty)
                 });
 
@@ -397,7 +397,7 @@ where
     }
 
     pub fn handle_field_expr(&mut self, src: &Expr<'_>, field: SymbolId) -> Operand {
-        let src_instance = self.l.ty_table().type_of(*src).expect_instance();
+        let src_instance = self.l.ty_table().type_of(src).expect_instance();
         let field_id = src_instance
             .fields
             .iter()
@@ -530,8 +530,8 @@ where
             None => self.l.new_temporary(self.s.nil()),
             Some(expr) => {
                 let op = self.handle_expr(expr, None);
-                let temp = result
-                    .unwrap_or_else(|| self.l.new_temporary(self.l.ty_table().type_of(*expr)));
+                let temp =
+                    result.unwrap_or_else(|| self.l.new_temporary(self.l.ty_table().type_of(expr)));
 
                 self.ops.emit_assign(temp, op);
                 temp

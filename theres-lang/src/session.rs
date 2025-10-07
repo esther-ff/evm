@@ -13,7 +13,6 @@ use crate::arena::Arena;
 use crate::driver::Flags;
 use crate::errors::DiagEmitter;
 use crate::id::{IdxSlice, IdxVec};
-use crate::types::fun_cx::{FunCx, TyCollector, TypeTable};
 use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
 
 pub static SYMBOL_INTERNER: LazyLock<Mutex<GlobalInterner>> =

@@ -8,6 +8,7 @@ use crate::air::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
 use crate::ast::*;
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
+use crate::maybe_visit;
 use crate::session::{Session, SymbolId};
 use crate::visitor_common::VisitorResult;
 
@@ -738,15 +739,12 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
             StmtKind::LocalVar(VariableStmt {
                 mode: _,
                 name,
-                initializer,
+                init,
                 ty,
                 id,
             }) => {
-                self.visit_ty(ty);
-
-                if let Some(init) = initializer {
-                    self.visit_expr(init);
-                }
+                maybe_visit!(v:self, m:visit_ty, ty);
+                maybe_visit!(v:self, m:visit_expr, init);
                 self.make_local_binding(*name, *id);
             }
 
@@ -949,15 +947,12 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                 StmtKind::LocalVar(VariableStmt {
                     mode: _,
                     name,
-                    initializer,
+                    init,
                     ty,
                     id,
                 }) => {
-                    self.visit_ty(ty);
-
-                    if let Some(init) = initializer {
-                        self.visit_expr(init);
-                    }
+                    maybe_visit!(v:self, m:visit_ty, ty);
+                    maybe_visit!(v:self, m:visit_expr, init);
                     self.make_local_binding(*name, *id);
                 }
 

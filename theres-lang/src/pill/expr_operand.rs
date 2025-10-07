@@ -88,7 +88,7 @@ impl FnLowerer<'_> {
             }
 
             ExprKind::Binary { lhs, rhs, op } => {
-                let ty = self.ty_table().type_of(*expr);
+                let ty = self.ty_table().type_of(expr);
                 let temp = self.new_temporary(ty);
                 let lhs = self.lower_as_operand(lhs, bb);
                 let rhs = self.lower_as_operand(rhs, bb);
@@ -105,7 +105,7 @@ impl FnLowerer<'_> {
             }
 
             ExprKind::Unary { op, target } => {
-                let ty = self.ty_table().type_of(*expr);
+                let ty = self.ty_table().type_of(expr);
                 let temp = self.new_temporary(ty);
                 let val = self.lower_as_operand(target, bb);
 

@@ -2,7 +2,7 @@ use crate::air::lowering_ast::AirMap;
 use crate::air::node::{self, Expr, Field, FnSig, Node, Param, Path, Stmt, StmtKind, Thing, Ty};
 use crate::air::visitor::{AirVisitor, walk_expr, walk_thing, walk_ty};
 use crate::visitor_common::VisitorResult;
-use crate::{try_visit, visit_iter};
+use crate::{maybe_visit, try_visit, visit_iter};
 
 pub struct MapBuilder<'map, 'air>
 where
@@ -87,9 +87,7 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
     fn visit_local(&mut self, local: &'air node::Local<'air>) -> Self::Result {
         self.m.insert_node(Node::Local(local), local.air_id);
 
-        self.visit_ty(local.ty);
-        if let Some(expr) = local.init {
-            self.visit_expr(expr);
-        }
+        maybe_visit!(v:self, m:visit_ty, local.ty);
+        maybe_visit!(v:self, m:visit_expr, local.init);
     }
 }

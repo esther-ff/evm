@@ -245,7 +245,9 @@ pub fn walk_local<'vis, V: AirVisitor<'vis>>(v: &mut V, local: &'vis Local<'vis>
     } = local;
 
     maybe_visit!(v: v, m: visit_expr, init);
-    v.visit_ty(ty)
+    maybe_visit!(v: v, m: visit_ty, ty);
+
+    V::Result::normal()
 }
 
 pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -> V::Result {
