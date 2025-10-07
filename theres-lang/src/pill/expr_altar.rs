@@ -2,7 +2,7 @@ use crate::{
     air::node::{Expr, ExprKind},
     pill::{
         body::{AltarId, Proj},
-        cfg::BasicBlock,
+        cfg::{BasicBlock, Rvalue, Stmt},
         lowering::FnLowerer,
     },
     types::fun_cx::FieldId,
@@ -41,7 +41,21 @@ impl FnLowerer<'_> {
                 )
             }
 
-            other => todo!("make temporaries {other:#?}"),
+            other => {
+                let ty = self.ty_table().type_of(*expr);
+                let temp = self.new_temporary(ty);
+
+                let op = self.lower_as_operand(expr, bb);
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: temp,
+                        src: Rvalue::Regular(op),
+                    },
+                );
+
+                temp
+            }
         }
     }
 }

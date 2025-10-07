@@ -386,7 +386,7 @@ impl<'air> AstLowerer<'air> {
         self.ast_id_to_air_id
             .get(&ast_id)
             .copied()
-            .expect("AstId wasn't mapped to any AirId!")
+            .unwrap_or_else(|| panic!("AstId ({ast_id:#?}) isn't mapped to any AirId!"))
     }
 
     fn lower_args<'a>(&mut self, a: impl Iterator<Item = &'a Expr>) -> &'air [node::Expr<'air>] {
@@ -513,6 +513,11 @@ impl<'air> AstLowerer<'air> {
 
             ExprType::Lambda { args, body } => {
                 let did = self.map.def_id_of(expr.id);
+                let inputs = self.session.arena().alloc_from_iter(args.iter().map(|arg| {
+                    let id = self.next_air_id(arg.id);
+                    Param::new(arg.ident, self.lower_ty(&arg.ty), id)
+                }));
+
                 let body_block = match body {
                     LambdaBody::Block(block) => {
                         let lowered_block = self.lower_block(block);
@@ -533,10 +538,7 @@ impl<'air> AstLowerer<'air> {
 
                 let lambda_desc = Lambda {
                     did,
-                    inputs: self.session.arena().alloc_from_iter(args.iter().map(|arg| {
-                        let id = self.next_air_id(arg.id);
-                        Param::new(arg.ident, self.lower_ty(&arg.ty), id)
-                    })),
+                    inputs,
                     body,
                     output: None,
                 };

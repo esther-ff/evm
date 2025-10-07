@@ -1,5 +1,5 @@
 use crate::air::AirId;
-use crate::air::def::{BodyId, DefId, DefType, Resolved};
+use crate::air::def::{DefId, DefType, Resolved};
 use crate::air::node::{
     AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Node, Path, Stmt, StmtKind,
     Thing, ThingKind, Universe,
@@ -8,9 +8,7 @@ use crate::air::visitor::AirVisitor;
 use crate::ast::{BinOp, UnaryOp};
 use crate::lexer::Span;
 use crate::session::{Session, SymbolId};
-use crate::try_visit;
 use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
-use crate::visitor_common::VisitorResult;
 
 use std::collections::HashMap;
 use std::mem;
@@ -88,52 +86,18 @@ pub enum Obligation {
 
 pub struct FunCx<'ty> {
     s: &'ty Session<'ty>,
-
     fn_ret_ty: Option<Ty<'ty>>,
-
     node_type: HashMap<AirId, Ty<'ty>>,
-
     ty_var_types: HashMap<InferId, Ty<'ty>>,
-
     infer_ty_counter: u32,
-
     resolved_method_calls: HashMap<AirId, DefId>,
-
     local_tys: HashMap<AirId, Ty<'ty>>,
-
     obligations: HashMap<InferId, Vec<Obligation>>,
 }
 
 pub struct UnifyError;
 
 impl<'ty> FunCx<'ty> {
-    pub fn new(s: &'ty Session<'ty>) -> Self {
-        Self {
-            s,
-            ty_var_types: HashMap::new(),
-            infer_ty_counter: 0,
-            fn_ret_ty: None,
-            node_type: HashMap::new(),
-            resolved_method_calls: HashMap::new(),
-            local_tys: HashMap::new(),
-            obligations: HashMap::default(),
-        }
-    }
-
-    pub fn start(&mut self, sig_id: DefId, body: BodyId) {
-        let sig = self.s.fn_sig_for(sig_id);
-        self.fn_ret_ty = Some(sig.output);
-
-        let body = self.s.air_ref().get_body(body);
-        let fn_sig_span = self.s.air_ref().expect_fn(sig_id).0.span;
-
-        let actual_ret_ty = self.typeck_expr(body);
-
-        if self.unify(sig.output, actual_ret_ty).is_err() {
-            self.type_mismatch_err(sig.output, actual_ret_ty, fn_sig_span);
-        }
-    }
-
     fn new_infer_var(&mut self, kind: InferKind) -> Ty<'ty> {
         let id = self.infer_ty_counter;
         self.infer_ty_counter += 1;
@@ -220,19 +184,14 @@ impl<'ty> FunCx<'ty> {
         Ok(())
     }
 
-    // probably might recurse REALLY DEEP!
     fn ty_var_ty(&self, id: InferId) -> Option<Ty<'ty>> {
-        log::trace!("`ty_var_ty` enter");
-        let ret = match self.ty_var_types.get(&id) {
+        match self.ty_var_types.get(&id) {
             None => None,
             Some(ty) => match **ty {
                 TyKind::InferTy(infer) => self.ty_var_ty(infer.vid),
                 _ => Some(*ty),
             },
-        };
-
-        log::trace!("`ty_var_end`");
-        ret
+        }
     }
 
     fn type_mismatch_err(&self, expected: Ty<'ty>, got: Ty<'ty>, span: Span) {
@@ -484,8 +443,8 @@ impl<'ty> FunCx<'ty> {
         }
     }
 
-    fn typeck_lambda(&mut self, lambda: &Lambda<'_>) -> Ty<'ty> {
-        todo!()
+    fn typeck_lambda(&mut self, _lambda: &Lambda<'_>) -> Ty<'ty> {
+        self.s.u8()
     }
 
     fn typeck_expr_if(
@@ -754,7 +713,7 @@ impl<'ty> FunCx<'ty> {
 
 #[derive(Debug)]
 pub struct TypeTable<'ty> {
-    expr_tys: HashMap<AirId, Ty<'ty>>,
+    air_node_tys: HashMap<AirId, Ty<'ty>>,
     resolved_method_calls: HashMap<AirId, DefId>,
     local_variables: HashMap<AirId, Ty<'ty>>,
 }
@@ -762,24 +721,24 @@ pub struct TypeTable<'ty> {
 impl<'ty> TypeTable<'ty> {
     pub fn new() -> Self {
         Self {
-            expr_tys: HashMap::new(),
+            air_node_tys: HashMap::new(),
             resolved_method_calls: HashMap::new(),
             local_variables: HashMap::new(),
         }
     }
 
-    #[track_caller]
-    #[inline]
     pub fn type_of(&self, expr: Expr<'_>) -> Ty<'ty> {
         log::trace!("`type_of` executed");
-        self.expr_tys
+        self.air_node_tys
             .get(&expr.air_id)
             .copied()
             .expect("expr given to `type_of` has no type assoc'd with it")
     }
 
-    #[track_caller]
-    #[inline]
+    pub fn node_ty(&self, air_id: AirId) -> Ty<'ty> {
+        self.air_node_tys.get(&air_id).copied().unwrap()
+    }
+
     pub fn local_var_ty(&self, id: AirId) -> Ty<'ty> {
         self.local_variables
             .get(&id)
@@ -787,8 +746,6 @@ impl<'ty> TypeTable<'ty> {
             .expect("hir id given to `local_var_ty` has no type assoc'd with it")
     }
 
-    #[track_caller]
-    #[inline]
     pub fn resolve_method(&self, id: AirId) -> DefId {
         self.resolved_method_calls
             .get(&id)
@@ -867,19 +824,59 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
                         InferKind::Regular => todo!("regular variables aren't used yet"),
                     };
 
-                    self.table.expr_tys.insert(expr.air_id, insert_ty);
+                    self.table.air_node_tys.insert(expr.air_id, insert_ty);
                     return;
                 };
 
-                self.table.expr_tys.insert(expr.air_id, infer_resolved);
+                self.table.air_node_tys.insert(expr.air_id, infer_resolved);
             }
 
             _ => {
-                self.table.expr_tys.insert(expr.air_id, ty);
+                self.table.air_node_tys.insert(expr.air_id, ty);
             }
         }
 
-        crate::air::visitor::walk_expr(self, expr)
+        crate::air::visitor::walk_expr(self, expr);
+    }
+}
+
+impl<'cx> Session<'cx> {
+    pub fn typeck(&'cx self, did: DefId) -> TypeTable<'cx> {
+        let air = self.air_ref();
+        let (air_sig, _) = air.expect_fn(did);
+        let body = air.get_body(air_sig.body);
+        let ty_sig = self.fn_sig_for(did);
+
+        let node_type: HashMap<_, _> = air_sig
+            .arguments
+            .iter()
+            .zip(ty_sig.inputs)
+            .map(|(param, ty)| (param.air_id, *ty))
+            .collect();
+
+        let mut cx = FunCx {
+            s: self,
+            fn_ret_ty: Some(ty_sig.output),
+            node_type,
+            ty_var_types: HashMap::new(),
+            infer_ty_counter: 0,
+            resolved_method_calls: HashMap::new(),
+            local_tys: HashMap::new(),
+            obligations: HashMap::new(),
+        };
+
+        let actual_ret_ty = cx.typeck_expr(body);
+
+        if cx.unify(ty_sig.output, actual_ret_ty).is_err() {
+            cx.type_mismatch_err(ty_sig.output, actual_ret_ty, air_sig.span);
+        }
+
+        TyCollector {
+            cx,
+            table: TypeTable::new(),
+            sess: self,
+        }
+        .visit(body)
     }
 }
 

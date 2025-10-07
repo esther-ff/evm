@@ -107,13 +107,43 @@ impl ScopeData {
     }
 }
 
+#[derive(Debug)]
+struct Scopes {
+    storage: Vec<Scope>,
+    cursor: usize,
+}
+
+impl Scopes {
+    fn new(storage: Vec<Scope>) -> Self {
+        Self { storage, cursor: 0 }
+    }
+
+    fn vec(&self) -> &[Scope] {
+        &self.storage
+    }
+
+    fn vec_mut(&mut self) -> &mut Vec<Scope> {
+        &mut self.storage
+    }
+
+    fn next_scope(&mut self) -> Option<Scope> {
+        if self.cursor >= self.storage.len() {
+            return None;
+        }
+
+        let scope = self.storage[self.cursor];
+        self.cursor += 1;
+        Some(scope)
+    }
+}
+
 struct FirstPass<'cx> {
     cx: &'cx Session<'cx>,
     scopes: ScopeVec<ScopeData>,
-    path: Vec<Scope>,
+    path: Scopes,
     current_scope: Scope,
     did_defs: DefVec<DefType>,
-    realm_scopes: DefMap<(ScopeVec<ScopeData>, Vec<Scope>)>,
+    realm_scopes: DefMap<(ScopeVec<ScopeData>, Scopes)>,
 
     ast_id_did: HashMap<AstId, DefId>,
     did_ast_id: HashMap<DefId, AstId>,
@@ -129,10 +159,12 @@ impl<'cx> FirstPass<'cx> {
         Self {
             cx,
             thing_ast_id: None,
-            path: vec![current_scope],
+            path: Scopes {
+                storage: vec![current_scope],
+                cursor: 0,
+            },
             scopes,
             current_scope,
-            // sym_defs: HashMap::default(),
             did_defs: IdxVec::new(),
             realm_scopes: HashMap::default(),
             did_ast_id: HashMap::default(),
@@ -168,10 +200,12 @@ impl<'cx> FirstPass<'cx> {
         F: FnOnce(&mut Self),
     {
         let new = self.scopes.push(ScopeData::new(self.current_scope.into()));
-        self.path.push(new);
+        self.path.vec_mut().push(new);
         let old = mem::replace(&mut self.current_scope, new);
+
         work(self);
-        self.path.push(old);
+
+        self.path.vec_mut().push(old);
         self.current_scope = old;
     }
 
@@ -183,7 +217,7 @@ impl<'cx> FirstPass<'cx> {
             let mut data = ScopeVec::new();
             let path = data.push(ScopeData::new(None));
 
-            (data, vec![path])
+            (data, Scopes::new(vec![path]))
         });
 
         if let Some((realm_scope_data, realm_path)) = self.realm_scopes.get_mut(&realm_did) {
@@ -262,7 +296,6 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
 
     #[track_caller]
     fn visit_bind_item(&mut self, val: &'vis BindItem) -> Self::Result {
-        // self.define(val.id, DefType::BindItem, Name::DUMMY);
         let old = self.thing_ast_id.replace(val.id);
         self.with_new_scope(|this| match val.kind {
             BindItemKind::Const(ref stmt) => {
@@ -359,11 +392,11 @@ struct SecondPass<'cx> {
     current_bind_ty: Option<AstId>,
     current_bind_item: Option<AstId>,
 
-    path: std::vec::IntoIter<Scope>,
+    path: Scopes,
     current_scope: Scope,
     scopes: ScopeVec<ScopeData>,
 
-    realm_scopes: DefMap<(ScopeVec<ScopeData>, std::vec::IntoIter<Scope>)>,
+    realm_scopes: DefMap<(ScopeVec<ScopeData>, Scopes)>,
 
     current_item: Option<AstId>,
 
@@ -384,7 +417,7 @@ impl<'cx> SecondPass<'cx> {
             thing_ast_id: _,
         } = resolver;
 
-        dbg!(&path);
+        // dbg!(&path);
 
         Self {
             cx,
@@ -395,13 +428,8 @@ impl<'cx> SecondPass<'cx> {
             scopes,
             arg_stack: vec![],
             current_item: None,
-            // unironically, stupid
-            // (reallocates an entire hashmap)
-            realm_scopes: realm_scopes
-                .into_iter()
-                .map(|(k, (data, path))| (k, (data, path.into_iter())))
-                .collect(),
-            path: path.into_iter(),
+            realm_scopes,
+            path,
             current_scope,
         }
     }
@@ -513,7 +541,7 @@ impl<'cx> SecondPass<'cx> {
     }
 
     fn path_forward(&mut self) {
-        self.current_scope = self.path.next().expect("went beyond the path");
+        self.current_scope = self.path.next_scope().expect("went beyond the path");
     }
 
     fn current_item(&self) -> AstId {
@@ -608,6 +636,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
             self.visit_bind_item(item);
         }
 
+        self.path_forward();
         self.current_bind_ty.take();
     }
 
@@ -811,12 +840,23 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                         .map(|arg| (arg.ident.interned, Resolved::Local(arg.id))),
                 );
 
+                // dbg!(&self.arg_stack);
+
                 match body {
                     LambdaBody::Block(bl) => self.visit_block(bl),
                     LambdaBody::Expr(expr) => {
                         self.path_forward();
-                        // add args to scope
+
+                        // TODO: find a better way
+                        if !self.arg_stack.is_empty() {
+                            let args: Vec<_> = self.arg_stack.drain(..).collect();
+                            for (sym, res) in args {
+                                self.current_scope_mut().add(Namespace::Values, sym, res);
+                            }
+                        }
+
                         self.visit_expr(expr);
+                        self.path_forward();
                     }
                 }
             }

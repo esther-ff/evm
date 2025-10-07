@@ -420,27 +420,27 @@ impl<'sess> Session<'sess> {
         crate::types::ty::display_ty(self, ty)
     }
 
-    pub fn typeck(&'sess self, def_id: DefId) -> TypeTable<'sess> {
-        log::trace!("`typeck` executed");
+    // pub fn typeck(&'sess self, def_id: DefId) -> TypeTable<'sess> {
+    //     log::trace!("`typeck` executed");
 
-        let mut fun_cx = FunCx::new(self);
-        let air = self.air_ref();
-        let (sig, sym) = air.expect_fn(def_id);
+    //     let mut fun_cx = FunCx::new(self);
+    //     let air = self.air_ref();
+    //     let (sig, sym) = air.expect_fn(def_id);
 
-        let body = air.get_body(sig.body);
+    //     let body = air.get_body(sig.body);
 
-        log::trace!("typeck'ing function: {}", sym.get_interned());
-        fun_cx.start(def_id, sig.body);
-        let table = TyCollector::new(fun_cx, self).visit(body);
+    //     log::trace!("typeck'ing function: {}", sym.get_interned());
+    //     fun_cx.start(def_id, sig.body);
+    //     let table = TyCollector::new(fun_cx, self).visit(body);
 
-        log::trace!(
-            "type table for function {}: \n{:?}",
-            sym.get_interned(),
-            table
-        );
+    //     log::trace!(
+    //         "type table for function {}: \n{:?}",
+    //         sym.get_interned(),
+    //         table
+    //     );
 
-        table
-    }
+    //     table
+    // }
 
     fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {
         InstanceDef {

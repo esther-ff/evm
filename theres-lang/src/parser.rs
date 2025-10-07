@@ -363,8 +363,7 @@ impl<'a> Parser<'a> {
                     id: self.new_id(),
                     kind: TyKind::MethodSelf,
                     span: tok.span,
-                }
-                .into(),
+                },
                 self.new_id(),
             );
 
