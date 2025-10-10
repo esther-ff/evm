@@ -1,17 +1,18 @@
-use crate::air::AirId;
 use crate::air::def::{DefId, DefType, Resolved};
 use crate::air::node::{
-    AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Node, Path, Stmt, StmtKind,
-    Thing, ThingKind, Universe,
+    AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Path, Stmt, StmtKind, Thing,
+    ThingKind, Universe,
 };
 use crate::air::visitor::AirVisitor;
+use crate::air::{AirId, node};
 use crate::ast::{BinOp, UnaryOp};
 use crate::lexer::Span;
 use crate::session::{Session, SymbolId};
-use crate::types::ty::{InferKind, InferTy, Ty, TyKind, TypingError};
+use crate::types::ty::{InferKind, InferTy, LambdaEnv, Ty, TyKind, TypingError};
 
 use std::collections::HashMap;
 use std::mem;
+use std::panic::Location;
 
 crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
 crate::newtyped_index!(InferId, InferMap, InferVec, InferSlice);
@@ -88,8 +89,11 @@ pub struct FunCx<'ty> {
     s: &'ty Session<'ty>,
     fn_ret_ty: Option<Ty<'ty>>,
     node_type: HashMap<AirId, Ty<'ty>>,
+
     ty_var_types: HashMap<InferId, Ty<'ty>>,
+    ty_var_origins: HashMap<InferId, Span>,
     infer_ty_counter: u32,
+
     resolved_method_calls: HashMap<AirId, DefId>,
     local_tys: HashMap<AirId, Ty<'ty>>,
     obligations: HashMap<InferId, Vec<Obligation>>,
@@ -98,14 +102,18 @@ pub struct FunCx<'ty> {
 pub struct UnifyError;
 
 impl<'ty> FunCx<'ty> {
-    fn new_infer_var(&mut self, kind: InferKind) -> Ty<'ty> {
-        let id = self.infer_ty_counter;
-        self.infer_ty_counter += 1;
+    #[track_caller]
+    fn new_infer_var(&mut self, kind: InferKind, span: Span) -> Ty<'ty> {
+        let vid = InferId::new(self.infer_ty_counter);
+        assert!(self.ty_var_origins.insert(vid, span).is_none());
 
-        self.s.intern_ty(TyKind::InferTy(InferTy {
-            vid: InferId::new(id),
-            kind,
-        }))
+        log::debug!(
+            "new infer var {vid:#?}, called at {loc}",
+            loc = Location::caller()
+        );
+
+        self.infer_ty_counter += 1;
+        self.s.intern_ty(TyKind::InferTy(InferTy { vid, kind }))
     }
 
     fn obligation_for(&mut self, vid: InferId, oblig: Obligation) {
@@ -166,6 +174,10 @@ impl<'ty> FunCx<'ty> {
                     return Err(UnifyError)
                 }
 
+                if let Some(inner) = concrete.maybe_infer() && infer.vid == inner.vid {
+                    return Ok(())
+                }
+
                 let concrete_ref = self.s.intern_ty(concrete);
                 self.process_obligs_of_ty(infer.vid, concrete_ref);
 
@@ -173,7 +185,21 @@ impl<'ty> FunCx<'ty> {
                     return self.unify(*ty, concrete_ref)
                 }
 
+                log::debug!("unified ty var {infer:#?} and concrete {concrete:#?}");
+
                 self.ty_var_types.insert(infer.vid, concrete_ref);
+            }
+
+            (TyKind::Fn { inputs, output }, TyKind::Lambda(env)) | (TyKind::Lambda(env), TyKind::Fn { inputs, output }) => {
+                self.unify(output, env.output)?;
+
+                if inputs.len() != env.all_inputs.len() {
+                    return Err(UnifyError)
+                }
+
+                for (left, right) in inputs.iter().zip(env.all_inputs) {
+                    self.unify(*left, *right)?;
+                }
             }
 
             (TyKind::Error, _) | (_, TyKind::Error) => return Ok(()),
@@ -184,13 +210,21 @@ impl<'ty> FunCx<'ty> {
         Ok(())
     }
 
-    fn ty_var_ty(&self, id: InferId) -> Option<Ty<'ty>> {
-        match self.ty_var_types.get(&id) {
-            None => None,
-            Some(ty) => match **ty {
-                TyKind::InferTy(infer) => self.ty_var_ty(infer.vid),
-                _ => Some(*ty),
-            },
+    fn ty_var_ty(&self, ty: Ty<'ty>) -> Ty<'ty> {
+        let mut infer = ty.maybe_infer().unwrap();
+        let mut cursor = ty;
+
+        loop {
+            match self.ty_var_types.get(&infer.vid) {
+                None => return cursor,
+                Some(resolved_ty) => match resolved_ty.maybe_infer() {
+                    None => return *resolved_ty,
+                    Some(infer_ty) => {
+                        cursor = *resolved_ty;
+                        infer = infer_ty;
+                    }
+                },
+            }
         }
     }
 
@@ -207,7 +241,7 @@ impl<'ty> FunCx<'ty> {
             return *local_ty;
         }
 
-        let init_ty = local.init.map(|expr| self.typeck_expr(expr));
+        let init_ty = local.init.map(|expr| self.type_of(expr));
         match (local.ty, init_ty) {
             (None, Some(ty)) => {
                 self.local_tys.insert(local.air_id, ty);
@@ -229,14 +263,15 @@ impl<'ty> FunCx<'ty> {
                 lowered
             }
 
-            (None, None) => self.new_infer_var(InferKind::Regular),
+            (None, None) => self.new_infer_var(InferKind::Regular, local.name.span),
         }
     }
 
     fn typeck_stmt(&mut self, stmt: &Stmt<'_>) {
         match stmt.kind {
             StmtKind::Local(local) => {
-                let _ = self.typeck_local(local);
+                let local_ty = self.typeck_local(local);
+                self.node_type.insert(local.air_id, local_ty);
             }
 
             StmtKind::Thing(..) => {} // we typeck them separately
@@ -247,17 +282,19 @@ impl<'ty> FunCx<'ty> {
         }
     }
 
+    #[track_caller]
+    #[allow(clippy::too_many_lines)]
     fn typeck_expr(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
         log::trace!("entering `typeck_expr`");
         let ty = match expr.kind {
-            ExprKind::Lambda(lambda) => self.typeck_lambda(lambda),
+            ExprKind::Lambda(lambda) => self.typeck_lambda(lambda, expr.span),
             ExprKind::Literal(lit) => self.typeck_expr_literal(lit),
             ExprKind::Binary { lhs, rhs, op } => self.typeck_expr_bin_op(lhs, rhs, op),
             ExprKind::Unary { target, op } => self.typeck_expr_un_op(target, op),
             ExprKind::Path(path) => self.typeck_expr_path(path),
             ExprKind::Block(block) => self.typeck_block(block),
             ExprKind::Field { src, field } => self.typeck_expr_field(src, field),
-            ExprKind::List(exprs) => self.typeck_expr_list(exprs),
+            ExprKind::List(exprs) => self.typeck_expr_list(exprs, expr.span),
             ExprKind::Break => self.s.ty_diverge(),
             ExprKind::Loop { body, reason: _ } => {
                 self.typeck_block(body);
@@ -294,23 +331,37 @@ impl<'ty> FunCx<'ty> {
 
             ExprKind::Call { function, args } => {
                 let callable = self.type_of(function);
+                match *callable.0 {
+                    TyKind::FnDef(did) => {
+                        let sig = self.s.fn_sig_for(did);
+                        self.verify_arguments_for_call(sig.inputs, args, expr.span);
+                        sig.output
+                    }
 
-                if callable.is_error() {
-                    return self.s.ty_err();
+                    TyKind::Lambda(env) => {
+                        self.verify_arguments_for_call(env.all_inputs, args, expr.span);
+                        env.output
+                    }
+
+                    TyKind::Fn { inputs, output } => {
+                        self.verify_arguments_for_call(inputs, args, expr.span);
+                        output
+                    }
+
+                    TyKind::Error => self.s.ty_err(),
+
+                    _ => {
+                        dbg!(Location::caller());
+                        self.s.diag().emit_err(
+                            TypingError::CallingNotFn {
+                                offender: self.s.stringify_ty(callable), // not sure?
+                            },
+                            expr.span,
+                        );
+
+                        self.s.ty_err()
+                    }
                 }
-
-                let TyKind::FnDef(def_id) = *callable.0 else {
-                    self.s.diag().emit_err(
-                        TypingError::CallingNotFn {
-                            offender: self.s.stringify_ty(callable), // not sure?
-                        },
-                        expr.span,
-                    );
-
-                    return self.s.ty_err();
-                };
-
-                self.verify_arguments_for_call(def_id, args, expr.span)
             }
 
             ExprKind::Return { expr: ret_expr } => {
@@ -445,19 +496,54 @@ impl<'ty> FunCx<'ty> {
         match lit {
             AirLiteral::Bool(..) => self.s.bool(),
             AirLiteral::Uint(..) | AirLiteral::Int(..) => {
-                let new = self.new_infer_var(InferKind::Integer);
-                log::trace!("new infer ty for integer: {new:?}");
-                new
+                self.new_infer_var(InferKind::Integer, Span::DUMMY)
             }
 
             AirLiteral::Str(_sym) => todo!("idk how to type strings yet"),
 
-            AirLiteral::Float(..) => self.new_infer_var(InferKind::Float),
+            AirLiteral::Float(..) => self.new_infer_var(InferKind::Float, Span::DUMMY),
         }
     }
 
-    fn typeck_lambda(&mut self, _lambda: &Lambda<'_>) -> Ty<'ty> {
-        todo!()
+    fn typeck_lambda(&mut self, lambda: &Lambda<'_>, expr_span: Span) -> Ty<'ty> {
+        let env = LambdaEnv {
+            all_inputs: self
+                .s
+                .arena()
+                .alloc_from_iter(lambda.inputs.iter().map(|param| {
+                    let param_ty = if let node::TyKind::Infer = param.ty.kind {
+                        self.new_infer_var(InferKind::Regular, param.name.span)
+                    } else {
+                        self.s.lower_ty(param.ty)
+                    };
+
+                    self.node_type.insert(param.air_id, param_ty);
+                    param_ty
+                })),
+            output: lambda
+                .output
+                .map_or(self.new_infer_var(InferKind::Regular, expr_span), |ty| {
+                    self.s.lower_ty(&ty)
+                }),
+            did: lambda.did,
+        };
+
+        let air = self.s.air_ref();
+        let body = air.get_body(lambda.body);
+        let output_ty = self.type_of(body);
+
+        if self.unify(env.output, output_ty).is_err() {
+            self.s.diag().emit_err(
+                TypingError::TypeMismatch(
+                    self.s.stringify_ty(env.output),
+                    self.s.stringify_ty(output_ty),
+                ),
+                body.span,
+            );
+        }
+
+        let ptr = self.s.arena().alloc(env);
+        self.s.intern_ty(TyKind::Lambda(ptr))
     }
 
     fn typeck_expr_if(
@@ -522,14 +608,14 @@ impl<'ty> FunCx<'ty> {
             }
 
             Resolved::Local(air_id) => {
-                let hir = self.s.air_ref();
+                // Si me quieres escribir?
+                // match hir.get_node(air_id) {
+                //     Node::Local(local) => self.typeck_local(local),
+                //     Node::FnParam(param) => self.s.lower_ty(param.ty),
 
-                match hir.get_node(air_id) {
-                    Node::Local(local) => self.typeck_local(local),
-                    Node::FnParam(param) => self.s.lower_ty(param.ty),
-
-                    _ => todo!(),
-                }
+                //     _ => todo!("huh"),
+                // }
+                *self.node_type.get(&air_id).unwrap()
             }
 
             Resolved::Def(def_id, DefType::Const) => self.s.def_type_of(def_id),
@@ -540,11 +626,11 @@ impl<'ty> FunCx<'ty> {
         }
     }
 
-    fn typeck_expr_list(&mut self, exprs: &[Expr<'_>]) -> Ty<'ty> {
+    fn typeck_expr_list(&mut self, exprs: &[Expr<'_>], span: Span) -> Ty<'ty> {
         if exprs.is_empty() {
             return self
                 .s
-                .intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular)));
+                .intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular, span)));
         }
 
         exprs
@@ -632,25 +718,18 @@ impl<'ty> FunCx<'ty> {
             return *ty;
         }
 
+        log::debug!("type_of - need to typeck expr {expr:#?}");
+
         let expr_ty = self.typeck_expr(expr);
         self.node_type.insert(expr.air_id, expr_ty);
         expr_ty
     }
 
-    #[track_caller]
-    fn verify_arguments_for_call(
-        &mut self,
-        def_id: DefId,
-        args: &[Expr<'_>],
-        span: Span,
-    ) -> Ty<'ty> {
-        let sig = self.s.fn_sig_for(def_id);
-
-        let amount_of_args = sig.inputs.len();
+    fn verify_arguments_for_call(&mut self, inputs: &[Ty<'ty>], args: &[Expr<'_>], span: Span) {
+        let amount_of_args = inputs.len();
         let given_args = args.len();
 
-        let mut sig_tys = self.s.fn_sig_for(def_id).inputs.iter().copied();
-
+        let mut sig_tys = inputs.iter().copied();
         let mut call_tys = args.iter();
 
         if amount_of_args != given_args {
@@ -659,14 +738,14 @@ impl<'ty> FunCx<'ty> {
                     amount_given: given_args,
                     amount_req: amount_of_args,
                 },
-                dbg!(span),
+                span,
             );
         }
 
         loop {
             match (
                 sig_tys.next(),
-                call_tys.next().map(|expr| self.typeck_expr(expr)),
+                call_tys.next().map(|expr| self.type_of(expr)),
             ) {
                 (Some(sig_ty), Some(call_ty)) => {
                     if self.unify(sig_ty, call_ty).is_err() {
@@ -677,11 +756,8 @@ impl<'ty> FunCx<'ty> {
                 (None, None) => break,
             }
         }
-
-        sig.output
     }
 
-    #[track_caller]
     fn verify_arguments_for_method_call<'a>(
         &mut self,
         def_id: DefId,
@@ -809,10 +885,6 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
     }
 
     fn visit_stmt(&mut self, stmt: &'vis Stmt<'vis>) -> Self::Result {
-        if let StmtKind::Expr(expr) = stmt.kind {
-            self.visit_expr(expr);
-        }
-
         match stmt.kind {
             StmtKind::Expr(expr) => self.visit_expr(expr),
             StmtKind::Local(loc) => {
@@ -829,19 +901,22 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
         let ty = self.cx.type_of(expr);
 
         match *ty {
-            TyKind::InferTy(infer) => {
-                let Some(infer_resolved) = self.cx.ty_var_ty(infer.vid) else {
-                    let insert_ty = match infer.kind {
+            TyKind::InferTy(..) => {
+                let resolved = match *self.cx.ty_var_ty(ty).0 {
+                    TyKind::InferTy(inner) => match inner.kind {
                         InferKind::Float => self.sess.f64(),
                         InferKind::Integer => self.sess.i32(),
-                        InferKind::Regular => todo!("regular variables aren't used yet"),
-                    };
+                        InferKind::Regular => {
+                            let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
+                            self.sess.diag().emit_err(TypingError::InferFail, loc);
+                            self.sess.ty_err()
+                        }
+                    },
 
-                    self.table.air_node_tys.insert(expr.air_id, insert_ty);
-                    return;
+                    _ => ty,
                 };
 
-                self.table.air_node_tys.insert(expr.air_id, infer_resolved);
+                self.table.air_node_tys.insert(expr.air_id, resolved);
             }
 
             _ => {
@@ -872,6 +947,7 @@ impl<'cx> Session<'cx> {
             fn_ret_ty: Some(ty_sig.output),
             node_type,
             ty_var_types: HashMap::new(),
+            ty_var_origins: HashMap::new(),
             infer_ty_counter: 0,
             resolved_method_calls: HashMap::new(),
             local_tys: HashMap::new(),

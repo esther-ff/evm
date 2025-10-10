@@ -153,18 +153,12 @@ type Pool<'a, T> = HashMap<T, Pooled<'a, T>>;
 
 pub struct Session<'sess> {
     arena: Arena,
-
     air_map: RefCell<AirMap<'sess>>,
-
     types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
-
     def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
-
     fn_sigs: RefCell<HashMap<DefId, FnSig<'sess>>>,
-
     diags: &'sess DiagEmitter<'sess>,
-
     flags: Flags,
 }
 
@@ -254,7 +248,6 @@ impl<'sess> Session<'sess> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
-    #[track_caller]
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
         log::trace!("def_type_of def_id={def_id}");
         self.air(|map| match map.get_def(def_id) {
@@ -381,10 +374,12 @@ impl<'sess> Session<'sess> {
         'sess: 'a,
     {
         let tykind = match ty.kind {
-            node::TyKind::Fun {
-                inputs: _,
-                output: _,
-            } => todo!(),
+            node::TyKind::Fun { inputs, output } => TyKind::Fn {
+                inputs: self
+                    .arena
+                    .alloc_from_iter(inputs.iter().map(|this| self.lower_ty(this))),
+                output: output.map_or_else(|| self.nil(), |this| self.lower_ty(this)),
+            },
             node::TyKind::Infer => panic!("lowered an Infer ty"),
             node::TyKind::Err => TyKind::Error,
             node::TyKind::Array(array_ty) => TyKind::Array(self.lower_ty(array_ty)),
@@ -418,28 +413,6 @@ impl<'sess> Session<'sess> {
     pub fn stringify_ty(&'sess self, ty: Ty<'sess>) -> Cow<'static, str> {
         crate::types::ty::display_ty(self, ty)
     }
-
-    // pub fn typeck(&'sess self, def_id: DefId) -> TypeTable<'sess> {
-    //     log::trace!("`typeck` executed");
-
-    //     let mut fun_cx = FunCx::new(self);
-    //     let air = self.air_ref();
-    //     let (sig, sym) = air.expect_fn(def_id);
-
-    //     let body = air.get_body(sig.body);
-
-    //     log::trace!("typeck'ing function: {}", sym.get_interned());
-    //     fun_cx.start(def_id, sig.body);
-    //     let table = TyCollector::new(fun_cx, self).visit(body);
-
-    //     log::trace!(
-    //         "type table for function {}: \n{:?}",
-    //         sym.get_interned(),
-    //         table
-    //     );
-
-    //     table
-    // }
 
     fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {
         InstanceDef {

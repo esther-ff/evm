@@ -128,12 +128,11 @@ impl Mappings {
 
 pub struct AirMap<'air> {
     nodes: AirIdMap<Node<'air>>,
-
     def_id_to_air_id: DefMap<AirId>,
-
     bodies: BodyVec<&'air node::Expr<'air>>,
     node_to_body: DefMap<BodyId>,
 
+    pub(super) child_to_parent: HashMap<DefId, DefId>,
     field_to_instance: HashMap<DefId, DefId>,
     ctor_to_instance: HashMap<DefId, DefId>,
 
@@ -147,6 +146,8 @@ impl<'air> AirMap<'air> {
 
             def_id_to_air_id: HashMap::new(),
             bodies: IdxVec::new(),
+
+            child_to_parent: HashMap::new(),
             node_to_body: HashMap::new(),
             field_to_instance: HashMap::new(),
             ctor_to_instance: HashMap::new(),
@@ -741,7 +742,13 @@ impl<'air> AstLowerer<'air> {
 
     fn lower_ty_noalloc(&mut self, ty: &Ty) -> node::Ty<'air> {
         let kind = match &ty.kind {
-            TyKind::Fn { args: _, ret: _ } => todo!(),
+            TyKind::Fn { args, ret } => node::TyKind::Fun {
+                inputs: self
+                    .session
+                    .arena()
+                    .alloc_from_iter(args.iter().map(|this| self.lower_ty_noalloc(this))),
+                output: ret.as_ref().map(|this| self.lower_ty(this)),
+            },
             TyKind::Array(inner) => node::TyKind::Array(self.lower_ty(inner)),
             TyKind::MethodSelf => {
                 if let Some(bind_ty) = self.current_bind_ty {

@@ -41,7 +41,7 @@ impl FnLowerer<'_> {
                 )
             }
 
-            other => {
+            _ => {
                 let ty = self.ty_table().type_of(expr);
                 let temp = self.new_temporary(ty);
 

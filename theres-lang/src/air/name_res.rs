@@ -290,26 +290,28 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
             Resolved::Def(id, DefType::Realm),
         );
 
-        for item in &val.items {
-            self.visit_bind_item(item);
-        }
+        self.with_new_scope(|this| {
+            for item in &val.items {
+                this.visit_bind_item(item);
+            }
+        });
     }
 
     #[track_caller]
     fn visit_bind_item(&mut self, val: &'vis BindItem) -> Self::Result {
         let old = self.thing_ast_id.replace(val.id);
-        self.with_new_scope(|this| match val.kind {
+        match val.kind {
             BindItemKind::Const(ref stmt) => {
-                let id = this.define(val.id, DefType::Const, stmt.name);
+                let id = self.define(val.id, DefType::Const, stmt.name);
 
-                this.add_to_scope(
+                self.add_to_scope(
                     Namespace::Values,
                     stmt.name.interned,
                     Resolved::Def(id, DefType::Const),
                 );
             }
-            BindItemKind::Fun(ref f) => this.visit_fn_decl(f),
-        });
+            BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
+        }
         self.thing_ast_id = old;
     }
 
@@ -418,7 +420,7 @@ impl<'cx> SecondPass<'cx> {
             thing_ast_id: _,
         } = resolver;
 
-        // dbg!(&path);
+        dbg!(&path);
 
         Self {
             cx,
@@ -453,6 +455,7 @@ impl<'cx> SecondPass<'cx> {
     #[track_caller]
     fn get_name(&self, symbol: SymbolId, ns: Namespace) -> Resolved<AstId> {
         let scope = self.current_scope();
+        dbg!(self.current_scope, symbol.get_interned());
 
         let result = if let Some(found) = scope.get(ns, symbol) {
             found
@@ -542,7 +545,11 @@ impl<'cx> SecondPass<'cx> {
     }
 
     fn path_forward(&mut self) {
-        self.current_scope = self.path.next_scope().expect("went beyond the path");
+        let path = self.path.next_scope().expect("beyond!");
+        dbg!(path);
+        dbg!(&self.path.storage[self.path.cursor..]);
+        // self.current_scope = self.path.next_scope().expect("went beyond the path");
+        self.current_scope = path;
     }
 
     fn current_item(&self) -> AstId {
@@ -629,20 +636,21 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
         let res = self.maps.resolve(bind.victim.id);
 
-        self.path_forward();
         self.current_scope_mut()
             .add(Namespace::Values, SymbolId::self_(), res);
 
+        self.path_forward();
         for item in &bind.items {
             self.visit_bind_item(item);
         }
-
         self.path_forward();
+
         self.current_bind_ty.take();
     }
 
     fn visit_bind_item(&mut self, val: &'vis BindItem) -> Self::Result {
         self.current_bind_item = Some(val.id);
+
         match val.kind {
             BindItemKind::Const(ref var_stmt) => {
                 let def_id = self.get_def_id(val.id);
@@ -656,6 +664,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
+
         self.current_bind_item.take();
     }
 

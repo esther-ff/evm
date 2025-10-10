@@ -22,7 +22,7 @@ pub struct FnSig<'ty> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LambdaEnv<'ty> {
     pub all_inputs: &'ty [Ty<'ty>],
-    pub output: &'ty [Ty<'ty>],
+    pub output: Ty<'ty>,
     pub did: DefId,
 }
 
@@ -205,6 +205,8 @@ pub enum TypingError {
         on_ty: Cow<'static, str>,
         method_name: Cow<'static, str>,
     },
+
+    InferFail,
 }
 
 impl TheresError for TypingError {
@@ -217,6 +219,7 @@ impl TheresError for TypingError {
             TypingError::TypeMismatch(expected, got) => {
                 format!("Expected type: {expected}, got: {got}")
             }
+            TypingError::InferFail => "inference failed!".into(),
             TypingError::NoIndexOp { on } => format!("No index operation for type: {on}"),
             TypingError::NoUnaryOp { on } => format!("No unary operation for type: {on}"),
             TypingError::NoBinaryOp { lhs, rhs } => {
@@ -286,7 +289,7 @@ fn stringfy_string_helper<'a>(session: &'a Session<'a>, buf: &mut String, ty: Ty
     use std::fmt::Write;
 
     let push = match ty {
-        TyKind::Lambda(..) => todo!(),
+        TyKind::Lambda(..) => "{lambda}",
         TyKind::Bool => "bool",
         TyKind::Uint(size) => match size {
             IntTy::N8 => "u8",

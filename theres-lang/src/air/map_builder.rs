@@ -1,5 +1,8 @@
+use crate::air::def::DefId;
 use crate::air::lowering_ast::AirMap;
-use crate::air::node::{self, Expr, Field, FnSig, Node, Param, Path, Stmt, StmtKind, Thing, Ty};
+use crate::air::node::{
+    self, Expr, ExprKind, Field, FnSig, Node, Param, Path, Stmt, StmtKind, Thing, Ty,
+};
 use crate::air::visitor::{AirVisitor, walk_expr, walk_thing, walk_ty};
 use crate::visitor_common::VisitorResult;
 use crate::{maybe_visit, try_visit, visit_iter};
@@ -9,6 +12,7 @@ where
     'air: 'map,
 {
     m: &'map mut AirMap<'air>,
+    current_item: Option<DefId>,
 }
 
 impl<'air, 'map> MapBuilder<'map, 'air>
@@ -16,7 +20,10 @@ where
     'air: 'map,
 {
     pub fn new(m: &'map mut AirMap<'air>) -> Self {
-        Self { m }
+        Self {
+            m,
+            current_item: None,
+        }
     }
 }
 
@@ -25,7 +32,9 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
 
     fn visit_thing(&mut self, thing: &'air Thing<'air>) -> Self::Result {
         self.m.insert_node(Node::Thing(thing), thing.air_id);
+        let old = self.current_item.replace(thing.def_id);
         walk_thing(self, thing);
+        self.current_item = old;
     }
 
     fn visit_bind_item(&mut self, bind_item: &'air node::BindItem<'air>) -> Self::Result {
@@ -70,6 +79,13 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
 
     fn visit_expr(&mut self, expr: &'air Expr<'air>) -> Self::Result {
         self.m.insert_node(Node::Expr(expr), expr.air_id);
+
+        if let ExprKind::Lambda(lambda) = expr.kind {
+            let parent_did = self
+                .current_item
+                .expect("expression should be inside some item");
+            self.m.child_to_parent.insert(lambda.did, parent_did);
+        }
 
         walk_expr(self, expr);
     }
