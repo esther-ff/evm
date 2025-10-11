@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::mem;
 use std::ops::Sub;
+use std::panic::Location;
 
 use crate::air::Mappings;
 use crate::air::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
@@ -160,10 +161,7 @@ impl<'cx> FirstPass<'cx> {
         Self {
             cx,
             thing_ast_id: None,
-            path: Scopes {
-                storage: vec![current_scope],
-                cursor: 0,
-            },
+            path: Scopes::new(vec![current_scope]),
             scopes,
             current_scope,
             did_defs: IdxVec::new(),
@@ -411,14 +409,33 @@ impl<'cx> SecondPass<'cx> {
         let FirstPass {
             cx,
             scopes,
-            path,
+            mut path,
             current_scope,
             did_defs,
-            realm_scopes,
+            mut realm_scopes,
             ast_id_did,
             did_ast_id,
             thing_ast_id: _,
         } = resolver;
+
+        // Get rid of first scope OK!
+        //
+        // Why?
+        // Because we conceptually start in the first scope (#0)
+        // and without this we skip a scope!
+        //
+        // Which fucking breaks everything!
+        //
+        // Una bandiera tutta nera!
+        //
+        // This is a fucking horrible implementation
+        // because of the O(n) reallocation of the vector
+        //
+        // Please! Change this somehow!
+        path.storage.remove(0);
+        for path in realm_scopes.values_mut() {
+            path.1.storage.remove(0);
+        }
 
         dbg!(&path);
 
@@ -455,7 +472,11 @@ impl<'cx> SecondPass<'cx> {
     #[track_caller]
     fn get_name(&self, symbol: SymbolId, ns: Namespace) -> Resolved<AstId> {
         let scope = self.current_scope();
-        dbg!(self.current_scope, symbol.get_interned());
+        println!(
+            "searching for '{}' id: {}",
+            symbol.get_interned(),
+            self.current_scope
+        );
 
         let result = if let Some(found) = scope.get(ns, symbol) {
             found
@@ -544,10 +565,13 @@ impl<'cx> SecondPass<'cx> {
         ret
     }
 
+    #[track_caller]
     fn path_forward(&mut self) {
         let path = self.path.next_scope().expect("beyond!");
-        dbg!(path);
-        dbg!(&self.path.storage[self.path.cursor..]);
+        println!("\n-- jumped to path {path:#?}");
+        println!("{:?}\n", &self.path.storage[self.path.cursor..]);
+        println!("moved at {}", Location::caller());
+
         // self.current_scope = self.path.next_scope().expect("went beyond the path");
         self.current_scope = path;
     }
