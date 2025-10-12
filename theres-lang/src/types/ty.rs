@@ -106,6 +106,10 @@ impl<'ty> TyKind<'ty> {
         None
     }
 
+    pub fn is_nil(self) -> bool {
+        matches!(self, TyKind::Nil)
+    }
+
     #[track_caller]
     pub fn expect_instance(&self) -> Instance<'ty> {
         let TyKind::Instance(def) = self else {
