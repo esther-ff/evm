@@ -2,7 +2,7 @@ mod pretty;
 pub use pretty::PrettyPrinter;
 
 use crate::lexer::Span;
-use crate::session::SymbolId;
+use crate::symbols::SymbolId;
 
 pub use crate::parser::AstId;
 use crate::visitor_common::VisitorResult;
@@ -163,8 +163,6 @@ pub enum ExprType {
 
     Group(Box<Expr>),
 
-    CommaGroup(Vec<Expr>),
-
     Assign {
         lvalue: Box<Expr>,
         rvalue: Box<Expr>,
@@ -267,27 +265,6 @@ pub struct PathSeg {
     pub id: AstId,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Bound {
-    pub span: Span,
-    pub interface: Path,
-    pub id: AstId,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct GenericParam {
-    pub ident: Name,
-    pub bounds: Vec<Bound>,
-    pub id: AstId,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Generics {
-    pub params: Vec<GenericParam>,
-    pub span: Span,
-    pub id: AstId,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TyKind {
     /// Function/lambda type
@@ -369,11 +346,6 @@ pub struct FnDecl {
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct FnArgs {
-    pub args: Vec<Arg>,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Arg {
     pub ident: Name,
     pub ty: Ty,
@@ -399,16 +371,6 @@ pub struct VariableStmt {
     pub name: Name,
     pub init: Option<Expr>,
     pub ty: Option<Ty>,
-    pub id: AstId,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct GlobalDecl {
-    pub name: Name,
-    pub initializer: Expr,
-    pub ty: Ty,
-    pub constant: bool,
-
     pub id: AstId,
 }
 
@@ -718,40 +680,6 @@ pub trait Visitor<'a>: Sized {
         walk_expr(self, val)
     }
 
-    fn visit_generics(&mut self, val: &'a Generics) -> Self::Result {
-        let Generics {
-            params,
-            span: _,
-            id: _,
-        } = val;
-        visit_iter!(v: self, m: visit_generic_param, params);
-        Self::Result::normal()
-    }
-
-    fn visit_generic_param(&mut self, val: &'a GenericParam) -> Self::Result {
-        let GenericParam {
-            ident,
-            bounds,
-            id: _,
-        } = val;
-
-        try_visit!(self.visit_name(ident));
-
-        visit_iter!(v: self, m: visit_bound, bounds);
-
-        Self::Result::normal()
-    }
-
-    fn visit_bound(&mut self, val: &'a Bound) -> Self::Result {
-        let Bound {
-            span: _,
-            interface,
-            id: _,
-        } = val;
-
-        self.visit_path(interface)
-    }
-
     fn visit_path(&mut self, val: &'a Path) -> Self::Result {
         let Path {
             path,
@@ -836,24 +764,6 @@ pub trait Visitor<'a>: Sized {
         }
     }
 
-    fn visit_global(&mut self, val: &'a GlobalDecl) -> Self::Result {
-        let GlobalDecl {
-            name,
-            initializer,
-            ty,
-            constant: _,
-            id: _,
-        } = val;
-
-        try_visit!(
-            self.visit_name(name),
-            self.visit_expr(initializer),
-            self.visit_ty(ty)
-        );
-
-        Self::Result::normal()
-    }
-
     fn visit_name(&mut self, _: &'a Name) -> Self::Result {
         Self::Result::normal()
     }
@@ -879,7 +789,7 @@ pub fn walk_expr<'vis, V: Visitor<'vis>>(v: &mut V, expr: &'vis Expr) -> V::Resu
 
         ExprType::Group(e) => v.visit_expr(e),
 
-        ExprType::CommaGroup(exprs) | ExprType::List(exprs) => {
+        ExprType::List(exprs) => {
             visit_iter!(v: v, m: visit_expr, exprs);
             V::Result::normal()
         }

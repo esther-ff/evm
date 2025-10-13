@@ -122,11 +122,7 @@ pub fn walk_universe<'vis, V: AirVisitor<'vis>>(
     v: &mut V,
     universe: &'vis Universe<'vis>,
 ) -> V::Result {
-    let Universe {
-        air_id: _,
-        things,
-        span: _,
-    } = universe;
+    let Universe { things } = universe;
 
     for thing in *things {
         v.visit_thing(thing);
@@ -185,15 +181,6 @@ pub fn walk_thing<'vis, V: AirVisitor<'vis>>(v: &mut V, thing: &'vis Thing<'vis>
             visit_iter!(v: v, m: visit_field, *fields);
         }
         ThingKind::Realm { name: _, things } => visit_iter!(v: v, m: visit_thing, *things),
-        ThingKind::Global {
-            mutability: _,
-            name: _,
-            init,
-            ty,
-        } => {
-            try_visit!(v.visit_ty(ty));
-            return v.visit_expr(init);
-        }
         ThingKind::Bind(node::Bind {
             with,
             mask: _,

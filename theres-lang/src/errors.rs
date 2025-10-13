@@ -8,8 +8,7 @@ use std::{
 };
 
 use crate::{
-    lexer::{LexError, Span},
-    parser::ParseError,
+    lexer::Span,
     sources::{SourceId, Sources},
 };
 
@@ -46,59 +45,6 @@ pub trait TheresError {
     fn message(&self) -> Cow<'static, str>;
 }
 
-impl TheresError for ParseError {
-    fn phase() -> Phase {
-        Phase::Parsing
-    }
-
-    fn message(&self) -> Cow<'static, str> {
-        match self {
-            ParseError::Expected { what, got } => {
-                format!("expected {what} but got: {got:?}").into()
-            }
-
-            ParseError::ExpectedUnknown { what } => format!("got {what}").into(),
-
-            ParseError::EndOfFile => "unexpected end-of-file".into(),
-
-            ParseError::WrongUnaryOp { offender } => {
-                format!("can't execute {offender:?} as unary operator").into()
-            }
-
-            ParseError::FunctionWithoutBody => "this function is supposed to have a body".into(),
-
-            ParseError::MalformedType => "this type is malformed".into(),
-
-            ParseError::ExpectedDecl { got } => {
-                format!("expected the start of a declaration, got: {got}").into()
-            }
-
-            ParseError::ExpectedConstVar => "expected a constant here".into(),
-
-            ParseError::InvalidPattern => "this pattern is invalid syntatically".into(),
-
-            ParseError::ExpectedExpr => "expected an expression here".into(),
-        }
-    }
-}
-
-impl TheresError for LexError {
-    fn phase() -> Phase {
-        Phase::Lexing
-    }
-
-    fn message(&self) -> Cow<'static, str> {
-        match self {
-            LexError::InvalidFloatLiteral => "the float literal is invalid",
-            LexError::InvalidHexLiteral => "the hex literal is invalid",
-            LexError::InvalidOctalLiteral => "the octal literal is invalid",
-            LexError::LackingEndForStringLiteral => "unterminated string literal",
-            LexError::UnknownChar(ch) => return format!("unknown character: {ch}").into(),
-        }
-        .into()
-    }
-}
-
 pub struct Message {
     msg: Cow<'static, str>,
     attached_to: Span,
@@ -112,46 +58,12 @@ impl Message {
         let msg_indent = self
             .attached_to
             .end()
-            .saturating_sub(self.attached_to.start());
+            .saturating_sub(self.attached_to.start()) as usize;
         writeln!(writer, "{:<indent$}| ", " ")?;
         write!(writer, "{:<indent$}| ", " ")?;
         writeln!(writer, "{msg:>msg_indent$}", msg = self.msg)?;
 
         writeln!(writer, "{:<indent$}| ", " ")
-    }
-}
-
-pub struct ErrorLine<'a> {
-    line_number: usize,
-    content: &'a str,
-    msg: Option<Message>,
-}
-
-impl<'a> ErrorLine<'a> {
-    pub fn new(msg: Option<Message>, content: &'a str, line_number: usize) -> Self {
-        Self {
-            line_number,
-
-            content,
-            msg,
-        }
-    }
-    pub fn print_to<O>(&self, indent: usize, writer: &mut O) -> io::Result<()>
-    where
-        O: io::Write,
-    {
-        writeln!(
-            writer,
-            "{line_nr:<indent$}| {content}",
-            line_nr = self.line_number,
-            content = self.content
-        )?;
-
-        if let Some(ref msg) = self.msg {
-            msg.print_to(indent, writer)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -200,8 +112,6 @@ impl<'a> DiagEmitterInner<'a> {
     #[allow(clippy::needless_pass_by_value)]
     #[track_caller]
     fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
-        // dbg!(&span, std::panic::Location::caller());
-
         let origin = span.line as usize;
         let line_nr_offset = origin.saturating_sub(EXTRA_LINES);
         let lines = self.get_lines(span.sourceid, origin, EXTRA_LINES);
@@ -281,6 +191,5 @@ where
     O: io::Write,
 {
     writeln!(writer, "{line_nr:<indent$}| {content}",)?;
-
     msg.map_or(Ok(()), |m| m.print_to(indent, writer))
 }

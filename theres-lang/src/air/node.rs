@@ -1,12 +1,8 @@
-use crate::{
-    air::{
-        AirId,
-        def::{BodyId, DefId, Resolved},
-    },
-    ast::{AssignMode, BinOp, Name, UnaryOp},
-    lexer::Span,
-    session::SymbolId,
-};
+use crate::air::AirId;
+use crate::air::def::{BodyId, DefId, Resolved};
+use crate::ast::{AssignMode, BinOp, Name, UnaryOp};
+use crate::lexer::Span;
+use crate::symbols::SymbolId;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Node<'h> {
@@ -40,18 +36,12 @@ impl<'h> Node<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Universe<'h> {
-    pub air_id: AirId,
     pub things: &'h [Thing<'h>],
-    pub span: Span,
 }
 
 impl<'h> Universe<'h> {
-    pub fn new(air_id: AirId, things: &'h [Thing<'h>], span: Span) -> Self {
-        Self {
-            air_id,
-            things,
-            span,
-        }
+    pub fn new(things: &'h [Thing<'h>]) -> Self {
+        Self { things }
     }
 }
 
@@ -347,13 +337,6 @@ pub enum ThingKind<'h> {
     Realm {
         name: Name,
         things: &'h [Thing<'h>],
-    },
-
-    Global {
-        mutability: Constant,
-        name: Name,
-        init: &'h Expr<'h>,
-        ty: &'h Ty<'h>,
     },
 
     Bind(Bind<'h>),

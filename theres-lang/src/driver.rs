@@ -1,17 +1,17 @@
-use std::cell::Cell;
-use std::io::{Stderr, Write, stderr, stdout};
-use std::path::Path;
-use std::sync::{Mutex, RwLock};
-
+use crate::air;
+use crate::air::check;
 use crate::ast::PrettyPrinter;
 use crate::ast::Universe;
 use crate::errors::DiagEmitter;
 use crate::lexer::{Lexemes, Lexer};
-use crate::parser::Parser;
 use crate::session::Session;
 use crate::sources::{FileManager, SourceId, Sources};
 use crate::types::fun_cx::typeck_universe;
-use crate::{air, pill};
+use std::cell::Cell;
+use std::collections::HashSet;
+use std::io::{Stderr, Write, stderr, stdout};
+use std::path::Path;
+use std::sync::{Mutex, RwLock};
 
 use log::{Level, Log};
 
@@ -199,14 +199,26 @@ impl Compiler {
         };
 
         let diags = DiagEmitter::new(&self.sources);
-        let session = Session::new(&diags, self.flags);
         let lexemes = self.lex(src, &diags);
         let ast = self.parse_to_ast(lexemes, &diags);
 
-        session.enter(|session| {
+        Session::new(&diags, self.flags).enter(|session| {
             let uni = air::lower_universe(session, &ast);
             typeck_universe(session, uni);
+            let Some(main_did) = check::check_for_main(session, uni) else {
+                todo!("no main")
+            };
 
+            println!("main is at did {}", main_did.to_usize());
+            let mut set = HashSet::new();
+
+            air::passes::entry_point::gather_items_for_build(session, main_did, &mut set);
+            dbg!(&set);
+            let air = session.air_ref();
+            for did in set {
+                let def = air.get_def(did);
+                dbg!(def);
+            }
             // pill::lowering::lower_universe(session, uni);
         });
     }
@@ -225,7 +237,7 @@ impl Compiler {
     }
 
     fn parse_to_ast<'a>(&self, lexemes: Lexemes, diag: &'a DiagEmitter<'a>) -> Universe {
-        let decls = Parser::new(lexemes, diag).parse();
+        let decls = crate::parser::parse(lexemes, diag);
 
         if diag.errors_emitted() {
             self.state.set(Compilation::Error);

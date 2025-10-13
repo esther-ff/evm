@@ -1,6 +1,25 @@
+use crate::errors::{DiagEmitter, Phase, TheresError};
+use crate::sources::SourceId;
+use crate::symbols::SymbolId;
+use std::borrow::Cow;
 use std::fmt::Display;
 
-use crate::{errors::DiagEmitter, parser::ParseError, session::SymbolId, sources::SourceId};
+impl TheresError for LexError {
+    fn phase() -> Phase {
+        Phase::Lexing
+    }
+
+    fn message(&self) -> Cow<'static, str> {
+        match self {
+            LexError::InvalidFloatLiteral => "the float literal is invalid",
+            LexError::InvalidHexLiteral => "the hex literal is invalid",
+            LexError::InvalidOctalLiteral => "the octal literal is invalid",
+            LexError::LackingEndForStringLiteral => "unterminated string literal",
+            LexError::UnknownChar(ch) => return format!("unknown character: {ch}").into(),
+        }
+        .into()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum TokenKind {
@@ -73,30 +92,23 @@ pub enum TokenKind {
     Let,
     Instance,
     Function,
-    Import,
     If,
     Else,
     Then,
-    Inline,
-    Native,
     Const,
-    Match,
-    Default,
     True,
     False,
-    Global,
     For,
     While,
     Until,
     Loop,
     Return,
     SelfArg,
-    In,
-    With,
-    Interface,
-    Apply,
     Realm,
     Bind,
+    Break,
+    With,
+    In,
 
     Eof,
 }
@@ -107,7 +119,9 @@ impl Display for TokenKind {
         use TokenKind::*;
 
         let w = match self {
+            In => "in",
             LeftParen => "(",
+            With => "with",
             RightParen => ")",
             LeftSqBracket => "[",
             RightSqBracket => "]",
@@ -169,33 +183,24 @@ impl Display for TokenKind {
             Let => "let",
             Instance => "instance",
             Function => "fun",
-            Import => "import",
             If => "if",
             Else => "else",
             Then => "then",
-            Inline => "inline",
-            Native => "native",
             Const => "const",
-            Match => "match",
-            Default => "default",
             True => "true",
             False => "false",
-            Global => "global",
             For => "for",
             While => "while",
             Until => "until",
             Loop => "loop",
             Return => "return",
             SelfArg => "self",
-            In => "in",
-            With => "with",
-            Interface => "interface",
-            Apply => "apply",
             Realm => "realm",
             Bind => "bind",
 
             Eof => "<eof>",
             RightCurlyBracket => "}",
+            Break => "break",
         };
 
         write!(f, "{w}")
@@ -227,23 +232,23 @@ macro_rules! operators {
     }};
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct Span {
-    pub start: usize,
-    pub end: usize,
+    pub start: u32,
+    pub end: u32,
     pub line: u32,
     pub sourceid: SourceId,
 }
 
 impl Span {
     pub const DUMMY: Self = Self {
-        start: usize::MAX,
-        end: usize::MAX,
+        start: u32::MAX,
+        end: u32::MAX,
         line: u32::MAX,
         sourceid: SourceId::DUMMY,
     };
 
-    pub fn new(start: usize, end: usize, line: u32, sourceid: SourceId) -> Self {
+    pub fn new(start: u32, end: u32, line: u32, sourceid: SourceId) -> Self {
         Self {
             start,
             end,
@@ -252,11 +257,11 @@ impl Span {
         }
     }
 
-    pub fn start(&self) -> usize {
+    pub fn start(&self) -> u32 {
         self.start
     }
 
-    pub fn end(&self) -> usize {
+    pub fn end(&self) -> u32 {
         self.end
     }
 
@@ -280,14 +285,6 @@ impl Token {
 
     pub fn is_eof(&self) -> bool {
         self.kind == TokenKind::Eof
-    }
-
-    pub fn to_err_if_eof(self) -> Result<Token, ParseError> {
-        if !self.is_eof() {
-            return Ok(self);
-        }
-
-        Err(ParseError::EndOfFile)
     }
 }
 
@@ -394,10 +391,6 @@ impl Lexemes {
         let span = self.last_token.unwrap().span;
         Token::new(span, TokenKind::Eof)
     }
-
-    pub fn tokens_left(&self) -> &[Token] {
-        &self.tokens[self.pos..]
-    }
 }
 
 pub struct Lexer<'a> {
@@ -423,11 +416,11 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn new_span(&self, start: usize, end: usize) -> Span {
-        Span::new(start, end, self.current_line, self.sourceid)
+        Span::new(start as u32, end as u32, self.current_line, self.sourceid)
     }
 
     pub fn get_str_from_span(&self, span: Span) -> Option<&str> {
-        self.chars.get_str(span.start, span.end)
+        self.chars.get_str(span.start as usize, span.end as usize)
     }
 
     pub fn lex(mut self) -> Lexemes {
@@ -825,37 +818,27 @@ impl<'a> Lexer<'a> {
 
 fn check_for_keyword(ident: &str) -> Option<TokenKind> {
     use TokenKind::{
-        Apply, Bind, Const, Default, Else, False, For, Function, Global, If, Import, In, Inline,
-        Instance, Interface, Let, Loop, Match, Native, Realm, Return, SelfArg, Then, True, Until,
-        While, With,
+        Bind, Const, Else, False, For, Function, If, Instance, Let, Loop, Realm, Return, SelfArg,
+        Then, True, Until, While, With,
     };
 
     match ident {
+        "with" => With,
         "let" => Let,
-        "import" => Import,
         "instance" => Instance,
         "fun" => Function,
         "if" => If,
         "then" => Then,
         "else" => Else,
-        "inline" => Inline,
-        "native" => Native,
         "const" => Const,
-        "match" => Match,
-        "default" => Default,
         "true" => True,
         "false" => False,
-        "global" => Global,
         "for" => For,
         "while" => While,
         "loop" => Loop,
         "until" => Until,
         "return" => Return,
         "self" => SelfArg,
-        "in" => In,
-        "apply" => Apply,
-        "interface" => Interface,
-        "with" => With,
         "realm" => Realm,
         "bind" => Bind,
 

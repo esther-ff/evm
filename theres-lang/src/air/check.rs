@@ -1,22 +1,27 @@
+use std::borrow::Cow;
+
 use crate::{
     air::{
         def::DefId,
         node::{Block, Thing, ThingKind, Universe},
         visitor::AirVisitor,
     },
-    session::{Session, SymbolId},
+    errors::{Phase, TheresError},
+    session::Session,
     types::ty::{FnSig, Ty},
 };
 
+use crate::symbols::SymbolId;
+
+#[derive(Debug)]
 pub enum MainError<'cx> {
-    NoMain,
     WrongRetType { ty: Ty<'cx> },
     WrongSignature { sig: FnSig<'cx> },
 }
 
 struct MainCheck<'cx> {
     cx: &'cx Session<'cx>,
-    result: Result<DefId, MainError<'cx>>,
+    result: Option<DefId>,
 }
 
 impl<'air> AirVisitor<'air> for MainCheck<'_> {
@@ -25,37 +30,54 @@ impl<'air> AirVisitor<'air> for MainCheck<'_> {
     fn visit_block(&mut self, _: &'air Block<'air>) -> Self::Result {}
 
     fn visit_thing(&mut self, thing: &'air Thing<'air>) -> Self::Result {
-        if let ThingKind::Fn { name, sig: _ } = thing.kind
+        if let ThingKind::Fn { name, sig } = thing.kind
             && name.interned == SymbolId::main()
         {
             let typed_sig = self.cx.fn_sig_for(thing.def_id);
 
             if !typed_sig.output.is_nil() {
-                self.result = Err(MainError::WrongRetType {
-                    ty: typed_sig.output,
-                });
+                self.cx.diag().emit_err(
+                    MainError::WrongRetType {
+                        ty: typed_sig.output,
+                    },
+                    sig.span,
+                );
                 return;
             }
 
             if !typed_sig.inputs.is_empty() {
-                self.result = Err(MainError::WrongSignature { sig: typed_sig });
+                self.cx
+                    .diag()
+                    .emit_err(MainError::WrongSignature { sig: typed_sig }, sig.span);
                 return;
             }
 
-            self.result = Ok(thing.def_id);
+            self.result = Some(thing.def_id);
         }
     }
 }
 
-pub fn check_for_main<'cx>(
-    cx: &'cx Session<'cx>,
-    universe: &Universe<'cx>,
-) -> Result<DefId, MainError<'cx>> {
-    let mut checker = MainCheck {
-        cx,
-        result: Err(MainError::NoMain),
-    };
+pub fn check_for_main<'cx>(cx: &'cx Session<'cx>, universe: &Universe<'cx>) -> Option<DefId> {
+    let mut checker = MainCheck { cx, result: None };
 
     checker.visit_universe(universe);
     checker.result
+}
+
+impl TheresError for MainError<'_> {
+    fn phase() -> Phase {
+        Phase::TypeCk
+    }
+
+    fn message(&self) -> Cow<'static, str> {
+        match self {
+            Self::WrongRetType { ty } => {
+                format!("`main` has an incorrect return type ({ty}), consider using `nil`")
+            }
+            Self::WrongSignature { sig } => {
+                format!("`main`'s signature should be fun() => nil, while it's {sig}")
+            }
+        }
+        .into()
+    }
 }

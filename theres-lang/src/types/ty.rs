@@ -1,10 +1,13 @@
 use crate::air::def::{DefId, IntTy};
 use crate::air::node::Constant;
 use crate::errors::{Phase, TheresError};
-use crate::session::{Pooled, Session, SymbolId};
+use crate::lexer::Span;
+use crate::session::{Pooled, cx};
+use crate::symbols::SymbolId;
 use crate::types::fun_cx::{FieldSlice, InferId};
 use core::panic;
 use std::borrow::Cow;
+use std::fmt::{self, Display, Formatter};
 
 /// Interned type for a particular something.
 pub type Ty<'ty> = Pooled<'ty, TyKind<'ty>>;
@@ -19,11 +22,25 @@ pub struct FnSig<'ty> {
     pub output: Ty<'ty>,
 }
 
+impl Display for FnSig<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("fun(")?;
+        for (ix, ty) in self.inputs.iter().enumerate() {
+            ty.fmt(f)?;
+            if ix != self.inputs.len() - 1 {
+                f.write_str(", ")?;
+            }
+        }
+        write!(f, ") => {}", self.output)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LambdaEnv<'ty> {
     pub all_inputs: &'ty [Ty<'ty>],
     pub output: Ty<'ty>,
     pub did: DefId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,29 +182,29 @@ pub struct FieldDef {
 }
 
 #[derive(Debug, Clone)]
-pub enum TypingError {
-    TypeMismatch(Cow<'static, str>, Cow<'static, str>),
+pub enum TypingError<'ty> {
+    TypeMismatch(Ty<'ty>, Ty<'ty>),
 
     NoIndexOp {
-        on: Cow<'static, str>,
+        on: Ty<'ty>,
     },
 
     NoUnaryOp {
-        on: Cow<'static, str>,
+        on: Ty<'ty>,
     },
 
     NoBinaryOp {
-        lhs: Cow<'static, str>,
-        rhs: Cow<'static, str>,
+        lhs: Ty<'ty>,
+        rhs: Ty<'ty>,
     },
 
     CallingNotFn {
-        offender: Cow<'static, str>,
+        offender: Ty<'ty>,
     },
 
     WrongArgumentTy {
-        expected: Cow<'static, str>,
-        got: Cow<'static, str>,
+        expected: Ty<'ty>,
+        got: Ty<'ty>,
         arg_idx: usize,
     },
 
@@ -197,23 +214,23 @@ pub enum TypingError {
     },
 
     NoField {
-        on: Cow<'static, str>,
+        on: Ty<'ty>,
         field_name: SymbolId,
     },
 
     NotInstance {
-        got: Cow<'static, str>,
+        got: Ty<'ty>,
     },
 
     MethodNotFound {
-        on_ty: Cow<'static, str>,
+        on_ty: Ty<'ty>,
         method_name: Cow<'static, str>,
     },
 
     InferFail,
 }
 
-impl TheresError for TypingError {
+impl TheresError for TypingError<'_> {
     fn phase() -> Phase {
         Phase::TypeCk
     }
@@ -258,121 +275,82 @@ impl TheresError for TypingError {
     }
 }
 
-pub fn display_ty<'a>(session: &'a Session<'a>, ty: Ty<'a>) -> Cow<'static, str> {
-    let mut buf = String::new();
+impl Display for Ty<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self.0 {
+            TyKind::Bool => "bool",
+            TyKind::Uint(size) => match size {
+                IntTy::N8 => "u8",
+                IntTy::N16 => "u16",
+                IntTy::N32 => "u32",
+                IntTy::N64 => "u64",
+            },
+            TyKind::Int(size) => match size {
+                IntTy::N8 => "i8",
+                IntTy::N16 => "i16",
+                IntTy::N32 => "i32",
+                IntTy::N64 => "i64",
+            },
+            TyKind::Float => "f32",
+            TyKind::Double => "f64",
+            TyKind::Nil => "Nil",
+            TyKind::Error => "{type error!}",
 
-    match ty.0 {
-        TyKind::Bool => Cow::Borrowed("bool"),
-        TyKind::Uint(size) => match size {
-            IntTy::N8 => Cow::Borrowed("u8"),
-            IntTy::N16 => Cow::Borrowed("u16"),
-            IntTy::N32 => Cow::Borrowed("u32"),
-            IntTy::N64 => Cow::Borrowed("u64"),
-        },
-        TyKind::Int(size) => match size {
-            IntTy::N8 => Cow::Borrowed("i8"),
-            IntTy::N16 => Cow::Borrowed("i16"),
-            IntTy::N32 => Cow::Borrowed("i32"),
-            IntTy::N64 => Cow::Borrowed("i64"),
-        },
-        TyKind::Float => Cow::Borrowed("f32"),
-        TyKind::Double => Cow::Borrowed("f64"),
-        TyKind::Nil => Cow::Borrowed("Nil"),
-        TyKind::Error => Cow::Borrowed("{type error!}"),
+            TyKind::Diverges => "diverges",
 
-        TyKind::Diverges => Cow::Borrowed("Diverges"),
+            TyKind::Fn { inputs, output } => {
+                write!(f, "fun(")?;
+                for (ix, ty) in inputs.iter().enumerate() {
+                    write!(f, "{ty}")?;
+                    if ix != inputs.len() - 1 {
+                        write!(f, ", ")?
+                    }
+                }
+                return write!(f, ") => {}", output);
+            }
 
-        any => {
-            stringfy_string_helper(session, &mut buf, *any);
-            Cow::Owned(buf)
-        }
+            TyKind::Instance(def) => {
+                return write!(f, "{}", def.name.get_interned());
+            }
+
+            TyKind::Array(ty) => {
+                return write!(f, "[{ty}]");
+            }
+
+            TyKind::FnDef(did) => {
+                use crate::session::Session;
+                fn inner<'cx>(cx: &'cx Session<'cx>, f: &mut Formatter, did: DefId) -> fmt::Result {
+                    let sym = cx.air_ref().expect_fn(did).1;
+                    let typed_sig = cx.fn_sig_for(did);
+                    write!(f, "fun {name}(", name = sym.get_interned())?;
+
+                    for (ix, ty) in typed_sig.inputs.iter().enumerate() {
+                        write!(f, "{ty}")?;
+                        if ix != typed_sig.inputs.len() - 1 {
+                            write!(f, ", ")?
+                        }
+                    }
+
+                    write!(f, ") => {}", typed_sig.output)
+                }
+
+                return cx(|cx| inner(cx, f, *did));
+            }
+
+            TyKind::InferTy(infer) => {
+                return match infer.kind {
+                    InferKind::Float => write!(f, "?{}:f", infer.vid.to_usize()),
+                    InferKind::Integer => write!(f, "?{}:i", infer.vid.to_usize()),
+                    InferKind::Regular => write!(f, "?{}:t", infer.vid.to_usize()),
+                };
+            }
+
+            TyKind::Lambda(lambda) => {
+                write!(f, "{{lambda}}")?;
+                return Ok(());
+            }
+        };
+
+        f.write_str(str)
     }
-}
-
-fn stringfy_string_helper<'a>(session: &'a Session<'a>, buf: &mut String, ty: TyKind<'a>) {
-    use std::fmt::Write;
-
-    let push = match ty {
-        TyKind::Lambda(..) => "{lambda}",
-        TyKind::Bool => "bool",
-        TyKind::Uint(size) => match size {
-            IntTy::N8 => "u8",
-            IntTy::N16 => "u16",
-            IntTy::N32 => "u32",
-            IntTy::N64 => "u64",
-        },
-        TyKind::Int(size) => match size {
-            IntTy::N8 => "i8",
-            IntTy::N16 => "i16",
-            IntTy::N32 => "i32",
-            IntTy::N64 => "i64",
-        },
-        TyKind::Float => "f32",
-        TyKind::Double => "f64",
-        TyKind::Nil => "Nil",
-
-        TyKind::Diverges => "Diverges",
-
-        TyKind::Array(ty) => {
-            buf.push('[');
-            stringfy_string_helper(session, buf, *ty);
-            buf.push(']');
-            return;
-        }
-
-        TyKind::Fn { inputs, output } => {
-            buf.push_str("fun(");
-            for (ix, i) in inputs.iter().enumerate() {
-                stringfy_string_helper(session, buf, **i);
-
-                if ix != inputs.len() {
-                    buf.push_str(", ");
-                }
-            }
-            buf.push(')');
-            buf.push_str("=> ");
-            stringfy_string_helper(session, buf, *output);
-
-            return;
-        }
-
-        TyKind::Instance(def) => {
-            buf.push_str(def.name.get_interned());
-            return;
-        }
-
-        TyKind::FnDef(def_id) => {
-            let sig = session.fn_sig_for(def_id);
-            let _ = write!(buf, "fun (",);
-
-            for (ix, ty) in sig.inputs.iter().enumerate() {
-                stringfy_string_helper(session, buf, **ty);
-
-                if ix == sig.inputs.len() {
-                    buf.push_str(", ");
-                }
-            }
-
-            buf.push(')');
-            buf.push_str(" => ");
-            stringfy_string_helper(session, buf, *sig.output);
-
-            return;
-        }
-
-        TyKind::Error => "{type error!}",
-
-        TyKind::InferTy(infer) => {
-            return match infer.kind {
-                InferKind::Float => write!(buf, "{{float: {}?}}", infer.vid.to_usize()),
-                InferKind::Integer => {
-                    write!(buf, "{{integer: {}?}}", infer.vid.to_usize())
-                }
-                InferKind::Regular => write!(buf, "{}?", infer.vid.to_usize()),
-            }
-            .expect("writing to a `String` never fails");
-        }
-    };
-
-    buf.push_str(push);
 }

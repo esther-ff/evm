@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::mem;
 use std::ops::Sub;
-use std::panic::Location;
 
 use crate::air::Mappings;
 use crate::air::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
@@ -10,7 +9,9 @@ use crate::ast::*;
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
 use crate::maybe_visit;
-use crate::session::{Session, SymbolId};
+use crate::session::Session;
+use crate::symbols::SymbolId;
+
 use crate::visitor_common::VisitorResult;
 
 crate::newtyped_index!(Scope, ScopeMap, ScopeVec, ScopeSlice);
@@ -118,10 +119,6 @@ struct Scopes {
 impl Scopes {
     fn new(storage: Vec<Scope>) -> Self {
         Self { storage, cursor: 0 }
-    }
-
-    fn vec(&self) -> &[Scope] {
-        &self.storage
     }
 
     fn vec_mut(&mut self) -> &mut Vec<Scope> {
@@ -437,8 +434,6 @@ impl<'cx> SecondPass<'cx> {
             path.1.storage.remove(0);
         }
 
-        dbg!(&path);
-
         Self {
             cx,
             maps: Mappings::new(ast_id_did, did_ast_id, did_defs),
@@ -472,12 +467,6 @@ impl<'cx> SecondPass<'cx> {
     #[track_caller]
     fn get_name(&self, symbol: SymbolId, ns: Namespace) -> Resolved<AstId> {
         let scope = self.current_scope();
-        println!(
-            "searching for '{}' id: {}",
-            symbol.get_interned(),
-            self.current_scope
-        );
-
         let result = if let Some(found) = scope.get(ns, symbol) {
             found
         } else {
@@ -567,13 +556,7 @@ impl<'cx> SecondPass<'cx> {
 
     #[track_caller]
     fn path_forward(&mut self) {
-        let path = self.path.next_scope().expect("beyond!");
-        println!("\n-- jumped to path {path:#?}");
-        println!("{:?}\n", &self.path.storage[self.path.cursor..]);
-        println!("moved at {}", Location::caller());
-
-        // self.current_scope = self.path.next_scope().expect("went beyond the path");
-        self.current_scope = path;
+        self.current_scope = self.path.next_scope().expect("went beyond the path");
     }
 
     fn current_item(&self) -> AstId {
@@ -816,7 +799,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
             ExprType::Group(expr) => self.visit_expr(expr),
 
-            ExprType::CommaGroup(exprs) | ExprType::List(exprs) => {
+            ExprType::List(exprs) => {
                 for e in exprs {
                     self.visit_expr(e);
                 }

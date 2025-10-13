@@ -7,7 +7,8 @@ use crate::air::visitor::AirVisitor;
 use crate::air::{AirId, node};
 use crate::ast::{BinOp, UnaryOp};
 use crate::lexer::Span;
-use crate::session::{Session, SymbolId};
+use crate::session::Session;
+use crate::symbols::SymbolId;
 use crate::types::ty::{InferKind, InferTy, LambdaEnv, Ty, TyKind, TypingError};
 
 use std::collections::HashMap;
@@ -72,8 +73,6 @@ impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
                     self.visit_thing(i);
                 }
             }
-
-            ThingKind::Global { .. } => (),
         }
     }
 }
@@ -229,10 +228,9 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn type_mismatch_err(&self, expected: Ty<'ty>, got: Ty<'ty>, span: Span) {
-        self.s.diag().emit_err(
-            TypingError::TypeMismatch(self.s.stringify_ty(expected), self.s.stringify_ty(got)),
-            span,
-        );
+        self.s
+            .diag()
+            .emit_err(TypingError::TypeMismatch(expected, got), span);
     }
 
     fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
@@ -312,10 +310,7 @@ impl<'ty> FunCx<'ty> {
 
                 if self.unify(variable_ty, value_ty).is_err() {
                     self.s.diag().emit_err(
-                        TypingError::TypeMismatch(
-                            self.s.stringify_ty(variable_ty),
-                            self.s.stringify_ty(value_ty),
-                        ),
+                        TypingError::TypeMismatch(variable_ty, value_ty),
                         Span::between(variable.span, value.span),
                     );
                 }
@@ -354,7 +349,7 @@ impl<'ty> FunCx<'ty> {
                         dbg!(Location::caller());
                         self.s.diag().emit_err(
                             TypingError::CallingNotFn {
-                                offender: self.s.stringify_ty(callable), // not sure?
+                                offender: (callable), // not sure?
                             },
                             expr.span,
                         );
@@ -422,8 +417,8 @@ impl<'ty> FunCx<'ty> {
         if self.unify(ty_lhs, ty_rhs).is_err() {
             self.s.diag().emit_err(
                 TypingError::NoBinaryOp {
-                    lhs: self.s.stringify_ty(ty_lhs),
-                    rhs: self.s.stringify_ty(ty_rhs),
+                    lhs: (ty_lhs),
+                    rhs: (ty_rhs),
                 },
                 Span::between(lhs.span, rhs.span),
             );
@@ -454,12 +449,9 @@ impl<'ty> FunCx<'ty> {
             _ => return ty,
         }
 
-        self.s.diag().emit_err(
-            TypingError::NoUnaryOp {
-                on: self.s.stringify_ty(ty),
-            },
-            target.span,
-        );
+        self.s
+            .diag()
+            .emit_err(TypingError::NoUnaryOp { on: (ty) }, target.span);
 
         self.s.ty_err()
     }
@@ -473,12 +465,9 @@ impl<'ty> FunCx<'ty> {
         let src_ty = self.type_of(indexed_thing);
 
         let TyKind::Array(inner_ty) = src_ty.0 else {
-            self.s.diag().emit_err(
-                TypingError::NoIndexOp {
-                    on: self.s.stringify_ty(src_ty),
-                },
-                expr_span,
-            );
+            self.s
+                .diag()
+                .emit_err(TypingError::NoIndexOp { on: (src_ty) }, expr_span);
 
             return self.s.ty_err();
         };
@@ -526,6 +515,7 @@ impl<'ty> FunCx<'ty> {
                     self.s.lower_ty(&ty)
                 }),
             did: lambda.did,
+            span: expr_span,
         };
 
         let air = self.s.air_ref();
@@ -533,13 +523,9 @@ impl<'ty> FunCx<'ty> {
         let output_ty = self.type_of(body);
 
         if self.unify(env.output, output_ty).is_err() {
-            self.s.diag().emit_err(
-                TypingError::TypeMismatch(
-                    self.s.stringify_ty(env.output),
-                    self.s.stringify_ty(output_ty),
-                ),
-                body.span,
-            );
+            self.s
+                .diag()
+                .emit_err(TypingError::TypeMismatch(env.output, output_ty), body.span);
         }
 
         let ptr = self.s.arena().alloc(env);
@@ -584,13 +570,11 @@ impl<'ty> FunCx<'ty> {
             }
 
             TypingError::NoField {
-                on: self.s.stringify_ty(src_ty),
+                on: (src_ty),
                 field_name,
             }
         } else {
-            TypingError::NotInstance {
-                got: self.s.stringify_ty(src_ty),
-            }
+            TypingError::NotInstance { got: (src_ty) }
         };
 
         self.s.diag().emit_err(err, src.span);
@@ -682,7 +666,7 @@ impl<'ty> FunCx<'ty> {
             else {
                 self.s.diag().emit_err(
                     TypingError::MethodNotFound {
-                        on_ty: self.s.stringify_ty(recv_ty),
+                        on_ty: (recv_ty),
                         method_name: method.get_interned().to_string().into(),
                     },
                     receiver.span,

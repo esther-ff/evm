@@ -1,12 +1,11 @@
 use crate::ast::{
-    AstId, Bind, BindItem, BindItemKind, Block, Expr, ExprType, Field, FnDecl, GlobalDecl,
-    Instance, Name, Path, Realm, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
-    VariableStmt, Visitor,
+    AstId, Bind, BindItem, BindItemKind, Block, Expr, ExprType, Field, FnDecl, Instance, Name,
+    Path, Realm, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe, VariableStmt, Visitor,
 };
 
 use crate::id::IndexId;
 use crate::lexer::Span;
-use crate::session::SymbolId;
+use crate::symbols::SymbolId;
 use crate::visitor_common::VisitorResult;
 
 use std::fmt::{self, Write as _};
@@ -195,15 +194,6 @@ where
             BindItemKind::Const(ref constant) => self.visit_var_stmt(constant),
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
-    }
-
-    fn visit_global(&mut self, val: &'v GlobalDecl) -> Self::Result {
-        let c = if val.constant { "constant" } else { "mutable" };
-        self.write("Global", val.name.span, val.id, Some(val.name), Some(c));
-        self.increase_indent(|t| {
-            t.visit_ty(&val.ty);
-            t.visit_expr(&val.initializer);
-        });
     }
 
     fn visit_instance(&mut self, val: &'v Instance) -> Self::Result {

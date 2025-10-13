@@ -1,10 +1,8 @@
-#![warn(clippy::pedantic)]
 #![warn(clippy::style)]
 #![warn(clippy::complexity)]
 #![warn(clippy::perf)]
 #![warn(clippy::suspicious)]
 #![warn(clippy::correctness)]
-#![allow(dead_code)]
 
 mod air;
 mod arena;
@@ -17,6 +15,7 @@ mod parser;
 mod pill;
 mod session;
 mod sources;
+mod symbols;
 mod types;
 mod visitor_common;
 

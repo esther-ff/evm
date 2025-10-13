@@ -1,10 +1,45 @@
-use std::panic::Location;
-
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
-use crate::errors::DiagEmitter;
+use crate::errors::{DiagEmitter, Phase, TheresError};
 use crate::lexer::{Lexemes, Span, Token, TokenKind};
-use crate::session::SymbolId;
+use crate::symbols::SymbolId;
+
+use std::borrow::Cow;
+use std::panic::Location;
+
+impl TheresError for ParseError {
+    fn phase() -> Phase {
+        Phase::Parsing
+    }
+
+    fn message(&self) -> Cow<'static, str> {
+        match self {
+            ParseError::Expected { what, got } => {
+                format!("expected {what} but got: {got:?}").into()
+            }
+
+            ParseError::EndOfFile => "unexpected end-of-file".into(),
+
+            ParseError::WrongUnaryOp { offender } => {
+                format!("can't execute {offender:?} as unary operator").into()
+            }
+
+            ParseError::FunctionWithoutBody => "this function is supposed to have a body".into(),
+
+            ParseError::MalformedType => "this type is malformed".into(),
+
+            ParseError::ExpectedDecl { got } => {
+                format!("expected the start of a declaration, got: {got}").into()
+            }
+
+            ParseError::ExpectedConstVar => "expected a constant here".into(),
+
+            ParseError::InvalidPattern => "this pattern is invalid syntatically".into(),
+
+            ParseError::ExpectedExpr => "expected an expression here".into(),
+        }
+    }
+}
 
 macro_rules! t {
     ($ident:ident) => {
@@ -16,17 +51,11 @@ crate::newtyped_index!(AstId, AstIdMap, AstIdVec);
 
 type Result<T, E = ParseError> = core::result::Result<T, E>;
 
-enum ParseOutput {
-    Failed,
-    Normal,
-}
-
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
-pub enum ParseError {
+enum ParseError {
     EndOfFile,
     Expected { what: TokenKind, got: TokenKind },
     ExpectedDecl { got: TokenKind },
-    ExpectedUnknown { what: &'static str },
     ExpectedExpr,
     WrongUnaryOp { offender: Token },
     MalformedType,
@@ -57,7 +86,7 @@ enum VariableReq {
     ConstAndInit,
 }
 
-pub struct Parser<'a> {
+struct Parser<'a> {
     lexemes: Lexemes,
 
     id: u32,
@@ -66,39 +95,46 @@ pub struct Parser<'a> {
     diag: &'a DiagEmitter<'a>,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(lexemes: Lexemes, diag: &'a DiagEmitter<'a>) -> Self {
-        Self {
-            lexemes,
-            id: 0,
-            diag,
+pub fn parse<'a>(lexemes: Lexemes, diag: &'a DiagEmitter<'a>) -> Universe {
+    let mut parser = Parser {
+        lexemes,
+        diag,
+        id: 0,
+        decls: vec![],
+    };
 
-            decls: Vec::new(),
+    let universe_id = parser.new_id();
+
+    while !parser.lexemes.is_empty() {
+        let id = parser.new_id();
+        match parser.declaration() {
+            Err(..) => {}
+            Ok(decl) => parser.decls.push(Thing::new(decl, id)),
         }
     }
 
+    let first = parser.decls.first().map(|elm| elm.kind.span());
+    let last = parser.decls.last().map(|elm| elm.kind.span());
+    let span = match (first, last) {
+        // empty
+        (None, None) => Span::DUMMY,
+        (Some(l), Some(r)) if l == r => l,
+        (Some(l), Some(r)) => Span::between(l, r),
+        _ => unreachable!("nonsense scenarios"),
+    };
+
+    Universe {
+        id: universe_id,
+        thingies: parser.decls,
+        span,
+    }
+}
+
+impl<'a> Parser<'a> {
     fn new_id(&mut self) -> AstId {
         let id = AstId::new(self.id);
         self.id += 1;
         id
-    }
-
-    pub fn parse(mut self) -> Universe {
-        let universe_id = self.new_id();
-
-        while !self.lexemes.is_empty() {
-            let id = self.new_id();
-            match self.declaration() {
-                Err(..) => {}
-                Ok(decl) => self.decls.push(Thing::new(decl, id)),
-            }
-        }
-
-        Universe {
-            id: universe_id,
-            thingies: self.decls,
-            span: Span::DUMMY,
-        }
     }
 
     fn is_next(&self, tok: TokenKind) -> bool {
@@ -112,10 +148,14 @@ impl<'a> Parser<'a> {
         let decl = match tok.kind {
             TokenKind::Function => ThingKind::Function(self.function_declaration()?),
             TokenKind::Instance => self.instance_decl()?,
-            TokenKind::Interface => unimplemented!(),
             TokenKind::Bind => ThingKind::Bind(self.bind_decl()?),
             TokenKind::Realm => self.realm_decl()?,
-            TokenKind::Eof => return tok.to_err_if_eof().map(|_| unreachable!()),
+            TokenKind::Eof => {
+                let prev = self.lexemes.previous();
+                self.diag.emit_err(ParseError::EndOfFile, prev.span);
+
+                return Err(ParseError::EndOfFile);
+            }
 
             got => {
                 return self.error_out(ParseError::ExpectedDecl { got }, tok.span);
@@ -363,8 +403,7 @@ impl<'a> Parser<'a> {
                     id: self.new_id(),
                     kind: TyKind::MethodSelf,
                     span: tok.span,
-                }
-                .into(),
+                },
                 self.new_id(),
             );
 
@@ -485,7 +524,7 @@ impl<'a> Parser<'a> {
     }
 
     fn local_variable_stmt(&mut self, req: VariableReq) -> Result<VariableStmt> {
-        let tok = self.lexemes.next_token().to_err_if_eof()?;
+        let tok = self.lexemes.next_token();
         let mode = match tok.kind {
             TokenKind::Const => VarMode::Const,
             TokenKind::Let => {
@@ -494,6 +533,11 @@ impl<'a> Parser<'a> {
                 }
 
                 VarMode::Let
+            }
+
+            TokenKind::Eof => {
+                self.diag.emit_err(ParseError::EndOfFile, tok.span);
+                return Err(ParseError::EndOfFile);
             }
 
             _ => {
@@ -532,16 +576,14 @@ impl<'a> Parser<'a> {
     }
 
     fn statement(&mut self) -> Result<ExprOrStmt> {
-        let tok = self.lexemes.peek_token().to_err_if_eof()?;
+        let tok = self.lexemes.peek_token();
         let id = self.new_id();
         let stmt = match tok.kind {
             TokenKind::Let | TokenKind::Const => {
                 StmtKind::LocalVar(self.local_variable_stmt(VariableReq::None)?)
             }
 
-            TokenKind::Function | TokenKind::Global => {
-                StmtKind::Thing(Thing::new(self.declaration()?, id))
-            }
+            TokenKind::Function => StmtKind::Thing(Thing::new(self.declaration()?, id)),
 
             _ => {
                 let expr = self.expression()?;
@@ -593,7 +635,7 @@ impl<'a> Parser<'a> {
         self.assignment()
     }
 
-    pub fn if_expr(&mut self) -> Result<Expr> {
+    fn if_expr(&mut self) -> Result<Expr> {
         let begin = self.expect_token(TokenKind::If)?;
         let expr = self.expression()?;
 
@@ -662,7 +704,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    pub fn loop_expr(&mut self) -> Result<Expr> {
+    fn loop_expr(&mut self) -> Result<Expr> {
         let loop_ident = self.expect_token(TokenKind::Loop)?;
         let body = self.block()?;
         let span = Span::between(loop_ident.span, body.span);
@@ -670,7 +712,7 @@ impl<'a> Parser<'a> {
         Ok(Expr::new(ExprType::Loop { body }, span, self.new_id()))
     }
 
-    pub fn for_loop(&mut self) -> Result<Expr> {
+    fn for_loop(&mut self) -> Result<Expr> {
         let for_ident = self.expect_token(TokenKind::For)?;
         let pat = self.pat()?;
 
@@ -692,8 +734,8 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    pub fn pat(&mut self) -> Result<Pat> {
-        let token = self.expect_any_token()?;
+    fn pat(&mut self) -> Result<Pat> {
+        let token = self.lexemes.next_token();
         let pat = match token.kind {
             TokenKind::Underscore => Pat::new(PatType::Wild, token.span),
 
@@ -818,7 +860,6 @@ impl<'a> Parser<'a> {
             TokenKind::BitOrAssign => AssignMode::Or,
             TokenKind::BitAndAssign => AssignMode::And,
 
-            TokenKind::Eof => return tok.to_err_if_eof().map(|_| unreachable!()),
             _ => return Ok(lvalue),
         };
 
@@ -1220,7 +1261,7 @@ impl<'a> Parser<'a> {
     }
 
     fn primary(&mut self) -> Result<Expr> {
-        let token = self.lexemes.peek_token().to_err_if_eof()?;
+        let token = self.lexemes.peek_token();
 
         match token.kind {
             TokenKind::Return => self.return_expr(token),
@@ -1240,6 +1281,7 @@ impl<'a> Parser<'a> {
             | TokenKind::StringLiteral(..) => Ok(self.literals(token.kind)),
             TokenKind::LeftParen => self.group_exprs(),
             TokenKind::Identifier(..) => self.path_expr(),
+            TokenKind::Break => Ok(Expr::new(ExprType::Break, token.span, self.new_id())),
 
             TokenKind::LeftCurlyBracket => {
                 let block = self.block()?;
@@ -1319,10 +1361,11 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn expect_ident_as_name(&mut self) -> Result<Name, ParseError> {
+    fn expect_ident_as_name(&mut self) -> Result<Name> {
         let tok = self.lexemes.next_token();
         if tok.is_eof() {
-            return tok.to_err_if_eof().map(|_| unreachable!());
+            self.diag.emit_err(ParseError::EndOfFile, tok.span);
+            return Err(ParseError::EndOfFile);
         }
 
         if let TokenKind::Identifier(id) = tok.kind {
@@ -1357,18 +1400,8 @@ impl<'a> Parser<'a> {
     }
 
     // except eof
-    fn expect_any_token(&mut self) -> Result<Token, ParseError> {
-        let tok = self.lexemes.next_token();
-        if tok.is_eof() {
-            return tok.to_err_if_eof();
-        }
-
-        Ok(tok)
-    }
-
-    // except eof
     fn expect_token(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
-        let tok = self.expect_any_token()?;
+        let tok = self.lexemes.next_token();
 
         if tok.kind != kind {
             let kind = ParseError::Expected {

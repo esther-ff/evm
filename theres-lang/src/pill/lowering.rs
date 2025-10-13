@@ -8,7 +8,8 @@ use crate::pill::body::{AltarData, AltarId, Altars, IrFunc, LabelId, LabelVec, P
 use crate::pill::cfg::Cfg;
 use crate::pill::instr::{InstrStream, Operand};
 use crate::pill::scalar::Scalar;
-use crate::session::{Session, SymbolId};
+use crate::session::Session;
+use crate::symbols::SymbolId;
 use crate::types::fun_cx::FieldId;
 use crate::types::{fun_cx::TypeTable, ty::Ty};
 

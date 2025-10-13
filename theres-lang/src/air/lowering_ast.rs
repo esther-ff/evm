@@ -12,7 +12,8 @@ use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
 use crate::lexer::Span;
 use crate::parser::{AstId, AstIdMap};
-use crate::session::{Session, SymbolId};
+use crate::session::Session;
+use crate::symbols::SymbolId;
 
 crate::newtyped_index!(AirId, AirIdMap, AirVec);
 crate::newtyped_index!(LocalId, LocalMap, LocalVec);
@@ -33,15 +34,15 @@ impl TheresError for AstLowerError {
 
 pub struct Mappings {
     instance_to_field_list: AstIdMap<Vec<DefId>>,
-    field_id_to_instance: AstIdMap<DefId>,
+    // field_id_to_instance: AstIdMap<DefId>,
     resolution_map: AstIdMap<Resolved<AstId>>,
     ast_id_to_def_id: AstIdMap<DefId>,
     def_id_to_ast_id: DefMap<AstId>,
     instance_to_bind: DefMap<Vec<AstId>>,
-    binds_to_resolved_ty_id: AstIdMap<AstId>,
-    binds_to_items: AstIdMap<Vec<AstId>>,
+    // binds_to_resolved_ty_id: AstIdMap<AstId>,
+    // binds_to_items: AstIdMap<Vec<AstId>>,
 
-    self_ty_ast_id_to_ty: AstIdMap<Ty>,
+    // self_ty_ast_id_to_ty: AstIdMap<Ty>,
     pub(super) def_types: DefVec<DefType>,
 }
 
@@ -53,24 +54,16 @@ impl Mappings {
     ) -> Self {
         Self {
             instance_to_field_list: HashMap::new(),
-            field_id_to_instance: HashMap::new(),
+            // field_id_to_instance: HashMap::new(),
             resolution_map: HashMap::new(),
             ast_id_to_def_id,
             def_id_to_ast_id,
             instance_to_bind: HashMap::new(),
-            binds_to_resolved_ty_id: HashMap::new(),
-            binds_to_items: HashMap::new(),
-            self_ty_ast_id_to_ty: HashMap::new(),
+            // binds_to_resolved_ty_id: HashMap::new(),
+            // binds_to_items: HashMap::new(),
+            // self_ty_ast_id_to_ty: HashMap::new(),
             def_types,
         }
-    }
-
-    pub fn debug_resolutions(&self) -> impl IntoIterator<Item = (&AstId, &Resolved<AstId>)> {
-        &self.resolution_map
-    }
-
-    pub fn instance_to_bind(&self, id: DefId) -> Option<&Vec<AstId>> {
-        self.instance_to_bind.get(&id)
     }
 
     pub fn insert_instance_to_bind(&mut self, id: DefId, bind: AstId) {
@@ -98,13 +91,6 @@ impl Mappings {
         match self.ast_id_to_def_id.get(&id) {
             Some(id) => *id,
             None => panic!("Provided `AstId` ({id:?}) is not mapped to any DefId!"),
-        }
-    }
-
-    pub fn ast_id_of(&self, id: DefId) -> AstId {
-        match self.def_id_to_ast_id.get(&id) {
-            Some(id) => *id,
-            None => panic!("Provided `DefId` ({id:?}) is not mapped to any AstId!"),
         }
     }
 
@@ -495,12 +481,6 @@ impl<'air> AstLowerer<'air> {
             },
 
             ExprType::Group(expr) => return self.lower_expr_noalloc(expr),
-
-            ExprType::CommaGroup(exprs) => node::ExprKind::CommaSep(
-                self.session
-                    .arena()
-                    .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_noalloc(expr))),
-            ),
 
             ExprType::List(exprs) => node::ExprKind::List(
                 self.session
@@ -978,16 +958,14 @@ impl<'air> AstLowerer<'air> {
     }
 
     pub fn lower_universe(&mut self, universe: &Universe) -> &'air node::Universe<'air> {
-        let id = self.next_air_id(universe.id);
+        let _id = self.next_air_id(universe.id);
         let universe = node::Universe::new(
-            id,
             self.session.arena().alloc_from_iter(
                 universe
                     .thingies
                     .iter()
                     .map(|thing| self.lower_thing(thing)),
             ),
-            universe.span,
         );
 
         self.session.arena().alloc(universe)
