@@ -370,16 +370,7 @@ impl<'h> BindItem<'h> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BindItemKind<'h> {
-    Fun {
-        sig: &'h FnSig<'h>,
-        name: SymbolId,
-    },
-
-    Const {
-        ty: &'h Ty<'h>,
-        expr: &'h Expr<'h>,
-        sym: SymbolId,
-    },
+    Fun { sig: &'h FnSig<'h>, name: SymbolId },
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -296,15 +296,15 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
     fn visit_bind_item(&mut self, val: &'vis BindItem) -> Self::Result {
         let old = self.thing_ast_id.replace(val.id);
         match val.kind {
-            BindItemKind::Const(ref stmt) => {
-                let id = self.define(val.id, DefType::Const, stmt.name);
+            // BindItemKind::Const(ref stmt) => {
+            //     let id = self.define(val.id, DefType::Const, stmt.name);
 
-                self.add_to_scope(
-                    Namespace::Values,
-                    stmt.name.interned,
-                    Resolved::Def(id, DefType::Const),
-                );
-            }
+            //     self.add_to_scope(
+            //         Namespace::Values,
+            //         stmt.name.interned,
+            //         Resolved::Def(id, DefType::Const),
+            //     );
+            // }
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
         self.thing_ast_id = old;
@@ -659,16 +659,15 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
         self.current_bind_item = Some(val.id);
 
         match val.kind {
-            BindItemKind::Const(ref var_stmt) => {
-                let def_id = self.get_def_id(val.id);
-                self.current_scope_mut().add(
-                    Namespace::Values,
-                    var_stmt.name.interned,
-                    Resolved::Def(def_id, DefType::Const),
-                );
-                self.visit_var_stmt(var_stmt);
-            }
-
+            // BindItemKind::Const(ref var_stmt) => {
+            //     let def_id = self.get_def_id(val.id);
+            //     self.current_scope_mut().add(
+            //         Namespace::Values,
+            //         var_stmt.name.interned,
+            //         Resolved::Def(def_id, DefType::Const),
+            //     );
+            //     self.visit_var_stmt(var_stmt);
+            // }
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
 

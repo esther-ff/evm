@@ -155,10 +155,10 @@ pub fn walk_bind_item<'vis, V: AirVisitor<'vis>>(
 
     match kind {
         BindItemKind::Fun { sig, name: _ } => v.visit_fn_sig(sig),
-        BindItemKind::Const { ty, expr, sym: _ } => {
-            try_visit!(v.visit_ty(ty));
-            v.visit_expr(expr)
-        }
+        // BindItemKind::Const { ty, expr, sym: _ } => {
+        //     try_visit!(v.visit_ty(ty));
+        //     v.visit_expr(expr)
+        // }
     }
 }
 

@@ -209,7 +209,7 @@ impl<'sess> Session<'sess> {
 
             Node::BindItem(item) => match item.kind {
                 BindItemKind::Fun { .. } => self.intern_ty(TyKind::FnDef(def_id)),
-                BindItemKind::Const { ty, .. } => self.lower_ty(ty),
+                // BindItemKind::Const { ty, .. } => self.lower_ty(ty),
             },
 
             any => panic!("Can't express type for {any:?}"),

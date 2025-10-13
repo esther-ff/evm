@@ -165,9 +165,8 @@ pub fn lower_universe<'il>(session: &'il Session<'il>, universe: &'il Universe<'
 
             ThingKind::Bind(bind) => {
                 for item in bind.items {
-                    if let BindItemKind::Fun { sig: _, name: _ } = item.kind {
-                        builder.build_ir_fun(item.def_id);
-                    }
+                    let BindItemKind::Fun { sig: _, name: _ } = item.kind;
+                    builder.build_ir_fun(item.def_id);
                 }
             }
             _ => (),

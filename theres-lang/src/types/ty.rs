@@ -319,6 +319,7 @@ impl Display for Ty<'_> {
 
             TyKind::FnDef(did) => {
                 use crate::session::Session;
+
                 fn inner<'cx>(cx: &'cx Session<'cx>, f: &mut Formatter, did: DefId) -> fmt::Result {
                     let sym = cx.air_ref().expect_fn(did).1;
                     let typed_sig = cx.fn_sig_for(did);
@@ -345,7 +346,7 @@ impl Display for Ty<'_> {
                 };
             }
 
-            TyKind::Lambda(lambda) => {
+            TyKind::Lambda(_lambda) => {
                 write!(f, "{{lambda}}")?;
                 return Ok(());
             }

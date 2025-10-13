@@ -43,10 +43,10 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
 
         match bind_item.kind {
             node::BindItemKind::Fun { sig, name: _ } => self.visit_fn_sig(sig),
-            node::BindItemKind::Const { ty, expr, sym: _ } => {
-                self.visit_ty(ty);
-                self.visit_expr(expr);
-            }
+            // node::BindItemKind::Const { ty, expr, sym: _ } => {
+            //     self.visit_ty(ty);
+            //     self.visit_expr(expr);
+            // }
         }
     }
 

@@ -457,9 +457,6 @@ impl<'a> Parser<'a> {
     fn bind_item(&mut self) -> Result<BindItem> {
         let kind = match self.lexemes.peek_token().kind {
             TokenKind::Function => BindItemKind::Fun(self.function_declaration()?),
-            TokenKind::Const => {
-                BindItemKind::Const(self.local_variable_stmt(VariableReq::ConstAndInit)?)
-            }
             _ => todo!(),
         };
 

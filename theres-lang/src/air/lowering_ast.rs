@@ -798,21 +798,6 @@ impl<'air> AstLowerer<'air> {
 
     fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'air> {
         let (lowered_kind, _, span) = match &kind.kind {
-            BindItemKind::Const(variable) => (
-                node::BindItemKind::Const {
-                    ty: self.lower_ty(variable.ty.as_ref().expect("consts should have types")),
-                    expr: self.lower_expr(
-                        variable
-                            .init
-                            .as_ref()
-                            .expect("guarantee broken: all associated consts have an init expr"),
-                    ),
-                    sym: variable.name.interned,
-                },
-                variable.id,
-                variable.name.span,
-            ),
-
             BindItemKind::Fun(fn_decl) => {
                 let sig =
                     self.lower_fn_sig(&fn_decl.sig, self.session.air(|map| map.bodies.future_id()));

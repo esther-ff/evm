@@ -191,7 +191,7 @@ where
 
     fn visit_bind_item(&mut self, val: &'v BindItem) -> Self::Result {
         match val.kind {
-            BindItemKind::Const(ref constant) => self.visit_var_stmt(constant),
+            // BindItemKind::Const(ref constant) => self.visit_var_stmt(constant),
             BindItemKind::Fun(ref f) => self.visit_fn_decl(f),
         }
     }
