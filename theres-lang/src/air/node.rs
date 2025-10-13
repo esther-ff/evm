@@ -13,11 +13,9 @@ pub enum Node<'h> {
     Block(&'h Block<'h>),
     Stmt(&'h Stmt<'h>),
     Ty(&'h Ty<'h>),
-    VariableStmt(&'h Local<'h>),
     Field(&'h Field<'h>),
     Path(&'h Path<'h>),
     FnParam(&'h Param<'h>),
-    Lambda(&'h Lambda<'h>),
 }
 
 impl<'h> Node<'h> {

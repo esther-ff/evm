@@ -3,7 +3,7 @@ use crate::air::lowering_ast::AirMap;
 use crate::air::node::{
     self, Expr, ExprKind, Field, FnSig, Node, Param, Path, Stmt, StmtKind, Thing, Ty,
 };
-use crate::air::visitor::{AirVisitor, walk_expr, walk_thing, walk_ty};
+use crate::air::visitor::{AirVisitor, walk_block, walk_expr, walk_thing, walk_ty};
 use crate::visitor_common::VisitorResult;
 use crate::{maybe_visit, try_visit, visit_iter};
 
@@ -105,5 +105,11 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
 
         maybe_visit!(v:self, m:visit_ty, local.ty);
         maybe_visit!(v:self, m:visit_expr, local.init);
+    }
+
+    fn visit_block(&mut self, block: &'air node::Block<'air>) -> Self::Result {
+        self.m.insert_node(Node::Block(block), block.air_id);
+
+        walk_block(self, block)
     }
 }
