@@ -1,7 +1,7 @@
 mod pretty;
 pub use pretty::PrettyPrinter;
 
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::symbols::SymbolId;
 
 pub use crate::parser::AstId;

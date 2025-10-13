@@ -1,5 +1,6 @@
 use crate::errors::{DiagEmitter, Phase, TheresError};
 use crate::sources::SourceId;
+use crate::span::Span;
 use crate::symbols::SymbolId;
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -232,46 +233,6 @@ macro_rules! operators {
     }};
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
-    pub line: u32,
-    pub sourceid: SourceId,
-}
-
-impl Span {
-    pub const DUMMY: Self = Self {
-        start: u32::MAX,
-        end: u32::MAX,
-        line: u32::MAX,
-        sourceid: SourceId::DUMMY,
-    };
-
-    pub fn new(start: u32, end: u32, line: u32, sourceid: SourceId) -> Self {
-        Self {
-            start,
-            end,
-            line,
-            sourceid,
-        }
-    }
-
-    pub fn start(&self) -> u32 {
-        self.start
-    }
-
-    pub fn end(&self) -> u32 {
-        self.end
-    }
-
-    #[track_caller]
-    pub fn between(left: Self, right: Self) -> Span {
-        debug_assert!(left.sourceid == right.sourceid);
-        Span::new(left.start, right.end, right.line, right.sourceid)
-    }
-}
-
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub struct Token {
     pub kind: TokenKind,
@@ -288,34 +249,34 @@ impl Token {
     }
 }
 
-pub struct Reader<'a> {
+struct Reader<'a> {
     file: &'a [u8],
     position: usize,
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(file: &'a [u8]) -> Self {
+    fn new(file: &'a [u8]) -> Self {
         Self { file, position: 0 }
     }
 
-    pub fn peek_char(&self) -> Option<char> {
+    fn peek_char(&self) -> Option<char> {
         self.peek_char_by(0)
     }
     pub fn peek_char_by(&self, by: usize) -> Option<char> {
         self.file.get(self.position + by).copied().map(Into::into)
     }
 
-    pub fn next_char(&mut self) -> Option<char> {
+    fn next_char(&mut self) -> Option<char> {
         let val = self.peek_char();
         self.position += 1;
         val
     }
 
-    pub fn advance(&mut self, by: usize) {
+    fn advance(&mut self, by: usize) {
         self.position += by;
     }
 
-    pub fn get_str(&self, start: usize, end: usize) -> Option<&str> {
+    fn get_str(&self, start: usize, end: usize) -> Option<&str> {
         self.file
             .get(start..end)
             .map(core::str::from_utf8)
@@ -326,7 +287,7 @@ impl<'a> Reader<'a> {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub enum LexError {
+enum LexError {
     InvalidFloatLiteral,
     InvalidHexLiteral,
     InvalidOctalLiteral,
@@ -338,17 +299,14 @@ pub struct Lexemes {
     pos: usize,
     tokens: Vec<Token>,
     last_token: Option<Token>,
-
-    pub source_id: SourceId,
 }
 
 impl Lexemes {
-    pub fn new(tokens: Vec<Token>, source_id: SourceId) -> Self {
+    pub fn new(tokens: Vec<Token>) -> Self {
         Self {
             last_token: None,
             tokens,
             pos: 0,
-            source_id,
         }
     }
 
@@ -527,7 +485,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Lexemes::new(self.tokens, self.sourceid)
+        Lexemes::new(self.tokens)
     }
 
     #[inline]
@@ -818,8 +776,8 @@ impl<'a> Lexer<'a> {
 
 fn check_for_keyword(ident: &str) -> Option<TokenKind> {
     use TokenKind::{
-        Bind, Const, Else, False, For, Function, If, Instance, Let, Loop, Realm, Return, SelfArg,
-        Then, True, Until, While, With,
+        Bind, Break, Const, Else, False, For, Function, If, Instance, Let, Loop, Realm, Return,
+        SelfArg, Then, True, Until, While, With,
     };
 
     match ident {
@@ -841,6 +799,7 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
         "self" => SelfArg,
         "realm" => Realm,
         "bind" => Bind,
+        "break" => Break,
 
         _ => return None,
     }

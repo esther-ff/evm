@@ -10,9 +10,9 @@ use crate::air::def::{BodyId, BodyVec, DefId, DefMap, DefType, DefVec, Resolved}
 use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
-use crate::lexer::Span;
 use crate::parser::{AstId, AstIdMap};
 use crate::session::Session;
+use crate::span::Span;
 use crate::symbols::SymbolId;
 
 crate::newtyped_index!(AirId, AirIdMap, AirVec);

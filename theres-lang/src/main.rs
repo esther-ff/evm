@@ -15,6 +15,7 @@ mod parser;
 mod pill;
 mod session;
 mod sources;
+mod span;
 mod symbols;
 mod types;
 mod visitor_common;

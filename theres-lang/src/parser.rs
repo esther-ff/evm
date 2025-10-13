@@ -1,7 +1,8 @@
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 use crate::errors::{DiagEmitter, Phase, TheresError};
-use crate::lexer::{Lexemes, Span, Token, TokenKind};
+use crate::lexer::{Lexemes, Token, TokenKind};
+use crate::span::Span;
 use crate::symbols::SymbolId;
 
 use std::borrow::Cow;

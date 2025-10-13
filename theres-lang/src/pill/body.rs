@@ -11,8 +11,8 @@ mod private {
     }
 }
 
-use crate::lexer::Span;
 use crate::pill::instr::{Instr, InstrStream, Operand};
+use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::types::fun_cx::FieldId;
 use crate::types::ty::Ty;

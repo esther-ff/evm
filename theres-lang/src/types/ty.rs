@@ -1,8 +1,8 @@
 use crate::air::def::{DefId, IntTy};
 use crate::air::node::Constant;
 use crate::errors::{Phase, TheresError};
-use crate::lexer::Span;
 use crate::session::{Pooled, cx};
+use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::types::fun_cx::{FieldSlice, InferId};
 use core::panic;

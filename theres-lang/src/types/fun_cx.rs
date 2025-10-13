@@ -6,8 +6,8 @@ use crate::air::node::{
 use crate::air::visitor::AirVisitor;
 use crate::air::{AirId, node};
 use crate::ast::{BinOp, UnaryOp};
-use crate::lexer::Span;
 use crate::session::Session;
+use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::types::ty::{InferKind, InferTy, LambdaEnv, Ty, TyKind, TypingError};
 

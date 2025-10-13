@@ -1,16 +1,12 @@
-use std::{
-    borrow::Cow,
-    cell::RefCell,
-    cmp,
-    fmt::Display,
-    io::{self, BufWriter, Stderr, Write},
-    panic::Location,
-};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::cmp;
+use std::fmt::Display;
+use std::io::{self, BufWriter, Stderr, Write};
+use std::panic::Location;
 
-use crate::{
-    lexer::Span,
-    sources::{SourceId, Sources},
-};
+use crate::sources::{SourceId, Sources};
+use crate::span::Span;
 
 pub enum Phase {
     Lexing,

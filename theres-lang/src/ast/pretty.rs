@@ -4,7 +4,7 @@ use crate::ast::{
 };
 
 use crate::id::IndexId;
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::visitor_common::VisitorResult;
 

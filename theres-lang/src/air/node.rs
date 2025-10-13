@@ -1,7 +1,7 @@
 use crate::air::AirId;
 use crate::air::def::{BodyId, DefId, Resolved};
 use crate::ast::{AssignMode, BinOp, Name, UnaryOp};
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::symbols::SymbolId;
 
 #[derive(Debug, Clone, Copy)]
