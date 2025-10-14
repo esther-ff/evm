@@ -1,10 +1,10 @@
 #![allow(clippy::mut_from_ref, clippy::ref_as_ptr, clippy::inline_always)]
 
 use std::{
-    alloc::Layout,
+    alloc::{AllocError, Allocator, Layout},
     cell::{Cell, RefCell},
     mem::MaybeUninit,
-    ptr::NonNull,
+    ptr::{self, NonNull},
 };
 
 const CHUNK_SIZE: usize = 1024 * 64;
@@ -170,6 +170,24 @@ const fn align_down(addr: usize, align: usize) -> usize {
 // fn align_up(addr: usize, align: usize) -> usize {
 //     (addr + align - 1) & !(align - 1)
 // }
+
+unsafe impl Allocator for Arena {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() == 0 {
+            return Err(AllocError);
+        }
+
+        let raw = self.alloc_raw(layout);
+        let slice = ptr::from_raw_parts_mut(raw, layout.size());
+
+        let ptr = unsafe { NonNull::new_unchecked(slice) };
+        Ok(ptr)
+    }
+
+    unsafe fn deallocate(&self, _: NonNull<u8>, _: Layout) {
+        // we leak the memory as this is an arena
+    }
+}
 
 #[cfg(test)]
 mod tests {

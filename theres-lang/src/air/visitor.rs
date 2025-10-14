@@ -251,6 +251,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
                 inputs,
                 output,
                 body: _,
+                span: _,
             } = lambda;
 
             visit_iter!(v: v, m: visit_param, *inputs);
@@ -308,7 +309,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
             indexed_thing,
         } => try_visit!(v.visit_expr(index), v.visit_expr(indexed_thing)),
 
-        ExprKind::CommaSep(exprs) | ExprKind::List(exprs) => {
+        ExprKind::List(exprs) => {
             visit_iter!(v: v, m: visit_expr, *exprs);
         }
 

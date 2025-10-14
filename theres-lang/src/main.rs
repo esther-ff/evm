@@ -1,13 +1,17 @@
+#![feature(allocator_api)]
+#![feature(ptr_metadata)]
 #![warn(clippy::style)]
 #![warn(clippy::complexity)]
 #![warn(clippy::perf)]
 #![warn(clippy::suspicious)]
 #![warn(clippy::correctness)]
+#![allow(dead_code)]
 
 mod air;
 mod arena;
 mod ast;
 mod driver;
+mod eair;
 mod errors;
 mod id;
 mod lexer;

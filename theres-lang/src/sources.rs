@@ -134,7 +134,13 @@ impl Sources {
         let bytes = self.io.open_file(filepath.as_ref())?;
         let data = String::from_utf8(bytes).expect("file wasn't valid utf-8");
         let id = self.files.future_id();
-        let access_name = filepath.as_ref().to_string_lossy().into_owned();
+        let access_name = filepath
+            .as_ref()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
         let file = SourceFile::new(id, access_name, data);
 
         self.files.push(file);

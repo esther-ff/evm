@@ -124,6 +124,7 @@ pub struct Lambda<'h> {
     // if `Some` typeck against the type
     pub output: Option<Ty<'h>>,
     pub body: BodyId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -195,8 +196,6 @@ pub enum ExprKind<'h> {
     },
 
     Path(&'h Path<'h>),
-
-    CommaSep(&'h [Expr<'h>]),
 
     Break,
 }

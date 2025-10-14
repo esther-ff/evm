@@ -7,10 +7,26 @@ use crate::symbols::SymbolId;
 use crate::types::fun_cx::{FieldSlice, InferId};
 use core::panic;
 use std::borrow::Cow;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::Deref;
 
 /// Interned type for a particular something.
-pub type Ty<'ty> = Pooled<'ty, TyKind<'ty>>;
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ty<'ty>(Pooled<'ty, TyKind<'ty>>);
+
+impl Debug for Ty<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        <Self as Display>::fmt(self, f)
+    }
+}
+
+impl<'ty> Deref for Ty<'ty> {
+    type Target = TyKind<'ty>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// Interned data about an instance.
 pub type Instance<'ty> = Pooled<'ty, InstanceDef<'ty>>;
@@ -26,7 +42,7 @@ impl Display for FnSig<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("fun(")?;
         for (ix, ty) in self.inputs.iter().enumerate() {
-            ty.fmt(f)?;
+            <Ty<'_> as Display>::fmt(ty, f)?;
             if ix != self.inputs.len() - 1 {
                 f.write_str(", ")?;
             }
@@ -129,11 +145,11 @@ impl<'ty> TyKind<'ty> {
 
     #[track_caller]
     pub fn expect_instance(&self) -> Instance<'ty> {
-        let TyKind::Instance(def) = self else {
+        let TyKind::Instance(def) = *self else {
             panic!("expected instance but got different ty!")
         };
 
-        *def
+        def
     }
 }
 
@@ -277,7 +293,7 @@ impl TheresError for TypingError<'_> {
 
 impl Display for Ty<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self.0 {
+        let str = match **self {
             TyKind::Bool => "bool",
             TyKind::Uint(size) => match size {
                 IntTy::N8 => "u8",
@@ -293,7 +309,7 @@ impl Display for Ty<'_> {
             },
             TyKind::Float => "f32",
             TyKind::Double => "f64",
-            TyKind::Nil => "Nil",
+            TyKind::Nil => "nil",
             TyKind::Error => "{type error!}",
 
             TyKind::Diverges => "diverges",
@@ -335,7 +351,7 @@ impl Display for Ty<'_> {
                     write!(f, ") => {}", typed_sig.output)
                 }
 
-                return cx(|cx| inner(cx, f, *did));
+                return cx(|cx| inner(cx, f, did));
             }
 
             TyKind::InferTy(infer) => {
@@ -346,12 +362,28 @@ impl Display for Ty<'_> {
                 };
             }
 
-            TyKind::Lambda(_lambda) => {
-                write!(f, "{{lambda}}")?;
-                return Ok(());
+            TyKind::Lambda(lambda) => {
+                return cx(|cx| {
+                    let air = cx.air_ref();
+                    let lambda = air.expect_lambda(lambda.did);
+                    write!(f, "{{lambda <=> {span}}}", span = lambda.span)
+                });
             }
         };
 
         f.write_str(str)
+    }
+}
+
+impl<'cx> crate::session::Session<'cx> {
+    pub fn intern_ty(&'cx self, ty: TyKind<'cx>) -> Ty<'cx> {
+        let mut tys = self.types.borrow_mut();
+        if let Some(pooled) = tys.get(&ty).copied() {
+            return Ty(pooled);
+        }
+
+        let new = Pooled(self.arena().alloc(ty));
+        tys.insert(ty, new);
+        Ty(new)
     }
 }

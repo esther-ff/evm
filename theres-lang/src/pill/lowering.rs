@@ -237,20 +237,19 @@ where
 
                 Operand::Variable(altar)
             }
-            ExprKind::CommaSep(exprs) => {
-                let mut iter = exprs.iter();
+            // ExprKind::CommaSep(exprs) => {
+            //     let mut iter = exprs.iter();
 
-                if let Some(first) = iter.next() {
-                    self.handle_expr(first, result);
+            //     if let Some(first) = iter.next() {
+            //         self.handle_expr(first, result);
 
-                    for expr in iter {
-                        self.handle_expr(expr, None);
-                    }
-                }
+            //         for expr in iter {
+            //             self.handle_expr(expr, None);
+            //         }
+            //     }
 
-                Operand::Variable(AltarId::NIL_ALTAR)
-            }
-
+            //     Operand::Variable(AltarId::NIL_ALTAR)
+            // }
             ExprKind::Break => {
                 let label = self
                     .loop_exit_label

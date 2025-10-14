@@ -9,7 +9,7 @@ use crate::ast::{BinOp, UnaryOp};
 use crate::session::Session;
 use crate::span::Span;
 use crate::symbols::SymbolId;
-use crate::types::ty::{InferKind, InferTy, LambdaEnv, Ty, TyKind, TypingError};
+use crate::types::ty::{InferKind, InferTy, Instance, LambdaEnv, Ty, TyKind, TypingError};
 
 use std::collections::HashMap;
 use std::mem;
@@ -27,55 +27,52 @@ pub enum CallKind<'ty> {
 /// Gathers and interns stuff like
 /// function signatures, instance declarations
 /// and etc...
-pub struct ItemGatherer<'a> {
-    sess: &'a Session<'a>,
-}
+// pub struct ItemGatherer<'a> {
+//     sess: &'a Session<'a>,
+// }
 
-impl<'ty> ItemGatherer<'ty> {
-    pub fn new(sess: &'ty Session<'ty>) -> Self {
-        Self { sess }
-    }
-}
+// impl<'ty> ItemGatherer<'ty> {
+//     pub fn new(sess: &'ty Session<'ty>) -> Self {
+//         Self { sess }
+//     }
+// }
 
-impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
-    type Result = ();
+// impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
+//     type Result = ();
 
-    fn visit_thing(&mut self, thing: &'vis Thing<'vis>) -> Self::Result {
-        match thing.kind {
-            ThingKind::Fn { name: _, sig } => {
-                self.sess.lower_fn_sig(*sig, thing.def_id);
+//     fn visit_thing(&mut self, thing: &'vis Thing<'vis>) -> Self::Result {
+//         match thing.kind {
+//             ThingKind::Fn { name: _, sig } => {
 
-                // We have to traverse the fn body for nested functions
-                let body = self.sess.air_ref().get_body(sig.body);
-                self.visit_expr(body);
-            }
+//                 // We have to traverse the fn body for nested functions
+//                 let body = self.sess.air_ref().get_body(sig.body);
+//                 self.visit_expr(body);
+//             }
 
-            ThingKind::Instance {
-                fields: _,
-                name: _,
-                ctor_id: (_, ctor_id),
-            } => {
-                self.sess.instance_def(thing.def_id);
-                self.sess.reify_fn_sig_for_ctor_of(ctor_id);
-            }
+//             ThingKind::Instance {
+//                 fields: _,
+//                 name: _,
+//                 ctor_id: (_, ctor_id),
+//             } => {
+//                 self.sess.instance_def(thing.def_id);
+//             }
 
-            ThingKind::Bind(bind) => {
-                for bind_item in bind.items {
-                    if let BindItemKind::Fun { sig, name: _ } = bind_item.kind {
-                        self.sess.lower_fn_sig(*sig, bind_item.def_id);
-                    }
-                    self.visit_bind_item(bind_item);
-                }
-            }
+//             ThingKind::Bind(bind) => {
+//                 for bind_item in bind.items {
+//                     if let BindItemKind::Fun { sig, name: _ } = bind_item.kind {
+//                     }
+//                     self.visit_bind_item(bind_item);
+//                 }
+//             }
 
-            ThingKind::Realm { name: _, things } => {
-                for i in things {
-                    self.visit_thing(i);
-                }
-            }
-        }
-    }
-}
+//             ThingKind::Realm { name: _, things } => {
+//                 for i in things {
+//                     self.visit_thing(i);
+//                 }
+//             }
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -95,6 +92,9 @@ pub struct FunCx<'ty> {
 
     resolved_method_calls: HashMap<AirId, DefId>,
     local_tys: HashMap<AirId, Ty<'ty>>,
+
+    _field_ids: HashMap<(Instance<'ty>, SymbolId), FieldId>,
+
     obligations: HashMap<InferId, Vec<Obligation>>,
 }
 
@@ -326,7 +326,7 @@ impl<'ty> FunCx<'ty> {
 
             ExprKind::Call { function, args } => {
                 let callable = self.type_of(function);
-                match *callable.0 {
+                match *callable {
                     TyKind::FnDef(did) => {
                         let sig = self.s.fn_sig_for(did);
                         self.verify_arguments_for_call(sig.inputs, args, expr.span);
@@ -388,17 +388,16 @@ impl<'ty> FunCx<'ty> {
                 self.s.nil()
             }
 
-            ExprKind::CommaSep(exprs) => exprs
-                .iter()
-                .fold(None, |state, expr| {
-                    if state.is_none() {
-                        return Some(self.type_of(expr));
-                    }
-                    self.type_of(expr);
-                    state
-                })
-                .expect("cannot fail as comma'd exprs have >1 exprs!"),
-
+            // ExprKind::CommaSep(exprs) => exprs
+            //     .iter()
+            //     .fold(None, |state, expr| {
+            //         if state.is_none() {
+            //             return Some(self.type_of(expr));
+            //         }
+            //         self.type_of(expr);
+            //         state
+            //     })
+            //     .expect("cannot fail as comma'd exprs have >1 exprs!"),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -440,7 +439,7 @@ impl<'ty> FunCx<'ty> {
             return ty;
         }
 
-        match ty.0 {
+        match *ty {
             TyKind::Bool | TyKind::Int(..) => (),
             TyKind::InferTy(inferty) if inferty.is_integer() => {
                 self.obligation_for(inferty.id(), Obligation::Neg);
@@ -464,7 +463,7 @@ impl<'ty> FunCx<'ty> {
     ) -> Ty<'ty> {
         let src_ty = self.type_of(indexed_thing);
 
-        let TyKind::Array(inner_ty) = src_ty.0 else {
+        let TyKind::Array(inner_ty) = *src_ty else {
             self.s
                 .diag()
                 .emit_err(TypingError::NoIndexOp { on: (src_ty) }, expr_span);
@@ -478,7 +477,7 @@ impl<'ty> FunCx<'ty> {
             self.type_mismatch_err(self.s.u64(), index_ty, expr_span);
         }
 
-        *inner_ty
+        inner_ty
     }
 
     fn typeck_expr_literal(&mut self, lit: AirLiteral) -> Ty<'ty> {
@@ -564,8 +563,17 @@ impl<'ty> FunCx<'ty> {
             return self.s.ty_err();
         }
 
-        let err = if let TyKind::Instance(def) = src_ty.0 {
-            if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
+        let err = if let TyKind::Instance(def) = *src_ty {
+            if let Some((ix, found)) = def
+                .fields
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.name == field_name)
+            {
+                // idk
+                self._field_ids
+                    .insert((def, field_name), FieldId::new_usize(ix));
+
                 return self.s.def_type_of(found.def_id);
             }
 
@@ -809,6 +817,7 @@ impl<'ty> TypeTable<'ty> {
     }
 
     pub fn node_ty(&self, air_id: AirId) -> Ty<'ty> {
+        dbg!(air_id);
         self.air_node_tys.get(&air_id).copied().unwrap()
     }
 
@@ -865,6 +874,11 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
             .local_tys
             .get(&local.air_id)
             .expect("Trying to get type of a local that isn't there?");
+
+        println!("Visitor, ty for {} is {}", local.air_id, val);
+
+        // mhm?
+        self.table.air_node_tys.insert(local.air_id, *val);
         self.table.local_variables.insert(local.air_id, *val);
     }
 
@@ -872,6 +886,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
         match stmt.kind {
             StmtKind::Expr(expr) => self.visit_expr(expr),
             StmtKind::Local(loc) => {
+                self.visit_local(loc);
                 if let Some(expr) = loc.init {
                     self.visit_expr(expr);
                 }
@@ -886,7 +901,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
         match *ty {
             TyKind::InferTy(..) => {
-                let resolved = match *self.cx.ty_var_ty(ty).0 {
+                let resolved = match *self.cx.ty_var_ty(ty) {
                     TyKind::InferTy(inner) => match inner.kind {
                         InferKind::Float => self.sess.f64(),
                         InferKind::Integer => self.sess.i32(),
@@ -931,6 +946,7 @@ impl<'cx> Session<'cx> {
             fn_ret_ty: Some(ty_sig.output),
             node_type,
             ty_var_types: HashMap::new(),
+            _field_ids: HashMap::new(),
             ty_var_origins: HashMap::new(),
             infer_ty_counter: 0,
             resolved_method_calls: HashMap::new(),
@@ -954,7 +970,7 @@ impl<'cx> Session<'cx> {
 }
 
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
-    ItemGatherer::new(session).visit_universe(universe);
+    // ItemGatherer::new(session).visit_universe(universe);
 
     for thing in universe.things {
         match thing.kind {

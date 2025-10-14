@@ -1,6 +1,8 @@
-use crate::sources::SourceId;
+use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
+use crate::{session::cx, sources::SourceId};
+
+#[derive(Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct Span {
     pub start: u32,
     pub end: u32,
@@ -37,5 +39,28 @@ impl Span {
     pub fn between(left: Self, right: Self) -> Span {
         debug_assert!(left.sourceid == right.sourceid);
         Span::new(left.start, right.end, right.line, right.sourceid)
+    }
+}
+
+impl Debug for Span {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if *self == Self::DUMMY {
+            return write!(f, "<dummy!>");
+        }
+
+        write!(
+            f,
+            "({}/{})@{} ~ {}",
+            self.start,
+            self.end,
+            self.line,
+            cx(|cx| cx.file_name(self.sourceid))
+        )
+    }
+}
+
+impl Display for Span {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        <Self as Debug>::fmt(self, f)
     }
 }

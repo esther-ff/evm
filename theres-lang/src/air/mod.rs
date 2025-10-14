@@ -1,28 +1,28 @@
 pub mod check;
 pub mod def;
 pub mod node;
+pub mod passes;
 pub mod visitor;
 
 mod lowering_ast;
 mod map_builder;
 mod name_res;
-pub mod passes;
 
-use std::mem;
+pub use lowering_ast::{AirId, AirIdMap, AirMap, Mappings};
 
 use crate::air::node::Universe as AirUniverse;
 use crate::air::visitor::AirVisitor;
 use crate::ast::Universe;
 use crate::driver::HirDump;
 use crate::session::Session;
-pub use lowering_ast::{AirId, AirIdMap, AirMap, Mappings};
+use std::mem;
 
 pub fn lower_universe<'air>(sess: &'air Session<'air>, ast: &Universe) -> &'air AirUniverse<'air> {
     let mut mappings = name_res::resolve(sess, ast);
     let deftypes = mem::take(&mut mappings.def_types);
-    let mut ast_lowerer = lowering_ast::AstLowerer::new(mappings, sess);
+    let mut air_builder = lowering_ast::AirBuilder::new(mappings, sess);
 
-    let air_universe = ast_lowerer.lower_universe(ast);
+    let air_universe = air_builder.lower_universe(ast);
     sess.air_mut(|air| {
         map_builder::MapBuilder::new(air).visit_universe(air_universe);
         air.def_types = deftypes;

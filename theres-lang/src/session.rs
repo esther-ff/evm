@@ -12,6 +12,7 @@ use crate::arena::Arena;
 use crate::driver::Flags;
 use crate::errors::DiagEmitter;
 use crate::id::IdxSlice;
+use crate::sources::{SourceId, Sources};
 use crate::symbols::SymbolId;
 use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
 
@@ -92,16 +93,18 @@ where
 pub struct Session<'sess> {
     arena: Arena,
     air_map: RefCell<AirMap<'sess>>,
-    types: RefCell<Pool<'sess, TyKind<'sess>>>,
+    pub(crate) types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
     def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
     fn_sigs: RefCell<HashMap<DefId, FnSig<'sess>>>,
     diags: &'sess DiagEmitter<'sess>,
     flags: Flags,
+
+    sources: &'sess Sources,
 }
 
 impl<'sess> Session<'sess> {
-    pub fn new(diags: &'sess DiagEmitter<'sess>, flags: Flags) -> Self {
+    pub fn new(diags: &'sess DiagEmitter<'sess>, flags: Flags, sources: &'sess Sources) -> Self {
         Self {
             arena: Arena::new(),
             def_id_to_instance_interned: RefCell::new(HashMap::new()),
@@ -111,6 +114,7 @@ impl<'sess> Session<'sess> {
             fn_sigs: RefCell::new(HashMap::new()),
             diags,
             flags,
+            sources,
         }
     }
 
@@ -120,6 +124,10 @@ impl<'sess> Session<'sess> {
 
     pub fn should_dump_ast(&self) -> bool {
         self.flags.dump_ast
+    }
+
+    pub fn file_name(&self, id: SourceId) -> &str {
+        self.sources.get_by_source_id(id).name()
     }
 
     pub fn enter<F>(&'sess self, work: F)
@@ -156,17 +164,6 @@ impl<'sess> Session<'sess> {
 
     pub fn arena(&self) -> &Arena {
         &self.arena
-    }
-
-    pub fn intern_ty(&'sess self, ty: TyKind<'sess>) -> Ty<'sess> {
-        let mut tys = self.types.borrow_mut();
-        if let Some(pooled) = tys.get(&ty).copied() {
-            return pooled;
-        }
-
-        let new = Pooled(self.arena().alloc(ty));
-        tys.insert(ty, new);
-        new
     }
 
     pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
@@ -217,48 +214,42 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
-        self.fn_sigs
-            .borrow()
-            .get(&def_id)
-            .copied()
-            .unwrap_or_else(|| panic!("No fn sig for def id: {def_id}"))
-    }
+        let air = self.air_ref();
+        match air.def_type(def_id) {
+            DefType::Fun => {
+                let (sig, _) = air.expect_fn(def_id);
 
-    #[track_caller]
-    pub fn reify_fn_sig_for_ctor_of(&'sess self, def_id: DefId) {
-        log::trace!("reify_fn_sig_for_ctof_of def_id={def_id}");
+                FnSig {
+                    inputs: self
+                        .arena()
+                        .alloc_from_iter(sig.arguments.iter().map(|param| self.lower_ty(param.ty))),
 
-        let instance = self.air_ref().get_instance_of_ctor(def_id);
-        let instance_def = self.instance_def(instance);
+                    output: self.lower_ty(sig.return_type),
+                }
+            }
 
-        let sig = FnSig {
-            inputs: self.arena().alloc_from_iter(
-                instance_def
-                    .fields
-                    .iter()
-                    .map(|field| self.def_type_of(field.def_id)),
-            ),
+            DefType::AdtCtor => {
+                let instance = self.air_ref().get_instance_of_ctor(def_id);
+                let instance_def = self.instance_def(instance);
 
-            output: self.def_type_of(instance),
-        };
+                FnSig {
+                    inputs: self.arena().alloc_from_iter(
+                        instance_def
+                            .fields
+                            .iter()
+                            .map(|field| self.def_type_of(field.def_id)),
+                    ),
 
-        self.fn_sigs.borrow_mut().insert(def_id, sig);
+                    output: self.def_type_of(instance),
+                }
+            }
+
+            any => panic!("can't express a signature for {any:#?}"),
+        }
     }
 
     pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
         self.air_ref().is_ctor(def_id)
-    }
-
-    pub fn lower_fn_sig(&'sess self, sig: node::FnSig<'_>, def_id: DefId) {
-        let sig = FnSig {
-            inputs: self
-                .arena()
-                .alloc_from_iter(sig.arguments.iter().map(|param| self.lower_ty(param.ty))),
-
-            output: self.lower_ty(sig.return_type),
-        };
-
-        self.fn_sigs.borrow_mut().insert(def_id, sig);
     }
 
     /// This is so fucking stupid
@@ -306,7 +297,6 @@ impl<'sess> Session<'sess> {
         new
     }
 
-    #[track_caller]
     pub fn lower_ty<'a>(&'sess self, ty: &node::Ty<'a>) -> Ty<'sess>
     where
         'sess: 'a,
@@ -335,12 +325,12 @@ impl<'sess> Session<'sess> {
                     DefType::Instance => return self.def_type_of(def_id),
                     DefType::AdtCtor => TyKind::FnDef(def_id),
 
-                    any => panic!("Can't type: {any:?}"),
+                    _ => unreachable!(),
                 },
 
                 Resolved::Err => return self.ty_err(),
                 Resolved::Local(..) => {
-                    panic!("Tried to lower type with a local inside of it's path")
+                    unreachable!()
                 }
             },
         };

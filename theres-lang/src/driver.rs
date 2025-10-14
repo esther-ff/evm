@@ -202,7 +202,7 @@ impl Compiler {
         let lexemes = self.lex(src, &diags);
         let ast = self.parse_to_ast(lexemes, &diags);
 
-        Session::new(&diags, self.flags).enter(|session| {
+        Session::new(&diags, self.flags, &self.sources).enter(|session| {
             let uni = air::lower_universe(session, &ast);
             typeck_universe(session, uni);
             let Some(main_did) = check::check_for_main(session, uni) else {
@@ -214,11 +214,14 @@ impl Compiler {
 
             air::passes::entry_point::gather_items_for_build(session, main_did, &mut set);
             dbg!(&set);
-            let air = session.air_ref();
-            for did in set {
-                let def = air.get_def(did);
-                dbg!(def);
-            }
+            // let air = session.air_ref();
+            // for did in set {
+            //     let def = air.get_def(did);
+            //     dbg!(def);
+            // }
+
+            let eair = crate::eair::types::build_eair(session, main_did);
+            dbg!(eair);
             // pill::lowering::lower_universe(session, uni);
         });
     }

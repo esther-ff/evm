@@ -99,16 +99,11 @@ impl Mappings {
         self.resolution_map.insert(id, res);
     }
 
-    #[track_caller]
     pub fn resolve(&mut self, id: AstId) -> Resolved<AstId> {
-        log::trace!("`resolve` id={id}");
-        let ret = self
+        *self
             .resolution_map
             .get(&id)
-            .copied()
-            .expect("Given AstId is not mapped to any resolution!");
-        log::trace!("`resolved` resolved to {ret:?}");
-        ret
+            .expect("Given AstId is not mapped to any resolution!")
     }
 }
 
@@ -141,8 +136,7 @@ impl<'air> AirMap<'air> {
         }
     }
 
-    #[track_caller]
-    pub fn map_def_id_to_air(&mut self, def_id: DefId, air_id: AirId) {
+    fn map_def_id_to_air(&mut self, def_id: DefId, air_id: AirId) {
         let dbg = self.def_id_to_air_id.insert(def_id, air_id);
         assert!(
             dbg.is_none(),
@@ -151,8 +145,21 @@ impl<'air> AirMap<'air> {
         );
     }
 
-    pub fn map_field_to_instance(&mut self, instance: DefId, field: DefId) {
+    fn map_field_to_instance(&mut self, instance: DefId, field: DefId) {
         self.field_to_instance.insert(field, instance);
+    }
+
+    fn insert_body_of(&mut self, body: &'air node::Expr<'air>, body_owner: DefId) -> BodyId {
+        let body_id = self.bodies.push(body);
+        self.node_to_body.insert(body_owner, body_id);
+        body_id
+    }
+
+    pub fn parent(&self, did: DefId) -> DefId {
+        *self
+            .child_to_parent
+            .get(&did)
+            .unwrap_or_else(|| panic!("{did} doesn't have a parent"))
     }
 
     pub fn get_instance_of_field(&self, field: DefId) -> DefId {
@@ -219,12 +226,6 @@ impl<'air> AirMap<'air> {
         }
     }
 
-    pub fn insert_body_of(&mut self, body: &'air node::Expr<'air>, body_owner: DefId) -> BodyId {
-        let body_id = self.bodies.push(body);
-        self.node_to_body.insert(body_owner, body_id);
-        body_id
-    }
-
     pub fn body_of(&self, body: DefId) -> &'air node::Expr<'air> {
         let id = self.node_to_body[&body];
         self.get_body(id)
@@ -283,15 +284,25 @@ impl<'air> AirMap<'air> {
         (fields, name)
     }
 
+    pub fn expect_lambda(&'air self, def_id: DefId) -> &'air Lambda<'air> {
+        if let Node::Expr(expr) = self.get_def(def_id)
+            && let node::ExprKind::Lambda(l) = expr.kind
+        {
+            return l;
+        }
+
+        panic!("{def_id} isn't bound to a lambda!")
+    }
+
     #[inline]
     pub fn is_ctor(&self, id: DefId) -> bool {
         self.ctor_to_instance.contains_key(&id)
     }
 
     pub fn get_instance_of_ctor(&self, ctor_def_id: DefId) -> DefId {
-        self.ctor_to_instance
+        *self
+            .ctor_to_instance
             .get(&ctor_def_id)
-            .copied()
             .expect("this `DefId` of a ctor wasn't mapped to any Instance")
     }
 
@@ -306,7 +317,7 @@ enum DesugarLoop {
     Until,
 }
 
-pub struct AstLowerer<'air> {
+pub struct AirBuilder<'air> {
     session: &'air Session<'air>,
 
     map: Mappings,
@@ -320,7 +331,7 @@ pub struct AstLowerer<'air> {
     current_bind_ty: Option<&'air node::Ty<'air>>,
 }
 
-impl<'air> AstLowerer<'air> {
+impl<'air> AirBuilder<'air> {
     pub fn new(map: Mappings, session: &'air Session<'air>) -> Self {
         Self {
             map,
@@ -522,6 +533,7 @@ impl<'air> AstLowerer<'air> {
                     inputs,
                     body,
                     output: None,
+                    span: expr.span,
                 };
 
                 node::ExprKind::Lambda(self.session.arena().alloc(lambda_desc))

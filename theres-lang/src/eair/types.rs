@@ -6,44 +6,52 @@ mod private {
     pub type Params<'ir> = LocalVec<super::ParamData<'ir>>;
 }
 
-use crate::air::node::{self, ExprKind as AirKind};
+use std::collections::{HashMap, HashSet};
+use std::iter::once;
+use std::mem;
 
-use crate::ast;
+use crate::air::def::{DefId, DefType, Resolved};
+use crate::air::node::{self, Node, StmtKind};
+
+use crate::air::AirId;
+use crate::ast::{self, UnaryOp};
+use crate::id::IdxVec;
+use crate::types::fun_cx::FieldId;
+use crate::types::ty::{Instance, TyKind};
 use crate::{
-    air::{
-        node::{AirLiteral, Constant, Expr as AirExpr, Local},
-        visitor::AirVisitor,
-    },
+    air::node::{AirLiteral, Constant, Expr as AirExpr, Local},
     arena::Arena,
     session::Session,
     span::Span,
-    types::{
-        fun_cx::TypeTable,
-        ty::{FnSig, LambdaEnv, Ty},
-    },
+    types::{fun_cx::TypeTable, ty::Ty},
 };
 use private::{LocalId, Locals, Params};
 
+#[derive(Debug)]
 pub struct LocalData<'ir> {
     ty: Ty<'ir>,
     mutbl: Constant,
 }
 
+#[derive(Debug)]
 pub struct ParamData<'ir> {
     ty: Ty<'ir>,
 }
 
+#[derive(Debug)]
 pub struct Expr<'ir> {
     kind: ExprKind<'ir>,
     ty: Ty<'ir>,
     span: Span,
 }
 
+#[derive(Debug)]
 pub enum LogicalOp {
     And,
     Or,
 }
 
+#[derive(Debug)]
 pub enum BinOp {
     Shl,
     Shr,
@@ -63,11 +71,7 @@ pub enum BinOp {
     Le,
 }
 
-pub enum UnaryOp {
-    Not,
-    Neg,
-}
-
+#[derive(Debug)]
 pub enum ExprKind<'ir> {
     Call {
         callee: &'ir Expr<'ir>,
@@ -92,9 +96,7 @@ pub enum ExprKind<'ir> {
         from_lowering: bool,
     },
 
-    Lambda {
-        env: &'ir LambdaEnv<'ir>,
-    },
+    Lambda,
 
     Unary {
         operand: &'ir Expr<'ir>,
@@ -106,7 +108,7 @@ pub enum ExprKind<'ir> {
     If {
         cond: &'ir Expr<'ir>,
         true_: &'ir Expr<'ir>,
-        false_: &'ir Expr<'ir>,
+        false_: Option<&'ir Expr<'ir>>,
     },
 
     Return(Option<&'ir Expr<'ir>>),
@@ -120,27 +122,46 @@ pub enum ExprKind<'ir> {
         idx: &'ir Expr<'ir>,
     },
 
-    Local {
-        local: LocalId,
-    },
+    Local(LocalId),
+
+    List(&'ir [Expr<'ir>]),
 
     Upvar {
-        upvar: LocalId,
+        upvar: AirId,
     },
+
+    Field {
+        base: &'ir Expr<'ir>,
+        field_idx: FieldId,
+    },
+
+    Adt {
+        def: Instance<'ir>,
+        fields: &'ir [Expr<'ir>],
+    },
+
+    Break,
+
+    /// Represents the literal for some zero-sized type
+    /// like a function type
+    Empty,
 }
 
+#[derive(Debug)]
 pub struct Block<'ir> {
     exprs: Vec<Expr<'ir>, &'ir Arena>,
 }
 
+#[derive(Debug)]
 pub struct Eair<'ir> {
     locals: Locals<'ir>,
     params: Params<'ir>,
-    entry: &'ir Expr<'ir>,
+    entry: Option<Expr<'ir>>,
     span: Span,
     kind: BodyKind,
 }
 
+#[derive(Debug)]
 enum BodyKind {
     Lambda,
     Function,
@@ -151,14 +172,13 @@ pub struct EairBuilder<'ir> {
     types: TypeTable<'ir>,
     cx: &'ir Session<'ir>,
     current_block: Vec<Expr<'ir>, &'ir Arena>,
+    upvars: &'ir HashSet<AirId>,
+    lowered_locals: HashMap<AirId, LocalId>,
 }
 
 impl<'ir> EairBuilder<'ir> {
-    fn lower_body(&mut self, _typed_sig: FnSig<'ir>, _body: &'ir AirExpr<'ir>, _kind: BodyKind) {
-        todo!()
-    }
-
     fn lower_local(&mut self, local: &Local<'_>) -> LocalId {
+        dbg!(local);
         let ty = self.types.node_ty(local.air_id);
         let id = self.eair.locals.push(LocalData {
             ty,
@@ -170,7 +190,7 @@ impl<'ir> EairBuilder<'ir> {
             let local_ref = self.cx.arena().alloc(Expr {
                 span: Span::DUMMY,
                 ty,
-                kind: ExprKind::Local { local: id },
+                kind: ExprKind::Local(id),
             });
 
             let actual_init = Expr {
@@ -189,37 +209,313 @@ impl<'ir> EairBuilder<'ir> {
         id
     }
 
+    fn lower_block(&mut self, block: &node::Block<'_>) -> Block<'ir> {
+        let old = mem::replace(&mut self.current_block, Vec::new_in(self.cx.arena()));
+
+        for stmt in block.stmts {
+            match stmt.kind {
+                StmtKind::Local(local) => {
+                    let id = self.lower_local(local);
+                    assert!(self.lowered_locals.insert(local.air_id, id).is_none());
+                }
+
+                StmtKind::Expr(expr) => {
+                    let expr = self.lower_expr(expr);
+                    self.current_block.push(expr);
+                }
+
+                StmtKind::Thing(..) => (),
+            }
+        }
+
+        let new = mem::replace(&mut self.current_block, old);
+        Block { exprs: new }
+    }
+
     fn lower_expr_alloc(&mut self, expr: &AirExpr<'_>) -> &'ir Expr<'ir> {
         self.cx.arena().alloc(self.lower_expr(expr))
     }
 
     fn lower_expr(&mut self, expr: &AirExpr<'_>) -> Expr<'ir> {
         use crate::air::node::ExprKind::*;
+        let ty = self.types.type_of(expr);
+        let span = expr.span;
 
         match expr.kind {
-            Binary { lhs, rhs, op } => match bin_op_to_eair(op) {
-                Ops::Regular(op) => {
-                    /* later check for overloads */
-                    let lhs = self.lower_expr_alloc(lhs);
-                    let rhs = self.lower_expr_alloc(rhs);
-                    Expr {
-                        kind: ExprKind::Binary { lhs, rhs, op },
-                        span: expr.span,
-                        ty: self.types.type_of(expr),
+            Binary { lhs, rhs, op } => {
+                let lhs = self.lower_expr_alloc(lhs);
+                let rhs = self.lower_expr_alloc(rhs);
+
+                match bin_op_to_eair(op) {
+                    Ops::Regular(op) => {
+                        /* later check for overloads */
+                        Expr {
+                            kind: ExprKind::Binary { lhs, rhs, op },
+                            span,
+                            ty,
+                        }
                     }
-                }
-                Ops::Logic(op) => Expr {
-                    kind: ExprKind::Logical {
-                        lhs: self.lower_expr_alloc(lhs),
-                        rhs: self.lower_expr_alloc(rhs),
-                        op,
+                    Ops::Logic(op) => Expr {
+                        kind: ExprKind::Logical { lhs, rhs, op },
+                        ty,
+                        span: expr.span,
                     },
-                    ty: self.types.type_of(expr),
-                    span: expr.span,
+                }
+            }
+
+            Unary { target, op } => Expr {
+                kind: ExprKind::Unary {
+                    operand: self.lower_expr_alloc(target),
+                    op,
                 },
+                ty,
+                span,
             },
 
-            _ => todo!(),
+            Assign { variable, value } => Expr {
+                kind: ExprKind::Assign {
+                    lvalue: self.lower_expr_alloc(variable),
+                    rvalue: self.lower_expr_alloc(value),
+                    from_lowering: false,
+                },
+                ty,
+                span,
+            },
+
+            AssignWithOp {
+                variable,
+                value,
+                op,
+            } => {
+                let Ops::Regular(op) = bin_op_to_eair(op.into()) else {
+                    unreachable!()
+                };
+
+                let lvalue = self.lower_expr_alloc(variable);
+                let part = self.lower_expr_alloc(value);
+                let rhs = Expr {
+                    kind: ExprKind::Binary {
+                        lhs: lvalue,
+                        rhs: part,
+                        op,
+                    },
+                    span,
+                    ty,
+                };
+
+                Expr {
+                    kind: ExprKind::Assign {
+                        lvalue,
+                        rvalue: self.cx.arena().alloc(rhs),
+                        from_lowering: false,
+                    },
+                    ty,
+                    span,
+                }
+            }
+
+            List(exprs) => Expr {
+                kind: ExprKind::List(
+                    self.cx
+                        .arena()
+                        .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr(expr))),
+                ),
+                ty,
+                span,
+            },
+
+            Return { expr } => Expr {
+                kind: ExprKind::Return(expr.map(|expr| self.lower_expr_alloc(expr))),
+                ty,
+                span,
+            },
+
+            Loop { body, reason: _ } => Expr {
+                kind: ExprKind::Loop(self.lower_block(body)),
+                ty,
+                span,
+            },
+
+            Block(block) => Expr {
+                kind: ExprKind::Block(self.lower_block(block)),
+                ty,
+                span,
+            },
+
+            Call { function, args } => {
+                if let Path(path) = function.kind
+                    && let Resolved::Def(did, DefType::AdtCtor) = path.res
+                {
+                    let instance_did = self.cx.air(|air| air.get_instance_of_ctor(did));
+                    let def = self.cx.instance_def(instance_did);
+                    let fields = self
+                        .cx
+                        .arena()
+                        .alloc_from_iter(args.iter().map(|arg| self.lower_expr(arg)));
+
+                    return Expr {
+                        kind: ExprKind::Adt { def, fields },
+                        span,
+                        ty,
+                    };
+                }
+
+                let args = self
+                    .cx
+                    .arena()
+                    .alloc_from_iter(args.iter().map(|arg| self.lower_expr(arg)));
+
+                Expr {
+                    kind: ExprKind::Call {
+                        callee: self.lower_expr_alloc(function),
+                        args,
+                    },
+                    ty,
+                    span,
+                }
+            }
+
+            MethodCall {
+                receiver,
+                method: _,
+                args,
+            } => {
+                let did = self.types.resolve_method(expr.air_id);
+
+                let callee = self.cx.arena().alloc(Expr {
+                    kind: ExprKind::Empty,
+                    span: receiver.span,
+                    ty: self.cx.intern_ty(TyKind::FnDef(did)),
+                });
+
+                let args = self
+                    .cx
+                    .arena()
+                    .alloc_from_iter(once(receiver).chain(args).map(|expr| self.lower_expr(expr)));
+
+                Expr {
+                    kind: ExprKind::Call { callee, args },
+                    ty,
+                    span,
+                }
+            }
+
+            Field { src, field } => {
+                let base = self.lower_expr_alloc(src);
+                let instance = base.ty.expect_instance();
+
+                let Some(field_idx) = instance
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| f.name == field)
+                    .map(|(idx, _)| FieldId::new_usize(idx))
+                else {
+                    unreachable!("typeck didn't catch a missing field!")
+                };
+
+                Expr {
+                    kind: ExprKind::Field { base, field_idx },
+                    span,
+                    ty,
+                }
+            }
+
+            Lambda(_lambda) => Expr {
+                kind: ExprKind::Lambda,
+                ty,
+                span,
+            },
+
+            If {
+                condition,
+                block,
+                else_,
+            } => {
+                let cond = self.lower_expr_alloc(condition);
+                let block_span = block.span;
+                let block = self.lower_block(block);
+                let false_ = else_.map(|expr| self.lower_expr_alloc(expr));
+
+                let true_ = self.cx.arena().alloc(Expr {
+                    ty: block
+                        .exprs
+                        .last()
+                        .map_or_else(|| self.cx.nil(), |expr| expr.ty),
+                    kind: ExprKind::Block(block),
+                    span: block_span,
+                });
+
+                Expr {
+                    kind: ExprKind::If {
+                        cond,
+                        true_,
+                        false_,
+                    },
+                    ty,
+                    span,
+                }
+            }
+
+            Literal(lit) => Expr {
+                kind: ExprKind::Lit(lit),
+                ty,
+                span,
+            },
+
+            Index {
+                index,
+                indexed_thing,
+            } => Expr {
+                kind: ExprKind::Index {
+                    base: self.lower_expr_alloc(indexed_thing),
+                    idx: self.lower_expr_alloc(index),
+                },
+                ty,
+                span,
+            },
+
+            Break => Expr {
+                kind: ExprKind::Break,
+                ty,
+                span,
+            },
+
+            Path(path) => match path.res {
+                Resolved::Err => unreachable!("shouldn't put `Resolved::Err`s in EAIR"),
+
+                Resolved::Local(ref local_id) => {
+                    let kind = match self.upvars.contains(local_id) {
+                        false => {
+                            let lowered_id = *self.lowered_locals.get(local_id).unwrap();
+                            ExprKind::Local(lowered_id)
+                        }
+
+                        true => ExprKind::Upvar { upvar: *local_id },
+                    };
+
+                    Expr { kind, ty, span }
+                }
+
+                Resolved::Def(did, def_ty) => match def_ty {
+                    DefType::Fun => Expr {
+                        kind: ExprKind::Empty,
+                        ty: self.cx.intern_ty(TyKind::FnDef(did)),
+                        span,
+                    },
+
+                    DefType::Instance
+                    | DefType::AdtCtor
+                    | DefType::Field
+                    | DefType::Bind
+                    | DefType::BindItem
+                    | DefType::Lambda
+                    | DefType::Realm
+                    | DefType::Const => unreachable!("non-sense"),
+                },
+
+                Resolved::Prim(..) => unreachable!("`Resolved::Prim` in path expr?"),
+            },
         }
     }
 }
@@ -256,4 +552,84 @@ fn bin_op_to_eair(binop: ast::BinOp) -> Ops {
     };
 
     Ops::Regular(reg)
+}
+
+pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
+    // REALLY STUPID!
+    let dummy = cx.arena().alloc(HashSet::new());
+
+    let air = cx.air_ref();
+    let types;
+    let inputs;
+
+    let mut params: Params<'cx> = IdxVec::new();
+    let mut locals: Locals<'cx> = IdxVec::new();
+
+    let kind = match cx.def_type(did) {
+        DefType::Lambda => BodyKind::Lambda,
+        DefType::Fun => BodyKind::Function,
+
+        wrong => unreachable!("`build_eair`: trying to lower a {wrong:#?}"),
+    };
+    let upvars = if let DefType::Lambda = cx.def_type(did) {
+        let parent = air.parent(did);
+        let upvars = cx.upvars_of(did);
+        types = cx.typeck(parent);
+        let def = air.get_def(did);
+
+        if let Node::Expr(expr) = def
+            && let node::ExprKind::Lambda(lambda) = expr.kind
+        {
+            inputs = lambda.inputs;
+        } else {
+            unreachable!()
+        };
+
+        upvars
+    } else {
+        types = cx.typeck(did);
+        let air_sig = air.expect_fn(did).0;
+
+        inputs = air_sig.arguments;
+
+        dummy
+    };
+
+    let lowered_locals: HashMap<_, _> = inputs
+        .iter()
+        .map(|param| {
+            let ty = types.node_ty(param.air_id);
+            let id = locals.push(LocalData {
+                ty,
+                mutbl: Constant::Yes,
+            });
+            params.push(ParamData { ty });
+            (param.air_id, id)
+        })
+        .collect();
+
+    let body = air.body_of(did);
+
+    let eair = Eair {
+        locals,
+        params,
+        entry: None,
+        span: body.span,
+        kind,
+    };
+
+    let mut builder = EairBuilder {
+        eair,
+        cx,
+        types,
+        current_block: Vec::new_in(cx.arena()),
+        upvars,
+        lowered_locals,
+    };
+
+    let entry = builder.lower_expr(body);
+    builder.eair.entry.replace(entry);
+    assert!(builder.eair.entry.is_some());
+
+    builder.eair
 }
