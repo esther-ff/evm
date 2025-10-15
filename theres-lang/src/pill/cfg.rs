@@ -4,50 +4,87 @@ mod private {
 
 pub use private::BasicBlock;
 
+use crate::pill::body::Local;
+
+use crate::types::ty::Ty;
 use crate::{
-    air::def::DefId,
     ast::{BinOp, UnaryOp},
-    pill::{body::AltarId, instr::Operand},
+    pill::scalar::Scalar,
     types::ty::Instance,
 };
 
-pub enum BlockExit {
+pub enum ImmKind {
+    Scalar(Scalar),
+    Empty,
+}
+
+pub struct Imm<'il> {
+    kind: ImmKind,
+    ty: Ty<'il>,
+}
+
+impl<'il> Imm<'il> {
+    pub fn empty(ty: Ty<'il>) -> Self {
+        Self {
+            kind: ImmKind::Empty,
+            ty,
+        }
+    }
+
+    pub fn scalar(scalar: Scalar, ty: Ty<'il>) -> Self {
+        Self {
+            kind: ImmKind::Scalar(scalar),
+            ty,
+        }
+    }
+}
+
+pub enum Operand<'il> {
+    Imm(Imm<'il>),
+    UseLocal(Local),
+}
+
+pub enum BlockExit<'il> {
     Goto(BasicBlock),
-    Branch(BasicBlock),
+    Branch {
+        val: Operand<'il>,
+        true_: BasicBlock,
+        false_: BasicBlock,
+    },
     Return,
 }
 
 pub enum Rvalue<'il> {
     Binary {
         op: BinOp,
-        lhs: Operand,
-        rhs: Operand,
+        lhs: Operand<'il>,
+        rhs: Operand<'il>,
     },
 
     Unary {
         op: UnaryOp,
-        val: Operand,
+        val: Operand<'il>,
     },
 
-    Regular(Operand),
+    Regular(Operand<'il>),
 
     Make {
         def: Instance<'il>,
-        args: Vec<Operand>,
+        args: Vec<Operand<'il>>,
     },
 }
 
 #[non_exhaustive]
 pub enum Stmt<'il> {
     Assign {
-        dest: AltarId,
+        dest: Local,
         src: Rvalue<'il>,
     },
 
     Call {
-        fun: DefId,
-        ret: AltarId,
-        args: Vec<Operand>,
+        fun: Operand<'il>,
+        ret: Local,
+        args: Vec<Operand<'il>>,
     },
 
     // TailCall {
@@ -57,12 +94,12 @@ pub enum Stmt<'il> {
     // }
     Nop,
 
-    LocalLive(AltarId),
+    LocalLive(Local),
 }
 
 struct BbData<'il> {
     stmts: Vec<Stmt<'il>>,
-    exit: Option<BlockExit>,
+    exit: Option<BlockExit<'il>>,
 }
 
 pub struct Cfg<'il> {
@@ -76,7 +113,7 @@ impl<'il> Cfg<'il> {
         }
     }
 
-    pub fn end_block(&mut self, bb: BasicBlock, exit: BlockExit) {
+    pub fn end_block(&mut self, bb: BasicBlock, exit: BlockExit<'il>) {
         debug_assert!(self.bbs[bb].exit.is_none());
         self.bbs[bb].exit.replace(exit);
     }

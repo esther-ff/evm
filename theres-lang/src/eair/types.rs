@@ -25,7 +25,8 @@ use crate::{
     span::Span,
     types::{fun_cx::TypeTable, ty::Ty},
 };
-use private::{LocalId, Locals, Params};
+
+pub use private::{LocalId, Locals, Params};
 
 #[derive(Debug)]
 pub struct LocalData<'ir> {
@@ -40,9 +41,9 @@ pub struct ParamData<'ir> {
 
 #[derive(Debug)]
 pub struct Expr<'ir> {
-    kind: ExprKind<'ir>,
-    ty: Ty<'ir>,
-    span: Span,
+    pub kind: ExprKind<'ir>,
+    pub ty: Ty<'ir>,
+    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -152,6 +153,12 @@ pub struct Block<'ir> {
     exprs: Vec<Expr<'ir>, &'ir Arena>,
 }
 
+impl<'ir> Block<'ir> {
+    pub fn exprs(&self) -> &[Expr<'ir>] {
+        &self.exprs
+    }
+}
+
 #[derive(Debug)]
 pub struct Eair<'ir> {
     locals: Locals<'ir>,
@@ -178,7 +185,6 @@ pub struct EairBuilder<'ir> {
 
 impl<'ir> EairBuilder<'ir> {
     fn lower_local(&mut self, local: &Local<'_>) -> LocalId {
-        dbg!(local);
         let ty = self.types.node_ty(local.air_id);
         let id = self.eair.locals.push(LocalData {
             ty,

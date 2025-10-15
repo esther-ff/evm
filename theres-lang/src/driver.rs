@@ -221,7 +221,7 @@ impl Compiler {
             // }
 
             let eair = crate::eair::types::build_eair(session, main_did);
-            dbg!(eair);
+            // dbg!(eair);
             // pill::lowering::lower_universe(session, uni);
         });
     }

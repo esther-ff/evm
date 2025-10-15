@@ -1,5 +1,6 @@
 #![feature(allocator_api)]
 #![feature(ptr_metadata)]
+#![feature(never_type)]
 #![warn(clippy::style)]
 #![warn(clippy::complexity)]
 #![warn(clippy::perf)]

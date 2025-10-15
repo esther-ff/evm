@@ -5,6 +5,5 @@ mod expr_altar;
 mod expr_operand;
 mod expr_temp;
 pub mod instr;
-pub mod ir_type;
 pub mod lowering;
 pub mod scalar;
