@@ -21,7 +21,7 @@ impl<'vis> AirVisitor<'vis> for BuildCollector<'_, 'vis> {
             ExprKind::Lambda(lambda) => {
                 self.needed.insert(lambda.did);
 
-                let body = self.cx.air_ref().body_of(lambda.did);
+                let body = self.cx.air_body(lambda.did);
                 self.visit_expr(body);
             }
             ExprKind::Call { function, args } => {
@@ -29,7 +29,7 @@ impl<'vis> AirVisitor<'vis> for BuildCollector<'_, 'vis> {
                     && let Resolved::Def(did, DefType::Fun) = path.res
                 {
                     self.needed.insert(did);
-                    let body = self.cx.air_ref().body_of(did);
+                    let body = self.cx.air_body(did);
                     self.visit_expr(body);
                 }
 
@@ -46,7 +46,7 @@ impl<'vis> AirVisitor<'vis> for BuildCollector<'_, 'vis> {
 
                 let did = self.types.resolve_method(expr.air_id);
                 self.needed.insert(did);
-                let body = self.cx.air_ref().body_of(did);
+                let body = self.cx.air_body(did);
                 self.visit_expr(body);
             }
 
@@ -61,7 +61,7 @@ pub fn gather_items_for_build<'cx>(
     needed: &mut HashSet<DefId>,
 ) {
     let types = cx.typeck(def_id);
-    let body = cx.air_ref().body_of(def_id);
+    let body = cx.air_body(def_id);
     let mut col = BuildCollector { cx, needed, types };
 
     col.visit_expr(body);

@@ -1,5 +1,6 @@
 use crate::air;
 use crate::air::check;
+use crate::arena::Arena;
 use crate::ast::PrettyPrinter;
 use crate::ast::Universe;
 use crate::errors::DiagEmitter;
@@ -201,9 +202,10 @@ impl Compiler {
         let diags = DiagEmitter::new(&self.sources);
         let lexemes = self.lex(src, &diags);
         let ast = self.parse_to_ast(lexemes, &diags);
+        let arena = Arena::new();
+        let (uni, map) = air::lower_universe(&arena, &diags, &ast);
 
-        Session::new(&diags, self.flags, &self.sources).enter(|session| {
-            let uni = air::lower_universe(session, &ast);
+        Session::new(&diags, self.flags, &self.sources, &arena, map).enter(|session| {
             typeck_universe(session, uni);
             let Some(main_did) = check::check_for_main(session, uni) else {
                 todo!("no main")
@@ -220,7 +222,7 @@ impl Compiler {
             //     dbg!(def);
             // }
 
-            let eair = crate::eair::types::build_eair(session, main_did);
+            let _eair = crate::eair::types::build_eair(session, main_did);
             // dbg!(eair);
             // pill::lowering::lower_universe(session, uni);
         });

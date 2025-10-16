@@ -131,7 +131,7 @@ pub fn parse<'a>(lexemes: Lexemes, diag: &'a DiagEmitter<'a>) -> Universe {
     }
 }
 
-impl<'a> Parser<'a> {
+impl Parser<'_> {
     fn new_id(&mut self) -> AstId {
         let id = AstId::new(self.id);
         self.id += 1;

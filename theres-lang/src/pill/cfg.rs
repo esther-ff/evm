@@ -6,48 +6,46 @@ pub use private::BasicBlock;
 
 use crate::pill::access::Access;
 use crate::pill::body::Local;
-
-use crate::session::Pooled;
+use crate::pill::op::{BinOp, UnOp};
+use crate::pill::scalar::Scalar;
+use crate::session::Session;
+use crate::types::ty::Instance;
 use crate::types::ty::Ty;
-use crate::{
-    ast::{BinOp, UnaryOp},
-    pill::scalar::Scalar,
-    types::ty::Instance,
-};
 
 pub enum ImmKind {
     Scalar(Scalar),
     Empty,
 }
 
-#[derive(Copy, Clone, Hash)]
-pub struct Imm<'il>(Pooled<'il, ImmData<'il>>);
-
-pub struct ImmData<'il> {
+pub struct Imm<'il> {
     kind: ImmKind,
     ty: Ty<'il>,
 }
 
-impl<'il> ImmData<'il> {
-    pub fn empty(ty: Ty<'il>) -> Self {
-        Self {
+impl<'il> Imm<'il> {
+    pub fn empty(cx: &'il Session<'il>, ty: Ty<'il>) -> &'il Self {
+        let this = Self {
             kind: ImmKind::Empty,
             ty,
-        }
+        };
+
+        cx.arena().alloc(this)
     }
 
-    pub fn scalar(scalar: Scalar, ty: Ty<'il>) -> Self {
-        Self {
+    pub fn scalar(cx: &'il Session<'il>, scalar: Scalar, ty: Ty<'il>) -> &'il Self {
+        let this = Self {
             kind: ImmKind::Scalar(scalar),
             ty,
-        }
+        };
+
+        cx.arena().alloc(this)
     }
 }
 
-#[derive(Copy, Clone, Hash)]
+#[derive(Copy, Clone)]
 pub enum Operand<'il> {
-    Imm(Imm<'il>),
-    Use(Access),
+    Imm(&'il Imm<'il>),
+    Use(Access<'il>),
 }
 
 pub enum BlockExit<'il> {
@@ -68,7 +66,7 @@ pub enum Rvalue<'il> {
     },
 
     Unary {
-        op: UnaryOp,
+        op: UnOp,
         val: Operand<'il>,
     },
 
@@ -83,7 +81,7 @@ pub enum Rvalue<'il> {
 #[non_exhaustive]
 pub enum Stmt<'il> {
     Assign {
-        dest: Access,
+        dest: Access<'il>,
         src: Rvalue<'il>,
     },
 

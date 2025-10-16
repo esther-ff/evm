@@ -1,84 +1,23 @@
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::ops::Deref;
-use std::ptr::{self, null};
-use std::sync::RwLock;
+use std::ptr::{from_ref, null};
 
-use crate::air::def::{DefId, DefType, IntTy, PrimTy, Resolved};
+use crate::air::def::{BodyId, DefId, DefType, IntTy, PrimTy, Resolved};
 use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
 use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
+use crate::ast::Name;
 use crate::driver::Flags;
 use crate::errors::DiagEmitter;
 use crate::id::IdxSlice;
+use crate::pooled::{Pool, Pooled};
 use crate::sources::{SourceId, Sources};
 use crate::symbols::SymbolId;
 use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
 
-#[derive(PartialOrd, Eq, Ord, Hash)]
-pub struct Pooled<'a, T>(pub &'a T);
-
-impl<T> Copy for Pooled<'_, T> {}
-impl<T> Clone for Pooled<'_, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: Debug> Debug for Pooled<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-unsafe impl<T: Sync> Sync for Pooled<'_, T> {}
-unsafe impl<T: Send> Send for Pooled<'_, T> {}
-
-impl<T> Deref for Pooled<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-
-impl<T> PartialEq for Pooled<'_, T> {
-    fn eq(&self, other: &Self) -> bool {
-        ptr::eq(self.0, other.0)
-    }
-}
-
-type Pool<'a, T> = HashMap<T, Pooled<'a, T>>;
-
-static GLOBAL_CTXT: GlobalSession = GlobalSession {
-    ptr: RwLock::new(null()),
-};
-
-unsafe impl Sync for GlobalSession {}
-unsafe impl Send for GlobalSession {}
-
-struct GlobalSession {
-    ptr: RwLock<*const ()>,
-}
-
-impl GlobalSession {
-    pub fn access(&self) -> &Session<'_> {
-        let lock = self.ptr.read().unwrap();
-        let ptr = *lock as *const Session<'_>;
-        assert!(!ptr.is_null());
-
-        unsafe { &*ptr }
-    }
-
-    pub fn set(&self, cx: &Session<'_>) {
-        let mut lock = self.ptr.write().unwrap();
-        *lock = cx as *const Session<'_> as *const _
-    }
-
-    pub fn end(&self) {
-        let mut lock = self.ptr.write().unwrap();
-        *lock = null()
+thread_local! {
+    pub static GLOBAL_CTXT: Cell<*const ()> = const {
+        Cell::new(null())
     }
 }
 
@@ -86,35 +25,52 @@ pub fn cx<'cx, F, R>(f: F) -> R
 where
     F: FnOnce(&'cx Session<'cx>) -> R,
 {
-    f(GLOBAL_CTXT.access())
+    let ptr = GLOBAL_CTXT.get();
+    assert!(!ptr.is_null());
+    f(unsafe { &*(ptr.cast()) })
 }
 
 pub struct Session<'sess> {
-    arena: Arena,
-    air_map: RefCell<AirMap<'sess>>,
+    arena: &'sess Arena,
+    air_map: AirMap<'sess>,
     pub(crate) types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
     def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
-    fn_sigs: RefCell<HashMap<DefId, FnSig<'sess>>>,
+
     diags: &'sess DiagEmitter<'sess>,
     flags: Flags,
-
     sources: &'sess Sources,
 }
 
 impl<'sess> Session<'sess> {
-    pub fn new(diags: &'sess DiagEmitter<'sess>, flags: Flags, sources: &'sess Sources) -> Self {
+    pub fn new(
+        diags: &'sess DiagEmitter<'sess>,
+        flags: Flags,
+        sources: &'sess Sources,
+        arena: &'sess Arena,
+        air_map: AirMap<'sess>,
+    ) -> Self {
         Self {
-            arena: Arena::new(),
+            arena,
             def_id_to_instance_interned: RefCell::new(HashMap::new()),
-            air_map: RefCell::new(AirMap::new()),
+            air_map,
             types: RefCell::new(Pool::new()),
             instances: RefCell::new(Pool::new()),
-            fn_sigs: RefCell::new(HashMap::new()),
             diags,
             flags,
             sources,
         }
+    }
+
+    pub fn enter<F>(&'sess self, work: F)
+    where
+        F: FnOnce(&'sess Self),
+    {
+        GLOBAL_CTXT.with(|cell| {
+            cell.set(from_ref(self).cast());
+            work(self);
+            cell.set(null());
+        });
     }
 
     pub fn dump_air_mode(&self) -> crate::driver::HirDump {
@@ -129,40 +85,12 @@ impl<'sess> Session<'sess> {
         self.sources.get_by_source_id(id).name()
     }
 
-    pub fn enter<F>(&'sess self, work: F)
-    where
-        F: FnOnce(&'sess Self),
-    {
-        GLOBAL_CTXT.set(self);
-        work(self);
-        GLOBAL_CTXT.end();
-    }
-
     pub fn diag(&self) -> &'sess DiagEmitter<'_> {
         self.diags
     }
 
-    pub fn air_mut<F, R>(&'sess self, f: F) -> R
-    where
-        F: FnOnce(&mut AirMap<'sess>) -> R,
-    {
-        f(&mut self.air_map.borrow_mut())
-    }
-
-    #[track_caller]
-    pub fn air<F, R>(&'sess self, f: F) -> R
-    where
-        F: FnOnce(&AirMap<'sess>) -> R,
-    {
-        f(&self.air_map.borrow())
-    }
-
-    pub fn air_ref(&self) -> Ref<'_, AirMap<'sess>> {
-        self.air_map.borrow()
-    }
-
     pub fn arena(&self) -> &Arena {
-        &self.arena
+        self.arena
     }
 
     pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
@@ -177,7 +105,39 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn def_type(&self, did: DefId) -> DefType {
-        self.air_map.borrow().def_type(did)
+        self.air_map.def_type(did)
+    }
+
+    pub fn air_get_def(&self, did: DefId) -> &Node<'_> {
+        self.air_map.get_def(did)
+    }
+
+    pub fn air_get_instance_of_ctor(&'sess self, did: DefId) -> DefId {
+        self.air_map.get_instance_of_ctor(did)
+    }
+
+    pub fn air_get_fn(&self, did: DefId) -> (&node::FnSig<'_>, SymbolId) {
+        self.air_map.expect_fn(did)
+    }
+
+    pub fn air_get_instance(&self, did: DefId) -> (&[node::Field<'_>], Name) {
+        self.air_map.expect_instance(did)
+    }
+
+    pub fn air_get_lambda(&self, did: DefId) -> &node::Lambda<'_> {
+        self.air_map.expect_lambda(did)
+    }
+
+    pub fn air_body(&self, did: DefId) -> &node::Expr<'_> {
+        self.air_map.body_of(did)
+    }
+
+    pub fn air_body_via_id(&self, bid: BodyId) -> &node::Expr<'_> {
+        self.air_map.get_body(bid)
+    }
+
+    pub fn air_get_parent(&self, did: DefId) -> DefId {
+        self.air_map.parent(did)
     }
 
     pub fn upvars_of(&'sess self, did: DefId) -> &'sess HashSet<AirId> {
@@ -186,7 +146,7 @@ impl<'sess> Session<'sess> {
 
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
         log::trace!("def_type_of def_id={def_id}");
-        self.air(|map| match map.get_def(def_id) {
+        match self.air_get_def(def_id) {
             Node::Thing(thing) => match thing.kind {
                 ThingKind::Fn { .. } => self.intern_ty(TyKind::FnDef(def_id)),
                 ThingKind::Instance {
@@ -209,14 +169,13 @@ impl<'sess> Session<'sess> {
             },
 
             any => panic!("Can't express type for {any:?}"),
-        })
+        }
     }
 
     pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
-        let air = self.air_ref();
-        match air.def_type(def_id) {
+        match self.def_type(def_id) {
             DefType::Fun => {
-                let (sig, _) = air.expect_fn(def_id);
+                let (sig, _) = self.air_get_fn(def_id);
 
                 FnSig {
                     inputs: self
@@ -228,7 +187,7 @@ impl<'sess> Session<'sess> {
             }
 
             DefType::AdtCtor => {
-                let instance = self.air_ref().get_instance_of_ctor(def_id);
+                let instance = self.air_get_instance_of_ctor(def_id);
                 let instance_def = self.instance_def(instance);
 
                 FnSig {
@@ -248,7 +207,7 @@ impl<'sess> Session<'sess> {
     }
 
     pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
-        self.air_ref().is_ctor(def_id)
+        self.air_map.is_ctor(def_id)
     }
 
     /// This is so fucking stupid
@@ -256,9 +215,9 @@ impl<'sess> Session<'sess> {
     where
         F: FnOnce(Vec<node::Bind<'_>>) -> R,
     {
-        let air = self.air_ref();
         work(
-            air.nodes()
+            self.air_map
+                .nodes()
                 .into_iter()
                 .filter_map(node::Node::get_thing)
                 .filter_map(node::Thing::get_bind)
@@ -272,11 +231,10 @@ impl<'sess> Session<'sess> {
             return *v;
         }
 
-        let air = self.air_ref();
-        let (fields, name) = air.expect_instance(def_id);
+        let (fields, name) = self.air_get_instance(def_id);
 
         let instance_def = InstanceDef {
-            fields: IdxSlice::new(self.arena().alloc_from_iter(fields.iter().map(|field| {
+            fields: IdxSlice::new(self.arena.alloc_from_iter(fields.iter().map(|field| {
                 FieldDef {
                     def_id: field.def_id,
                     name: field.name.interned,

@@ -2,6 +2,7 @@ use core::panic;
 use std::collections::HashMap;
 use std::panic::Location;
 
+use crate::arena::Arena;
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 
@@ -11,7 +12,6 @@ use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
 use crate::parser::{AstId, AstIdMap};
-use crate::session::Session;
 use crate::span::Span;
 use crate::symbols::SymbolId;
 
@@ -256,6 +256,8 @@ impl<'air> AirMap<'air> {
             }
 
             Node::BindItem(bind_item) => {
+                // might change!
+                #[allow(irrefutable_let_patterns)]
                 let node::BindItemKind::Fun { sig, name } = bind_item.kind else {
                     panic!(
                         "`DefId` given to `expect_fn` did not point to any function (checked bind item)"
@@ -318,9 +320,10 @@ enum DesugarLoop {
 }
 
 pub struct AirBuilder<'air> {
-    session: &'air Session<'air>,
-
+    // session: &'air Session<'air>,
     map: Mappings,
+    air_map: AirMap<'air>,
+    arena: &'air Arena,
 
     air_id_counter: u32,
 
@@ -332,12 +335,13 @@ pub struct AirBuilder<'air> {
 }
 
 impl<'air> AirBuilder<'air> {
-    pub fn new(map: Mappings, session: &'air Session<'air>) -> Self {
+    pub fn new(map: Mappings, arena: &'air Arena) -> Self {
         Self {
+            air_map: AirMap::new(),
+            arena,
             map,
             current_instance: None,
             current_bind_ty: None,
-            session,
 
             air_id_counter: 0,
             ast_id_to_air_id: HashMap::new(),
@@ -364,8 +368,7 @@ impl<'air> AirBuilder<'air> {
         );
 
         if let Some(def_id) = self.map.ast_id_to_def_id.get(&ast_id) {
-            self.session
-                .air_mut(|map| map.map_def_id_to_air(*def_id, air_id));
+            self.air_map.map_def_id_to_air(*def_id, air_id);
         }
 
         air_id
@@ -388,8 +391,7 @@ impl<'air> AirBuilder<'air> {
     }
 
     fn lower_args<'a>(&mut self, a: impl Iterator<Item = &'a Expr>) -> &'air [node::Expr<'air>] {
-        self.session
-            .arena()
+        self.arena
             .alloc_from_iter(a.map(|arg| self.lower_expr_noalloc(arg)))
     }
 
@@ -422,11 +424,11 @@ impl<'air> AirBuilder<'air> {
                 mode,
             } => {
                 let variable = self.lower_expr(lvalue);
-                if !is_assignable_expr(variable) {
-                    self.session
-                        .diag()
-                        .emit_err(AstLowerError::WrongAssign, lvalue.span);
-                }
+                // if !is_assignable_expr(variable) {
+                //     self.session
+                //         .diag()
+                //         .emit_err(AstLowerError::WrongAssign, lvalue.span);
+                // }
 
                 match mode {
                     AssignMode::Regular => node::ExprKind::Assign {
@@ -494,8 +496,7 @@ impl<'air> AirBuilder<'air> {
             ExprType::Group(expr) => return self.lower_expr_noalloc(expr),
 
             ExprType::List(exprs) => node::ExprKind::List(
-                self.session
-                    .arena()
+                self.arena
                     .alloc_from_iter(exprs.iter().map(|expr| self.lower_expr_noalloc(expr))),
             ),
 
@@ -505,7 +506,7 @@ impl<'air> AirBuilder<'air> {
 
             ExprType::Lambda { args, body } => {
                 let did = self.map.def_id_of(expr.id);
-                let inputs = self.session.arena().alloc_from_iter(args.iter().map(|arg| {
+                let inputs = self.arena.alloc_from_iter(args.iter().map(|arg| {
                     let id = self.next_air_id(arg.id);
                     Param::new(arg.ident, self.lower_ty(&arg.ty), id)
                 }));
@@ -514,7 +515,7 @@ impl<'air> AirBuilder<'air> {
                     LambdaBody::Block(block) => {
                         let lowered_block = self.lower_block(block);
 
-                        self.session.arena().alloc(node::Expr::new(
+                        self.arena.alloc(node::Expr::new(
                             node::ExprKind::Block(lowered_block),
                             lowered_block.span,
                             lowered_block.air_id,
@@ -524,9 +525,7 @@ impl<'air> AirBuilder<'air> {
                     LambdaBody::Expr(expr) => self.lower_expr(expr),
                 };
 
-                let body = self
-                    .session
-                    .air_mut(|air| air.insert_body_of(body_block, did));
+                let body = self.air_map.insert_body_of(body_block, did);
 
                 let lambda_desc = Lambda {
                     did,
@@ -536,7 +535,7 @@ impl<'air> AirBuilder<'air> {
                     span: expr.span,
                 };
 
-                node::ExprKind::Lambda(self.session.arena().alloc(lambda_desc))
+                node::ExprKind::Lambda(self.arena.alloc(lambda_desc))
             }
 
             ExprType::FieldAccess { source, field } => node::ExprKind::Field {
@@ -570,7 +569,7 @@ impl<'air> AirBuilder<'air> {
             Span::DUMMY,
             &[],
             self.new_air_id(),
-            Some(self.session.arena().alloc(node::Expr::new(
+            Some(self.arena.alloc(node::Expr::new(
                 node::ExprKind::Break,
                 Span::DUMMY,
                 self.new_air_id(),
@@ -580,7 +579,7 @@ impl<'air> AirBuilder<'air> {
         let condition = node::Expr::new(
             node::ExprKind::If {
                 condition: match desugar {
-                    DesugarLoop::While => self.session.arena().alloc(node::Expr::new(
+                    DesugarLoop::While => self.arena.alloc(node::Expr::new(
                         node::ExprKind::Unary {
                             target: self.lower_expr(cond),
                             op: UnaryOp::Not,
@@ -591,7 +590,7 @@ impl<'air> AirBuilder<'air> {
 
                     DesugarLoop::Until => self.lower_expr(cond),
                 },
-                block: self.session.arena().alloc(cond_block),
+                block: self.arena.alloc(cond_block),
                 else_: None,
             },
             cond.span,
@@ -601,11 +600,10 @@ impl<'air> AirBuilder<'air> {
         let loop_body = match &body.expr {
             None => node::Block::new(
                 body.span,
-                self.session
-                    .arena()
+                self.arena
                     .alloc_from_iter(body.stmts.iter().map(|stmt| self.lower_stmt(stmt))),
                 self.next_air_id(body.id),
-                Some(self.session.arena().alloc(condition)),
+                Some(self.arena.alloc(condition)),
             ),
             Some(expr) => {
                 let block_id = self.next_air_id(body.id);
@@ -613,7 +611,7 @@ impl<'air> AirBuilder<'air> {
 
                 node::Block::new(
                     body.span,
-                    self.session.arena().alloc_from_iter(
+                    self.arena.alloc_from_iter(
                         body.stmts.iter().map(|stmt| self.lower_stmt(stmt)).chain(
                             core::iter::once(node::Stmt::new(
                                 expr.span,
@@ -623,12 +621,12 @@ impl<'air> AirBuilder<'air> {
                         ),
                     ),
                     block_id,
-                    Some(self.session.arena().alloc(condition)),
+                    Some(self.arena.alloc(condition)),
                 )
             }
         };
 
-        self.session.arena().alloc(loop_body)
+        self.arena.alloc(loop_body)
     }
 
     // might be broken!
@@ -654,7 +652,7 @@ impl<'air> AirBuilder<'air> {
                         self.new_air_id(),
                     );
 
-                    self.session.arena().alloc(expr)
+                    self.arena.alloc(expr)
                 })
                 .or_else(|| {
                     if let Some(expr) = otherwise {
@@ -663,7 +661,7 @@ impl<'air> AirBuilder<'air> {
                             expr.span,
                             self.new_air_id(),
                         );
-                        return Some(self.session.arena().alloc(new_expr));
+                        return Some(self.arena.alloc(new_expr));
                     }
 
                     None
@@ -674,7 +672,7 @@ impl<'air> AirBuilder<'air> {
     #[track_caller]
     fn lower_expr(&mut self, expr: &Expr) -> &'air node::Expr<'air> {
         log::debug!("lower_expr expr.id={} loc={}", expr.id, Location::caller());
-        self.session.arena().alloc(self.lower_expr_noalloc(expr))
+        self.arena.alloc(self.lower_expr_noalloc(expr))
     }
 
     fn lower_block_noalloc(&mut self, block: &Block) -> node::Block<'air> {
@@ -687,8 +685,7 @@ impl<'air> AirBuilder<'air> {
 
         node::Block::new(
             *span,
-            self.session
-                .arena()
+            self.arena
                 .alloc_from_iter(stmts.iter().map(|stmt| self.lower_stmt(stmt))),
             self.next_air_id(*id),
             expr.as_ref().map(|expr| self.lower_expr(expr)),
@@ -696,7 +693,7 @@ impl<'air> AirBuilder<'air> {
     }
 
     fn lower_block(&mut self, block: &Block) -> &'air node::Block<'air> {
-        self.session.arena().alloc(self.lower_block_noalloc(block))
+        self.arena.alloc(self.lower_block_noalloc(block))
     }
 
     fn lower_stmt(&mut self, stmt: &Stmt) -> node::Stmt<'air> {
@@ -708,7 +705,7 @@ impl<'air> AirBuilder<'air> {
             StmtKind::Expr(expr) => node::StmtKind::Expr(self.lower_expr(expr)),
             StmtKind::LocalVar(local) => node::StmtKind::Local(self.lower_variable_stmt(local)),
             StmtKind::Thing(thing) => {
-                node::StmtKind::Thing(self.session.arena().alloc(self.lower_thing(thing)))
+                node::StmtKind::Thing(self.arena.alloc(self.lower_thing(thing)))
             }
         };
 
@@ -725,19 +722,18 @@ impl<'air> AirBuilder<'air> {
         let ty = var.ty.as_ref().map(|ty| self.lower_ty(ty));
         let local = node::Local::new(mutability, var.name, self.next_air_id(var.id), ty, init);
 
-        self.session.arena().alloc(local)
+        self.arena.alloc(local)
     }
 
     fn lower_ty(&mut self, ty: &Ty) -> &'air node::Ty<'air> {
-        self.session.arena().alloc(self.lower_ty_noalloc(ty))
+        self.arena.alloc(self.lower_ty_noalloc(ty))
     }
 
     fn lower_ty_noalloc(&mut self, ty: &Ty) -> node::Ty<'air> {
         let kind = match &ty.kind {
             TyKind::Fn { args, ret } => node::TyKind::Fun {
                 inputs: self
-                    .session
-                    .arena()
+                    .arena
                     .alloc_from_iter(args.iter().map(|this| self.lower_ty_noalloc(this))),
                 output: ret.as_ref().map(|this| self.lower_ty(this)),
             },
@@ -760,13 +756,12 @@ impl<'air> AirBuilder<'air> {
 
     fn lower_path(&mut self, path: &Path) -> &'air node::Path<'air> {
         let segments = self
-            .session
-            .arena()
+            .arena
             .alloc_from_iter(path.path.iter().map(|seg| seg.name.interned));
 
         let res = self.map.resolve(path.id);
 
-        self.session.arena().alloc(node::Path::new(
+        self.arena.alloc(node::Path::new(
             self.lower_resolved(res),
             segments,
             path.span,
@@ -778,8 +773,7 @@ impl<'air> AirBuilder<'air> {
         let def_id = self.map.def_id_of(thing.id);
         let air_id = self.next_air_id(thing.id);
 
-        self.session
-            .air_mut(|x| x.def_id_to_air_id.insert(def_id, air_id));
+        self.air_map.def_id_to_air_id.insert(def_id, air_id);
 
         let kind = match &thing.kind {
             ThingKind::Function(decl) => self.lower_fn_decl(decl, def_id),
@@ -798,8 +792,7 @@ impl<'air> AirBuilder<'air> {
         let bind_node = node::ThingKind::Bind(node::Bind {
             with: ty,
             items: self
-                .session
-                .arena()
+                .arena
                 .alloc_from_iter(bind.items.iter().map(|item| self.lower_bind_item(item))),
             mask: None,
         });
@@ -811,17 +804,16 @@ impl<'air> AirBuilder<'air> {
     fn lower_bind_item(&mut self, kind: &BindItem) -> node::BindItem<'air> {
         let (lowered_kind, _, span) = match &kind.kind {
             BindItemKind::Fun(fn_decl) => {
-                let sig =
-                    self.lower_fn_sig(&fn_decl.sig, self.session.air(|map| map.bodies.future_id()));
+                let sig = self.lower_fn_sig(&fn_decl.sig, self.air_map.bodies.future_id());
 
-                let body = self.session.arena().alloc(node::Expr::new(
+                let body = self.arena.alloc(node::Expr::new(
                     node::ExprKind::Block(self.lower_block(&fn_decl.block)),
                     fn_decl.span,
                     self.new_air_id(),
                 ));
 
                 let def_id = self.map.def_id_of(kind.id);
-                self.session.air_mut(|map| map.insert_body_of(body, def_id));
+                self.air_map.insert_body_of(body, def_id);
 
                 log::trace!("after fn decl in bind");
 
@@ -846,27 +838,24 @@ impl<'air> AirBuilder<'air> {
 
     fn lower_fn_decl(&mut self, fn_decl: &FnDecl, def_id: DefId) -> node::ThingKind<'air> {
         let params =
-            self.session
-                .arena()
+            self.arena
                 .alloc_from_iter(fn_decl.sig.args.iter().map(|arg| {
                     Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_air_id(arg.id))
                 }));
 
         let body = self.lower_block(&fn_decl.block);
-        let body_id = self.session.air_mut(|air| {
-            air.insert_body_of(
-                self.session.arena().alloc(node::Expr::new(
-                    node::ExprKind::Block(body),
-                    body.span,
-                    body.air_id,
-                )),
-                def_id,
-            )
-        });
+        let body_id = self.air_map.insert_body_of(
+            self.arena.alloc(node::Expr::new(
+                node::ExprKind::Block(body),
+                body.span,
+                body.air_id,
+            )),
+            def_id,
+        );
 
         node::ThingKind::Fn {
             name: fn_decl.sig.name,
-            sig: self.session.arena().alloc(node::FnSig::new(
+            sig: self.arena.alloc(node::FnSig::new(
                 fn_decl.sig.span,
                 self.lower_ty(&fn_decl.sig.ret_type),
                 params,
@@ -879,23 +868,20 @@ impl<'air> AirBuilder<'air> {
         let air_sig = node::FnSig::new(
             sig.span,
             self.lower_ty(&sig.ret_type),
-            self.session
-                .arena()
-                .alloc_from_iter(sig.args.iter().map(|arg| {
-                    Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_air_id(arg.id))
-                })),
+            self.arena.alloc_from_iter(sig.args.iter().map(|arg| {
+                Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_air_id(arg.id))
+            })),
             body_id,
         );
 
-        self.session.arena().alloc(air_sig)
+        self.arena.alloc(air_sig)
     }
 
     fn lower_realm(&mut self, realm: &Realm) -> node::ThingKind<'air> {
         node::ThingKind::Realm {
             name: realm.name,
             things: self
-                .session
-                .arena()
+                .arena
                 .alloc_from_iter(realm.items.iter().map(|thing| self.lower_thing(thing))),
         }
     }
@@ -908,7 +894,7 @@ impl<'air> AirBuilder<'air> {
         let ctor_def_id = self.map.def_id_of(inst.ctor_id);
 
         let kind = node::ThingKind::Instance {
-            fields: self.session.arena().alloc_from_iter(
+            fields: self.arena.alloc_from_iter(
                 inst.fields
                     .iter()
                     .map(|ast_field| self.lower_field(ast_field, def_id)),
@@ -917,8 +903,7 @@ impl<'air> AirBuilder<'air> {
             ctor_id: (ctor_air_id, ctor_def_id),
         };
 
-        self.session
-            .air_mut(|map| map.ctor_to_instance.insert(ctor_def_id, def_id));
+        self.air_map.ctor_to_instance.insert(ctor_def_id, def_id);
 
         self.current_instance.take();
 
@@ -930,9 +915,9 @@ impl<'air> AirBuilder<'air> {
 
         let air_id = self.next_air_id(field.id);
 
-        self.session.air_mut(|x| {
-            x.field_to_instance.insert(def_id, current_instance);
-        });
+        self.air_map
+            .field_to_instance
+            .insert(def_id, current_instance);
 
         node::Field::new(
             [Constant::No, Constant::Yes][usize::from(field.constant)],
@@ -954,10 +939,13 @@ impl<'air> AirBuilder<'air> {
         }
     }
 
-    pub fn lower_universe(&mut self, universe: &Universe) -> &'air node::Universe<'air> {
+    pub fn lower_universe(
+        mut self,
+        universe: &Universe,
+    ) -> (&'air node::Universe<'air>, AirMap<'air>) {
         let _id = self.next_air_id(universe.id);
         let universe = node::Universe::new(
-            self.session.arena().alloc_from_iter(
+            self.arena.alloc_from_iter(
                 universe
                     .thingies
                     .iter()
@@ -965,7 +953,7 @@ impl<'air> AirBuilder<'air> {
             ),
         );
 
-        self.session.arena().alloc(universe)
+        (self.arena.alloc(universe), self.air_map)
     }
 }
 

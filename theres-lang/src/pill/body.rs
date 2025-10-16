@@ -1,5 +1,5 @@
 mod private {
-    use crate::pill::cfg::Access;
+    use crate::pill::access::Access;
 
     crate::newtyped_index!(Local, LocalMap, LocalVec, LocalsRef);
 
@@ -24,13 +24,15 @@ mod private {
 
 use std::collections::HashMap;
 
-use crate::{
-    air::AirId,
-    eair::types::{Expr, ExprKind},
-    pill::cfg::{Access, BlockExit, Imm, Operand, Rvalue, Stmt},
-    session::Session,
-};
-pub use private::{Local, Locals};
+use crate::air::AirId;
+use crate::eair::types::{Block, Expr, ExprKind};
+use crate::pill;
+use crate::pill::access::{Access, AccessBuilder};
+use crate::pill::cfg::{BlockExit, Imm, Operand, Rvalue, Stmt};
+use crate::session::Session;
+
+pub use private::Local;
+use private::Locals;
 
 struct LocalData<'il> {
     mutbl: Constant,
@@ -65,6 +67,7 @@ impl<'il> PillBuilder<'il> {
         todo!()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn as_operand(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, Operand<'il>) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
@@ -95,15 +98,12 @@ impl<'il> PillBuilder<'il> {
 
                 let dest = self.temporary(expr.ty).into();
 
+                let op = (*op).into();
                 self.cfg.push_stmt(
                     bb,
                     Stmt::Assign {
                         dest,
-                        src: Rvalue::Binary {
-                            op: todo!(),
-                            lhs,
-                            rhs,
-                        },
+                        src: Rvalue::Binary { op, lhs, rhs },
                     },
                 );
 
@@ -116,8 +116,8 @@ impl<'il> PillBuilder<'il> {
                 // USE THIS!
                 from_lowering: _,
             } => {
-                let (bb, rvalue) = self.as_rvalue(&rvalue, bb);
-                let (bb, lvalue) = self.as_access(expr, bb);
+                let (bb, rvalue) = self.as_rvalue(rvalue, bb);
+                let (bb, lvalue) = self.as_access_full(lvalue, bb);
 
                 self.cfg.push_stmt(
                     bb,
@@ -127,7 +127,7 @@ impl<'il> PillBuilder<'il> {
                     },
                 );
 
-                (bb, Operand::Imm(Imm::empty(self.cx.nil())))
+                (bb, Operand::Imm(Imm::empty(self.cx, self.cx.nil())))
             }
 
             ExprKind::Unary { operand, op } => {
@@ -138,7 +138,13 @@ impl<'il> PillBuilder<'il> {
                     bb,
                     Stmt::Assign {
                         dest,
-                        src: Rvalue::Unary { op: todo!(), val },
+                        src: Rvalue::Unary {
+                            op: match *op {
+                                crate::ast::UnaryOp::Negation => pill::op::UnOp::Neg,
+                                crate::ast::UnaryOp::Not => pill::op::UnOp::Not,
+                            },
+                            val,
+                        },
                     },
                 );
 
@@ -201,7 +207,7 @@ impl<'il> PillBuilder<'il> {
             }
 
             ExprKind::Return(expr) => {
-                let op = Operand::Imm(Imm::empty(self.cx.ty_diverge()));
+                let op = Operand::Imm(Imm::empty(self.cx, self.cx.ty_diverge()));
                 let mut bb = bb;
                 if let Some(expr) = expr {
                     let (next_bb, ret) = self.as_rvalue(expr, bb);
@@ -213,7 +219,7 @@ impl<'il> PillBuilder<'il> {
                         },
                     );
 
-                    bb = next_bb
+                    bb = next_bb;
                 }
 
                 self.cfg.end_block(bb, BlockExit::Goto(BasicBlock::DUMMY));
@@ -241,55 +247,54 @@ impl<'il> PillBuilder<'il> {
                 let loop_start = self.cfg.new_block();
                 self.cfg.end_block(bb, BlockExit::Goto(loop_start));
 
-                let dest = self.temporary(expr.ty).into();
-                let mut cursor = loop_start;
-                for expr in body.exprs() {
-                    match expr.kind {
-                        ExprKind::Assign {
-                            lvalue,
-                            rvalue,
-                            from_lowering,
-                        } => {
-                            let (bb, dest_assign) = self.as_access(lvalue, cursor);
-                            let (bb, src) = self.as_rvalue(rvalue, bb);
-                            cursor = bb;
-                            self.cfg.push_stmt(
-                                cursor,
-                                Stmt::Assign {
-                                    dest: dest_assign,
-                                    src,
-                                },
-                            );
-                        }
+                let dest = self.temporary(expr.ty);
+                let bb = self.process_block(dest, body, loop_start);
 
-                        _ => {
-                            let (bb, src) = self.as_rvalue(expr, cursor);
-                            cursor = bb;
-
-                            self.cfg.push_stmt(bb, Stmt::Assign { dest, src });
-                        }
-                    }
-                }
-
-                self.cfg.end_block(cursor, BlockExit::Goto(loop_start));
+                self.cfg.end_block(bb, BlockExit::Goto(loop_start));
                 let loop_end = self.cfg.new_block();
 
-                (loop_end, Operand::Imm(Imm::empty(self.cx.nil())))
+                (loop_end, Operand::Imm(Imm::empty(self.cx, self.cx.nil())))
             }
 
             _ => todo!(),
         }
     }
 
-    fn as_rvalue(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, Rvalue<'il>) {
+    fn process_block(&mut self, dest: Local, block: &Block<'il>, bb: BasicBlock) -> BasicBlock {
+        let dest = dest.into();
+        let mut cursor = bb;
+        let exprs = block.exprs();
+
+        for (ix, expr) in exprs.iter().enumerate() {
+            let (bb, op) = self.as_rvalue(expr, cursor);
+            cursor = bb;
+
+            if ix == exprs.len() - 1 {
+                self.cfg.push_stmt(cursor, Stmt::Assign { dest, src: op });
+            }
+        }
+
+        cursor
+    }
+
+    fn as_rvalue(&mut self, _expr: &Expr<'il>, _bb: BasicBlock) -> (BasicBlock, Rvalue<'il>) {
         todo!()
     }
 
-    fn as_access(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, !) {
+    fn as_access_full(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, Access<'il>) {
+        let (bb, mut builder) = self.as_access(expr, bb);
+        (bb, builder.finish(self.cx))
+    }
+
+    fn as_access(
+        &mut self,
+        _expr: &Expr<'il>,
+        _bb: BasicBlock,
+    ) -> (BasicBlock, AccessBuilder<'il>) {
         todo!()
     }
 
-    fn temporary(&mut self, ty: Ty<'il>) -> Local {
+    fn temporary(&mut self, _ty: Ty<'il>) -> Local {
         todo!()
     }
 }

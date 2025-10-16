@@ -1,6 +1,9 @@
+// temp
+#![allow(irrefutable_let_patterns)]
+
 use crate::air::def::{DefId, DefType, Resolved};
 use crate::air::node::{
-    AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Path, Stmt, StmtKind, Thing,
+    AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Path, Stmt, StmtKind,
     ThingKind, Universe,
 };
 use crate::air::visitor::AirVisitor;
@@ -9,7 +12,7 @@ use crate::ast::{BinOp, UnaryOp};
 use crate::session::Session;
 use crate::span::Span;
 use crate::symbols::SymbolId;
-use crate::types::ty::{InferKind, InferTy, Instance, LambdaEnv, Ty, TyKind, TypingError};
+use crate::types::ty::{InferKind, InferTy, LambdaEnv, Ty, TyKind, TypingError};
 
 use std::collections::HashMap;
 use std::mem;
@@ -23,56 +26,6 @@ pub enum CallKind<'ty> {
     Method(Ty<'ty>),
     Regular,
 }
-
-/// Gathers and interns stuff like
-/// function signatures, instance declarations
-/// and etc...
-// pub struct ItemGatherer<'a> {
-//     sess: &'a Session<'a>,
-// }
-
-// impl<'ty> ItemGatherer<'ty> {
-//     pub fn new(sess: &'ty Session<'ty>) -> Self {
-//         Self { sess }
-//     }
-// }
-
-// impl<'vis> AirVisitor<'vis> for ItemGatherer<'_> {
-//     type Result = ();
-
-//     fn visit_thing(&mut self, thing: &'vis Thing<'vis>) -> Self::Result {
-//         match thing.kind {
-//             ThingKind::Fn { name: _, sig } => {
-
-//                 // We have to traverse the fn body for nested functions
-//                 let body = self.sess.air_ref().get_body(sig.body);
-//                 self.visit_expr(body);
-//             }
-
-//             ThingKind::Instance {
-//                 fields: _,
-//                 name: _,
-//                 ctor_id: (_, ctor_id),
-//             } => {
-//                 self.sess.instance_def(thing.def_id);
-//             }
-
-//             ThingKind::Bind(bind) => {
-//                 for bind_item in bind.items {
-//                     if let BindItemKind::Fun { sig, name: _ } = bind_item.kind {
-//                     }
-//                     self.visit_bind_item(bind_item);
-//                 }
-//             }
-
-//             ThingKind::Realm { name: _, things } => {
-//                 for i in things {
-//                     self.visit_thing(i);
-//                 }
-//             }
-//         }
-//     }
-// }
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -92,8 +45,6 @@ pub struct FunCx<'ty> {
 
     resolved_method_calls: HashMap<AirId, DefId>,
     local_tys: HashMap<AirId, Ty<'ty>>,
-
-    _field_ids: HashMap<(Instance<'ty>, SymbolId), FieldId>,
 
     obligations: HashMap<InferId, Vec<Obligation>>,
 }
@@ -517,8 +468,7 @@ impl<'ty> FunCx<'ty> {
             span: expr_span,
         };
 
-        let air = self.s.air_ref();
-        let body = air.get_body(lambda.body);
+        let body = self.s.air_body_via_id(lambda.body);
         let output_ty = self.type_of(body);
 
         if self.unify(env.output, output_ty).is_err() {
@@ -564,25 +514,16 @@ impl<'ty> FunCx<'ty> {
         }
 
         let err = if let TyKind::Instance(def) = *src_ty {
-            if let Some((ix, found)) = def
-                .fields
-                .iter()
-                .enumerate()
-                .find(|(_, f)| f.name == field_name)
-            {
-                // idk
-                self._field_ids
-                    .insert((def, field_name), FieldId::new_usize(ix));
-
+            if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
                 return self.s.def_type_of(found.def_id);
             }
 
             TypingError::NoField {
-                on: (src_ty),
+                on: src_ty,
                 field_name,
             }
         } else {
-            TypingError::NotInstance { got: (src_ty) }
+            TypingError::NotInstance { got: src_ty }
         };
 
         self.s.diag().emit_err(err, src.span);
@@ -929,9 +870,8 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
 impl<'cx> Session<'cx> {
     pub fn typeck(&'cx self, did: DefId) -> TypeTable<'cx> {
-        let air = self.air_ref();
-        let (air_sig, _) = air.expect_fn(did);
-        let body = air.get_body(air_sig.body);
+        let (air_sig, _) = self.air_get_fn(did);
+        let body = self.air_body_via_id(air_sig.body);
         let ty_sig = self.fn_sig_for(did);
 
         let node_type: HashMap<_, _> = air_sig
@@ -946,7 +886,6 @@ impl<'cx> Session<'cx> {
             fn_ret_ty: Some(ty_sig.output),
             node_type,
             ty_var_types: HashMap::new(),
-            _field_ids: HashMap::new(),
             ty_var_origins: HashMap::new(),
             infer_ty_counter: 0,
             resolved_method_calls: HashMap::new(),

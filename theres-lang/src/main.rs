@@ -6,6 +6,7 @@
 #![warn(clippy::perf)]
 #![warn(clippy::suspicious)]
 #![warn(clippy::correctness)]
+#![warn(clippy::pedantic)]
 #![allow(dead_code)]
 
 mod air;
@@ -18,6 +19,7 @@ mod id;
 mod lexer;
 mod parser;
 mod pill;
+mod pooled;
 mod session;
 mod sources;
 mod span;

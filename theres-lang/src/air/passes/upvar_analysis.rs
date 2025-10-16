@@ -49,14 +49,13 @@ impl<'vis> AirVisitor<'vis> for UpvarCollector<'_> {
     }
 }
 
-pub fn analyze_upvars<'cx>(s: &'cx Session<'cx>, did: DefId) -> &'cx HashSet<AirId> {
+pub fn analyze_upvars<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx HashSet<AirId> {
     assert!(
-        matches!(s.def_type(did), DefType::Lambda),
+        matches!(cx.def_type(did), DefType::Lambda),
         "upvars for not lambda!"
     );
 
-    let air = s.air_ref();
-    let body = air.body_of(did);
+    let body = cx.air_body(did);
 
     let mut locals = LocalCollector {
         set: HashSet::new(),
@@ -64,11 +63,11 @@ pub fn analyze_upvars<'cx>(s: &'cx Session<'cx>, did: DefId) -> &'cx HashSet<Air
     locals.visit_expr(body);
 
     let mut upvars = UpvarCollector {
-        s,
+        s: cx,
         upvars: HashSet::new(),
         all_locals: locals.set,
     };
 
     upvars.visit_expr(body);
-    s.arena().alloc(upvars.upvars)
+    cx.arena().alloc(upvars.upvars)
 }

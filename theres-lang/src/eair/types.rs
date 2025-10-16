@@ -16,6 +16,7 @@ use crate::air::node::{self, Node, StmtKind};
 use crate::air::AirId;
 use crate::ast::{self, UnaryOp};
 use crate::id::IdxVec;
+use crate::pill;
 use crate::types::fun_cx::FieldId;
 use crate::types::ty::{Instance, TyKind};
 use crate::{
@@ -46,13 +47,13 @@ pub struct Expr<'ir> {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum LogicalOp {
     And,
     Or,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum BinOp {
     Shl,
     Shr,
@@ -70,6 +71,41 @@ pub enum BinOp {
     Gr,
     Lt,
     Le,
+}
+
+impl From<BinOp> for pill::op::BinOp {
+    fn from(value: BinOp) -> Self {
+        #[allow(clippy::enum_glob_use)]
+        use pill::op::BinOp::*;
+
+        match value {
+            BinOp::Add => Add,
+            BinOp::Sub => Sub,
+            BinOp::Div => Div,
+            BinOp::Mul => Mul,
+            BinOp::Shl => Shl,
+            BinOp::Shr => Shr,
+            BinOp::Mod => Mod,
+            BinOp::Or => BitOr,
+            BinOp::And => BitAnd,
+            BinOp::Xor => BitXor,
+            BinOp::Eq => Eq,
+            BinOp::Neq => Ne,
+            BinOp::Gr => Gr,
+            BinOp::Gte => Ge,
+            BinOp::Lt => Lt,
+            BinOp::Le => Le,
+        }
+    }
+}
+
+impl From<LogicalOp> for pill::op::BinOp {
+    fn from(value: LogicalOp) -> Self {
+        match value {
+            LogicalOp::And => pill::op::BinOp::BitAnd,
+            LogicalOp::Or => pill::op::BinOp::BitOr,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -210,7 +246,7 @@ impl<'ir> EairBuilder<'ir> {
             };
 
             self.current_block.push(actual_init);
-        };
+        }
 
         id
     }
@@ -242,8 +278,11 @@ impl<'ir> EairBuilder<'ir> {
         self.cx.arena().alloc(self.lower_expr(expr))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn lower_expr(&mut self, expr: &AirExpr<'_>) -> Expr<'ir> {
+        #[allow(clippy::enum_glob_use)]
         use crate::air::node::ExprKind::*;
+
         let ty = self.types.type_of(expr);
         let span = expr.span;
 
@@ -352,7 +391,7 @@ impl<'ir> EairBuilder<'ir> {
                 if let Path(path) = function.kind
                     && let Resolved::Def(did, DefType::AdtCtor) = path.res
                 {
-                    let instance_did = self.cx.air(|air| air.get_instance_of_ctor(did));
+                    let instance_did = self.cx.air_get_instance_of_ctor(did);
                     let def = self.cx.instance_def(instance_did);
                     let fields = self
                         .cx
@@ -491,13 +530,11 @@ impl<'ir> EairBuilder<'ir> {
                 Resolved::Err => unreachable!("shouldn't put `Resolved::Err`s in EAIR"),
 
                 Resolved::Local(ref local_id) => {
-                    let kind = match self.upvars.contains(local_id) {
-                        false => {
-                            let lowered_id = *self.lowered_locals.get(local_id).unwrap();
-                            ExprKind::Local(lowered_id)
-                        }
-
-                        true => ExprKind::Upvar { upvar: *local_id },
+                    let kind = if self.upvars.contains(local_id) {
+                        ExprKind::Upvar { upvar: *local_id }
+                    } else {
+                        let lowered_id = *self.lowered_locals.get(local_id).unwrap();
+                        ExprKind::Local(lowered_id)
                     };
 
                     Expr { kind, ty, span }
@@ -532,6 +569,7 @@ enum Ops {
 }
 
 fn bin_op_to_eair(binop: ast::BinOp) -> Ops {
+    #[allow(clippy::enum_glob_use)]
     use ast::BinOp::*;
 
     let reg = match binop {
@@ -564,7 +602,6 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
     // REALLY STUPID!
     let dummy = cx.arena().alloc(HashSet::new());
 
-    let air = cx.air_ref();
     let types;
     let inputs;
 
@@ -578,10 +615,10 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
         wrong => unreachable!("`build_eair`: trying to lower a {wrong:#?}"),
     };
     let upvars = if let DefType::Lambda = cx.def_type(did) {
-        let parent = air.parent(did);
+        let parent = cx.air_get_parent(did);
         let upvars = cx.upvars_of(did);
         types = cx.typeck(parent);
-        let def = air.get_def(did);
+        let def = cx.air_get_def(did);
 
         if let Node::Expr(expr) = def
             && let node::ExprKind::Lambda(lambda) = expr.kind
@@ -589,12 +626,12 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
             inputs = lambda.inputs;
         } else {
             unreachable!()
-        };
+        }
 
         upvars
     } else {
         types = cx.typeck(did);
-        let air_sig = air.expect_fn(did).0;
+        let air_sig = cx.air_get_fn(did).0;
 
         inputs = air_sig.arguments;
 
@@ -614,7 +651,7 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
         })
         .collect();
 
-    let body = air.body_of(did);
+    let body = cx.air_body(did);
 
     let eair = Eair {
         locals,

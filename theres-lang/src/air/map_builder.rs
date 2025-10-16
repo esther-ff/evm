@@ -110,6 +110,6 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
     fn visit_block(&mut self, block: &'air node::Block<'air>) -> Self::Result {
         self.m.insert_node(Node::Block(block), block.air_id);
 
-        walk_block(self, block)
+        walk_block(self, block);
     }
 }

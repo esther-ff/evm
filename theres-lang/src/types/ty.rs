@@ -1,7 +1,8 @@
 use crate::air::def::{DefId, IntTy};
 use crate::air::node::Constant;
 use crate::errors::{Phase, TheresError};
-use crate::session::{Pooled, cx};
+use crate::pooled::Pooled;
+use crate::session::cx;
 use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::types::fun_cx::{FieldSlice, InferId};
@@ -319,10 +320,10 @@ impl Display for Ty<'_> {
                 for (ix, ty) in inputs.iter().enumerate() {
                     write!(f, "{ty}")?;
                     if ix != inputs.len() - 1 {
-                        write!(f, ", ")?
+                        write!(f, ", ")?;
                     }
                 }
-                return write!(f, ") => {}", output);
+                return write!(f, ") => {output}");
             }
 
             TyKind::Instance(def) => {
@@ -337,14 +338,14 @@ impl Display for Ty<'_> {
                 use crate::session::Session;
 
                 fn inner<'cx>(cx: &'cx Session<'cx>, f: &mut Formatter, did: DefId) -> fmt::Result {
-                    let sym = cx.air_ref().expect_fn(did).1;
+                    let sym = cx.air_get_fn(did).1;
                     let typed_sig = cx.fn_sig_for(did);
                     write!(f, "fun {name}(", name = sym.get_interned())?;
 
                     for (ix, ty) in typed_sig.inputs.iter().enumerate() {
                         write!(f, "{ty}")?;
                         if ix != typed_sig.inputs.len() - 1 {
-                            write!(f, ", ")?
+                            write!(f, ", ")?;
                         }
                     }
 
@@ -364,8 +365,7 @@ impl Display for Ty<'_> {
 
             TyKind::Lambda(lambda) => {
                 return cx(|cx| {
-                    let air = cx.air_ref();
-                    let lambda = air.expect_lambda(lambda.did);
+                    let lambda = cx.air_get_lambda(lambda.did);
                     write!(f, "{{lambda <=> {span}}}", span = lambda.span)
                 });
             }

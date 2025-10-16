@@ -6,12 +6,10 @@ use crate::air::Mappings;
 use crate::air::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
-use crate::errors::{Phase, TheresError};
+use crate::errors::{DiagEmitter, Phase, TheresError};
 use crate::id::IdxVec;
 use crate::maybe_visit;
-use crate::session::Session;
 use crate::symbols::SymbolId;
-
 use crate::visitor_common::VisitorResult;
 
 crate::newtyped_index!(Scope, ScopeMap, ScopeVec, ScopeSlice);
@@ -136,8 +134,7 @@ impl Scopes {
     }
 }
 
-struct FirstPass<'cx> {
-    cx: &'cx Session<'cx>,
+struct FirstPass {
     scopes: ScopeVec<ScopeData>,
     path: Scopes,
     current_scope: Scope,
@@ -150,13 +147,12 @@ struct FirstPass<'cx> {
     thing_ast_id: Option<AstId>,
 }
 
-impl<'cx> FirstPass<'cx> {
-    fn new(cx: &'cx Session<'cx>) -> Self {
+impl FirstPass {
+    fn new() -> Self {
         let mut scopes = IdxVec::new();
         let current_scope = scopes.push(ScopeData::new(None));
 
         Self {
-            cx,
             thing_ast_id: None,
             path: Scopes::new(vec![current_scope]),
             scopes,
@@ -230,7 +226,7 @@ impl<'cx> FirstPass<'cx> {
     }
 }
 
-impl<'vis> Visitor<'vis> for FirstPass<'_> {
+impl<'vis> Visitor<'vis> for FirstPass {
     type Result = ();
 
     fn visit_thing(&mut self, val: &'vis Thing) -> Self::Result {
@@ -382,8 +378,8 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
     }
 }
 
-struct SecondPass<'cx> {
-    cx: &'cx Session<'cx>,
+struct SecondPass<'res> {
+    diag: &'res DiagEmitter<'res>,
     maps: Mappings,
 
     current_instance: Option<AstId>,
@@ -401,10 +397,9 @@ struct SecondPass<'cx> {
     arg_stack: Vec<(SymbolId, Resolved<AstId>)>,
 }
 
-impl<'cx> SecondPass<'cx> {
-    fn new(resolver: FirstPass<'cx>) -> Self {
+impl<'res> SecondPass<'res> {
+    fn new(resolver: FirstPass, diag: &'res DiagEmitter<'res>) -> Self {
         let FirstPass {
-            cx,
             scopes,
             mut path,
             current_scope,
@@ -435,7 +430,7 @@ impl<'cx> SecondPass<'cx> {
         }
 
         Self {
-            cx,
+            diag,
             maps: Mappings::new(ast_id_did, did_ast_id, did_defs),
             current_instance: None,
             current_bind_ty: None,
@@ -533,7 +528,7 @@ impl<'cx> SecondPass<'cx> {
                 Resolved::Local(..) => unreachable!("locals shouldn't be referenced by paths"),
 
                 Resolved::Err => {
-                    self.cx.diag().emit_err(
+                    self.diag.emit_err(
                         ResError::NotFound {
                             name: seg_name,
                             namespace: Namespace::Types,
@@ -589,8 +584,7 @@ impl<'cx> SecondPass<'cx> {
         let name = path.path[idx].name.interned;
         let span = path.path[idx].span;
 
-        self.cx
-            .diag()
+        self.diag
             .emit_err(ResError::NotFound { name, namespace }, span);
     }
 }
@@ -987,13 +981,13 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
     }
 }
 
-pub fn resolve<'cx>(cx: &'cx Session<'cx>, universe: &Universe) -> Mappings {
-    let mut first = FirstPass::new(cx);
+pub fn resolve<'cx>(diag: &'cx DiagEmitter<'cx>, universe: &Universe) -> Mappings {
+    let mut first = FirstPass::new();
     for thing in &universe.thingies {
         first.visit_thing(thing);
     }
 
-    let mut second = SecondPass::new(first);
+    let mut second = SecondPass::new(first, diag);
     for thing in &universe.thingies {
         second.visit_thing(thing);
     }

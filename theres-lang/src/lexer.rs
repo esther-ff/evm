@@ -374,7 +374,10 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn new_span(&self, start: usize, end: usize) -> Span {
-        Span::new(start as u32, end as u32, self.current_line, self.sourceid)
+        let start: u32 = start.try_into().unwrap();
+        let end: u32 = end.try_into().unwrap();
+
+        Span::new(start, end, self.current_line, self.sourceid)
     }
 
     pub fn get_str_from_span(&self, span: Span) -> Option<&str> {
