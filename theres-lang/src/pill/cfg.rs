@@ -4,8 +4,10 @@ mod private {
 
 pub use private::BasicBlock;
 
+use crate::pill::access::Access;
 use crate::pill::body::Local;
 
+use crate::session::Pooled;
 use crate::types::ty::Ty;
 use crate::{
     ast::{BinOp, UnaryOp},
@@ -18,12 +20,15 @@ pub enum ImmKind {
     Empty,
 }
 
-pub struct Imm<'il> {
+#[derive(Copy, Clone, Hash)]
+pub struct Imm<'il>(Pooled<'il, ImmData<'il>>);
+
+pub struct ImmData<'il> {
     kind: ImmKind,
     ty: Ty<'il>,
 }
 
-impl<'il> Imm<'il> {
+impl<'il> ImmData<'il> {
     pub fn empty(ty: Ty<'il>) -> Self {
         Self {
             kind: ImmKind::Empty,
@@ -39,9 +44,10 @@ impl<'il> Imm<'il> {
     }
 }
 
+#[derive(Copy, Clone, Hash)]
 pub enum Operand<'il> {
     Imm(Imm<'il>),
-    UseLocal(Local),
+    Use(Access),
 }
 
 pub enum BlockExit<'il> {
@@ -77,7 +83,7 @@ pub enum Rvalue<'il> {
 #[non_exhaustive]
 pub enum Stmt<'il> {
     Assign {
-        dest: Local,
+        dest: Access,
         src: Rvalue<'il>,
     },
 

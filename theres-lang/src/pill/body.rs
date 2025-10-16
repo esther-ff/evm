@@ -1,4 +1,6 @@
 mod private {
+    use crate::pill::cfg::Access;
+
     crate::newtyped_index!(Local, LocalMap, LocalVec, LocalsRef);
 
     pub type Locals<'il> = LocalVec<super::LocalData<'il>>;
@@ -6,6 +8,16 @@ mod private {
     impl Local {
         pub(super) fn ret_place() -> Local {
             Local::ZERO
+        }
+
+        pub(super) fn ret_access() -> Access<'static> {
+            Self::ret_place().into()
+        }
+    }
+
+    impl From<Local> for Access<'_> {
+        fn from(value: Local) -> Self {
+            Access::base(value)
         }
     }
 }
@@ -15,7 +27,7 @@ use std::collections::HashMap;
 use crate::{
     air::AirId,
     eair::types::{Expr, ExprKind},
-    pill::cfg::{BlockExit, Imm, Operand, Rvalue, Stmt},
+    pill::cfg::{Access, BlockExit, Imm, Operand, Rvalue, Stmt},
     session::Session,
 };
 pub use private::{Local, Locals};
@@ -74,19 +86,19 @@ impl<'il> PillBuilder<'il> {
                 };
 
                 self.cfg.push_stmt(current_bb, stmt);
-                (current_bb, Operand::UseLocal(ret))
+                (current_bb, Operand::Use(Access::base(ret)))
             }
 
             ExprKind::Binary { lhs, rhs, op } => {
                 let (bb, lhs) = self.as_operand(lhs, bb);
                 let (bb, rhs) = self.as_operand(rhs, bb);
 
-                let tmp = self.temporary(expr.ty);
+                let dest = self.temporary(expr.ty).into();
 
                 self.cfg.push_stmt(
                     bb,
                     Stmt::Assign {
-                        dest: tmp,
+                        dest,
                         src: Rvalue::Binary {
                             op: todo!(),
                             lhs,
@@ -95,7 +107,7 @@ impl<'il> PillBuilder<'il> {
                     },
                 );
 
-                (bb, Operand::UseLocal(tmp))
+                (bb, Operand::Use(dest))
             }
 
             ExprKind::Assign {
@@ -120,17 +132,17 @@ impl<'il> PillBuilder<'il> {
 
             ExprKind::Unary { operand, op } => {
                 let (bb, val) = self.as_operand(operand, bb);
-                let tmp = self.temporary(expr.ty);
+                let dest = self.temporary(expr.ty).into();
 
                 self.cfg.push_stmt(
                     bb,
                     Stmt::Assign {
-                        dest: tmp,
+                        dest,
                         src: Rvalue::Unary { op: todo!(), val },
                     },
                 );
 
-                (bb, Operand::UseLocal(tmp))
+                (bb, Operand::Use(dest))
             }
 
             ExprKind::If {
@@ -138,7 +150,7 @@ impl<'il> PillBuilder<'il> {
                 true_,
                 false_,
             } => {
-                let tmp = self.temporary(expr.ty);
+                let tmp = self.temporary(expr.ty).into();
                 let (bb, cond) = self.as_operand(cond, bb);
 
                 let bb_true = self.cfg.new_block();
@@ -185,7 +197,7 @@ impl<'il> PillBuilder<'il> {
                 self.cfg.end_block(bb_true_end, BlockExit::Goto(bb_end));
                 self.cfg.end_block(bb_false_end, BlockExit::Goto(bb_end));
 
-                (bb_end, Operand::UseLocal(tmp))
+                (bb_end, Operand::Use(tmp))
             }
 
             ExprKind::Return(expr) => {
@@ -196,7 +208,7 @@ impl<'il> PillBuilder<'il> {
                     self.cfg.push_stmt(
                         bb,
                         Stmt::Assign {
-                            dest: Local::ret_place(),
+                            dest: Local::ret_access(),
                             src: ret,
                         },
                     );
@@ -210,7 +222,7 @@ impl<'il> PillBuilder<'il> {
             }
 
             ExprKind::Block(block) => {
-                let tmp = self.temporary(expr.ty);
+                let dest = self.temporary(expr.ty).into();
                 let mut cursor = bb;
                 let exprs = block.exprs();
                 for (ix, expr) in exprs.iter().enumerate() {
@@ -218,19 +230,18 @@ impl<'il> PillBuilder<'il> {
                     cursor = bb;
 
                     if ix == exprs.len() - 1 {
-                        self.cfg
-                            .push_stmt(cursor, Stmt::Assign { dest: tmp, src: op });
+                        self.cfg.push_stmt(cursor, Stmt::Assign { dest, src: op });
                     }
                 }
 
-                (cursor, Operand::UseLocal(tmp))
+                (cursor, Operand::Use(dest))
             }
 
             ExprKind::Loop(body) => {
                 let loop_start = self.cfg.new_block();
                 self.cfg.end_block(bb, BlockExit::Goto(loop_start));
 
-                let tmp = self.temporary(expr.ty);
+                let dest = self.temporary(expr.ty).into();
                 let mut cursor = loop_start;
                 for expr in body.exprs() {
                     match expr.kind {
@@ -239,17 +250,23 @@ impl<'il> PillBuilder<'il> {
                             rvalue,
                             from_lowering,
                         } => {
-                            let (bb, dest) = self.as_access(lvalue, cursor);
+                            let (bb, dest_assign) = self.as_access(lvalue, cursor);
                             let (bb, src) = self.as_rvalue(rvalue, bb);
                             cursor = bb;
-                            self.cfg.push_stmt(cursor, Stmt::Assign { dest, src });
+                            self.cfg.push_stmt(
+                                cursor,
+                                Stmt::Assign {
+                                    dest: dest_assign,
+                                    src,
+                                },
+                            );
                         }
 
                         _ => {
                             let (bb, src) = self.as_rvalue(expr, cursor);
                             cursor = bb;
 
-                            self.cfg.push_stmt(bb, Stmt::Assign { dest: tmp, src });
+                            self.cfg.push_stmt(bb, Stmt::Assign { dest, src });
                         }
                     }
                 }

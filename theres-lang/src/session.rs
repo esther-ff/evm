@@ -20,7 +20,6 @@ use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
 pub struct Pooled<'a, T>(pub &'a T);
 
 impl<T> Copy for Pooled<'_, T> {}
-
 impl<T> Clone for Pooled<'_, T> {
     fn clone(&self) -> Self {
         *self
