@@ -144,6 +144,10 @@ impl<'sess> Session<'sess> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
+    pub fn make_instance(&'sess self, fields: &[Field<'sess>], sym: SymbolId) -> Instance<'sess> {
+        self.intern_instance_def(self.gen_instance_def(fields, sym))
+    }
+
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
         log::trace!("def_type_of def_id={def_id}");
         match self.air_get_def(def_id) {

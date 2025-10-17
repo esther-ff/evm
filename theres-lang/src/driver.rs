@@ -9,7 +9,6 @@ use crate::session::Session;
 use crate::sources::{FileManager, SourceId, Sources};
 use crate::types::fun_cx::typeck_universe;
 use std::cell::Cell;
-use std::collections::HashSet;
 use std::io::{Stderr, Write, stderr, stdout};
 use std::path::Path;
 use std::sync::{Mutex, RwLock};
@@ -207,23 +206,10 @@ impl Compiler {
 
         Session::new(&diags, self.flags, &self.sources, &arena, map).enter(|session| {
             typeck_universe(session, uni);
-            let Some(main_did) = check::check_for_main(session, uni) else {
-                todo!("no main")
-            };
-
-            println!("main is at did {}", main_did.to_usize());
-            let mut set = HashSet::new();
-
-            air::passes::entry_point::gather_items_for_build(session, main_did, &mut set);
-            dbg!(&set);
-            // let air = session.air_ref();
-            // for did in set {
-            //     let def = air.get_def(did);
-            //     dbg!(def);
-            // }
-
-            let _eair = crate::eair::types::build_eair(session, main_did);
-            // dbg!(eair);
+            let main_did = check::check_for_main(session, uni).expect("todo: no main lmao!");
+            log::debug!("main fn is {main_did}");
+            let eair = crate::eair::types::build_eair(session, main_did);
+            let _ = dbg!(eair);
             // pill::lowering::lower_universe(session, uni);
         });
     }

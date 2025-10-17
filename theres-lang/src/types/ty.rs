@@ -152,6 +152,15 @@ impl<'ty> TyKind<'ty> {
 
         def
     }
+
+    #[track_caller]
+    pub fn expect_lambda(&self) -> LambdaEnv<'ty> {
+        let TyKind::Lambda(env) = *self else {
+            panic!("expected lambda but got different ty!")
+        };
+
+        *env
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

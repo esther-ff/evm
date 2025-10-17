@@ -42,7 +42,21 @@ impl Scalar {
         u16 > to_u16 > new_u16,
         u32 > to_u32 > new_u32,
         u64 > to_u64 > new_u64,
-        i64 > to_i64 > new_i64
+        i64 > to_i64 > new_i64,
+        f64 > to_f64 > new_f64,
+        f32 > to_f32 > new_f32
+    }
+
+    pub fn to_bool(self) -> bool {
+        let byte = self.to_u8();
+
+        assert!(byte > 1, "`to_bool` has an invalid val for a bool: {byte}!");
+
+        byte == 1
+    }
+
+    pub fn new_bool(val: bool) -> Self {
+        Self::new_u8(val as u8)
     }
 }
 

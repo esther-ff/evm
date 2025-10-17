@@ -9,8 +9,8 @@ use crate::pill::body::Local;
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
 use crate::session::Session;
-use crate::types::ty::Instance;
 use crate::types::ty::Ty;
+use crate::types::ty::{Instance, LambdaEnv};
 
 pub enum ImmKind {
     Scalar(Scalar),
@@ -58,6 +58,11 @@ pub enum BlockExit<'il> {
     Return,
 }
 
+pub enum AdtKind<'il> {
+    Def(Instance<'il>),
+    Lambda(LambdaEnv<'il>),
+}
+
 pub enum Rvalue<'il> {
     Binary {
         op: BinOp,
@@ -72,10 +77,14 @@ pub enum Rvalue<'il> {
 
     Regular(Operand<'il>),
 
-    Make {
-        def: Instance<'il>,
+    Adt {
+        def: AdtKind<'il>,
         args: Vec<Operand<'il>>,
     },
+
+    List(Vec<Operand<'il>>),
+
+    Length(Access<'il>),
 }
 
 #[non_exhaustive]
@@ -90,6 +99,8 @@ pub enum Stmt<'il> {
         ret: Local,
         args: Vec<Operand<'il>>,
     },
+
+    CheckCond(Operand<'il>),
 
     // TailCall {
     //     fun: Operand,

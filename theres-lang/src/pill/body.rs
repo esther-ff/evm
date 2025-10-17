@@ -25,10 +25,13 @@ mod private {
 use std::collections::HashMap;
 
 use crate::air::AirId;
-use crate::eair::types::{Block, Expr, ExprKind};
+use crate::air::node::AirLiteral;
+use crate::eair::types::{Block, Expr, ExprKind, LogicalOp};
 use crate::pill;
 use crate::pill::access::{Access, AccessBuilder};
-use crate::pill::cfg::{BlockExit, Imm, Operand, Rvalue, Stmt};
+use crate::pill::cfg::{AdtKind, BlockExit, Imm, Operand, Rvalue, Stmt};
+use crate::pill::op::{BinOp, UnOp};
+use crate::pill::scalar::Scalar;
 use crate::session::Session;
 
 pub use private::Local;
@@ -60,6 +63,7 @@ struct PillBuilder<'il> {
     locals: Locals<'il>,
     map: HashMap<EairLocal, Local>,
     captures: HashMap<AirId, Local>,
+    current_loop_end: Option<BasicBlock>,
 }
 
 impl<'il> PillBuilder<'il> {
@@ -70,6 +74,233 @@ impl<'il> PillBuilder<'il> {
     #[allow(clippy::too_many_lines)]
     fn as_operand(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, Operand<'il>) {
         match &expr.kind {
+            ExprKind::Lambda => {
+                let ty = expr.ty;
+                let lambda = ty.expect_lambda();
+                let upvars = self.cx.upvars_of(lambda.did);
+                let tmp = self.temporary(expr.ty);
+
+                let rvalue = Rvalue::Adt {
+                    def: AdtKind::Lambda(lambda),
+                    args: upvars
+                        .iter()
+                        .map(|air_id| {
+                            let local = *self.captures.get(air_id).unwrap();
+                            Operand::Use(local.into())
+                        })
+                        .collect(),
+                };
+
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: tmp.into(),
+                        src: rvalue,
+                    },
+                );
+
+                (bb, Operand::Use(tmp.into()))
+            }
+
+            ExprKind::Adt { def, fields } => {
+                let tmp = self.temporary(expr.ty);
+
+                let mut args = Vec::with_capacity(fields.len());
+
+                let mut cursor = bb;
+                for expr in *fields {
+                    let (new_bb, op) = self.as_operand(expr, cursor);
+                    cursor = new_bb;
+                    args.push(op);
+                }
+
+                let rvalue = Rvalue::Adt {
+                    def: AdtKind::Def(*def),
+                    args,
+                };
+
+                self.cfg.push_stmt(
+                    cursor,
+                    Stmt::Assign {
+                        dest: tmp.into(),
+                        src: rvalue,
+                    },
+                );
+
+                (cursor, Operand::Use(tmp.into()))
+            }
+
+            ExprKind::Lit(lit) => {
+                let scalar = match lit {
+                    AirLiteral::Str(..) => todo!("idfk"),
+                    AirLiteral::Bool(val) => Scalar::new_bool(*val),
+                    AirLiteral::Float(val) => Scalar::new_f64(*val),
+                    AirLiteral::Uint(val) => Scalar::new_u64(*val),
+                    AirLiteral::Int(val) => Scalar::new_i64(*val),
+                };
+
+                (bb, Operand::Imm(Imm::scalar(self.cx, scalar, expr.ty)))
+            }
+
+            ExprKind::Local(local) => {
+                let lowered_local = *self.map.get(local).unwrap();
+                (bb, Operand::Use(lowered_local.into()))
+            }
+
+            ExprKind::Index { base, idx } => {
+                let (bb, mut base) = self.as_access(base, bb);
+
+                let (bb, idx) = self.as_operand(idx, bb);
+                let len = self.temporary(self.cx.u64()).into();
+                let eval = self.temporary(self.cx.bool()).into();
+
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: len,
+                        src: Rvalue::Length(base.finish(self.cx)),
+                    },
+                );
+
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: eval,
+                        src: Rvalue::Binary {
+                            op: BinOp::Lt,
+                            lhs: idx,
+                            rhs: Operand::Use(len),
+                        },
+                    },
+                );
+
+                self.cfg.push_stmt(bb, Stmt::CheckCond(Operand::Use(eval)));
+
+                base.index(idx);
+                (bb, Operand::Use(base.finish(self.cx)))
+            }
+
+            ExprKind::Upvar { upvar } => {
+                let local = self.captures.get(upvar).unwrap();
+                (bb, Operand::Use((*local).into()))
+            }
+
+            ExprKind::Field { base, field_idx } => {
+                let (bb, mut acc) = self.as_access(base, bb);
+                acc.field(*field_idx);
+
+                (bb, Operand::Use(acc.finish(self.cx)))
+            }
+
+            ExprKind::Logical { lhs, rhs, op } => {
+                let (short_case_ret, negate, binop) = match op {
+                    LogicalOp::And => (
+                        Imm::scalar(self.cx, Scalar::new_bool(false), self.cx.bool()),
+                        true,
+                        BinOp::BitAnd,
+                    ),
+
+                    LogicalOp::Or => (
+                        Imm::scalar(self.cx, Scalar::new_bool(true), self.cx.bool()),
+                        false,
+                        BinOp::BitOr,
+                    ),
+                };
+
+                let tmp = self.temporary(self.cx.bool());
+
+                let (bb, lhs) = self.as_operand(lhs, bb);
+                let lhs_true = self.cfg.new_block();
+                let lhs_false = self.cfg.new_block();
+                let end_bb = self.cfg.new_block();
+
+                let cond = if negate {
+                    Rvalue::Unary {
+                        op: UnOp::Not,
+                        val: lhs,
+                    }
+                } else {
+                    Rvalue::Regular(lhs)
+                };
+
+                let eval = self.temporary(self.cx.bool());
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: eval.into(),
+                        src: cond,
+                    },
+                );
+                self.cfg.end_block(
+                    bb,
+                    BlockExit::Branch {
+                        val: Operand::Use(eval.into()),
+                        true_: lhs_true,
+                        false_: lhs_false,
+                    },
+                );
+                self.cfg.push_stmt(
+                    lhs_true,
+                    Stmt::Assign {
+                        dest: tmp.into(),
+                        src: Rvalue::Regular(Operand::Imm(short_case_ret)),
+                    },
+                );
+                self.cfg.end_block(lhs_true, BlockExit::Goto(end_bb));
+
+                let (lhs_false, val) = self.as_operand(rhs, lhs_false);
+
+                self.cfg.push_stmt(
+                    lhs_true,
+                    Stmt::Assign {
+                        dest: tmp.into(),
+                        src: Rvalue::Binary {
+                            op: binop,
+                            lhs,
+                            rhs: val,
+                        },
+                    },
+                );
+
+                self.cfg.end_block(lhs_false, BlockExit::Goto(end_bb));
+                (end_bb, Operand::Use(tmp.into()))
+            }
+
+            ExprKind::List(exprs) => {
+                let tmp = self.temporary(expr.ty);
+                let mut members = Vec::with_capacity(exprs.len());
+
+                let mut cursor = bb;
+                for expr in *exprs {
+                    let (bb, op) = self.as_operand(expr, cursor);
+                    members.push(op);
+                    cursor = bb;
+                }
+
+                let rvalue = Rvalue::List(members);
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: tmp.into(),
+                        src: rvalue,
+                    },
+                );
+
+                (cursor, Operand::Use(tmp.into()))
+            }
+
+            ExprKind::Empty => (bb, Operand::Imm(Imm::empty(self.cx, expr.ty))),
+
+            ExprKind::Break => {
+                let goto = self.current_loop_end.expect("break outside loop!");
+
+                self.cfg.end_block(bb, BlockExit::Goto(goto));
+                (
+                    goto,
+                    Operand::Imm(Imm::empty(self.cx, self.cx.ty_diverge())),
+                )
+            }
+
             ExprKind::Call { callee, args } => {
                 let (bb, fun) = self.as_operand(callee, bb);
                 let ret = self.temporary(expr.ty);
@@ -246,17 +477,17 @@ impl<'il> PillBuilder<'il> {
             ExprKind::Loop(body) => {
                 let loop_start = self.cfg.new_block();
                 self.cfg.end_block(bb, BlockExit::Goto(loop_start));
+                let loop_end = self.cfg.new_block();
+                self.current_loop_end.replace(loop_end);
 
                 let dest = self.temporary(expr.ty);
                 let bb = self.process_block(dest, body, loop_start);
 
                 self.cfg.end_block(bb, BlockExit::Goto(loop_start));
-                let loop_end = self.cfg.new_block();
 
+                self.current_loop_end.take();
                 (loop_end, Operand::Imm(Imm::empty(self.cx, self.cx.nil())))
             }
-
-            _ => todo!(),
         }
     }
 
@@ -286,12 +517,62 @@ impl<'il> PillBuilder<'il> {
         (bb, builder.finish(self.cx))
     }
 
-    fn as_access(
-        &mut self,
-        _expr: &Expr<'il>,
-        _bb: BasicBlock,
-    ) -> (BasicBlock, AccessBuilder<'il>) {
-        todo!()
+    fn as_access(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, AccessBuilder<'il>) {
+        match expr.kind {
+            ExprKind::Field { base, field_idx } => {
+                let (bb, mut base) = self.as_access(base, bb);
+
+                base.field(field_idx);
+                (bb, base)
+            }
+
+            ExprKind::Index { base, idx } => {
+                // dedup
+                let (bb, mut base) = self.as_access(base, bb);
+
+                let (bb, idx) = self.as_operand(idx, bb);
+                let len = self.temporary(self.cx.u64()).into();
+                let eval = self.temporary(self.cx.bool()).into();
+
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: len,
+                        src: Rvalue::Length(base.finish(self.cx)),
+                    },
+                );
+
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: eval,
+                        src: Rvalue::Binary {
+                            op: BinOp::Lt,
+                            lhs: idx,
+                            rhs: Operand::Use(len),
+                        },
+                    },
+                );
+
+                self.cfg.push_stmt(bb, Stmt::CheckCond(Operand::Use(eval)));
+
+                base.index(idx);
+                (bb, base)
+            }
+
+            _ => {
+                let tmp = self.temporary(expr.ty);
+                let (bb, src) = self.as_operand(expr, bb);
+                self.cfg.push_stmt(
+                    bb,
+                    Stmt::Assign {
+                        dest: tmp.into(),
+                        src: Rvalue::Regular(src),
+                    },
+                );
+                (bb, AccessBuilder::new(self.cx.arena(), tmp))
+            }
+        }
     }
 
     fn temporary(&mut self, _ty: Ty<'il>) -> Local {
