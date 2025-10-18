@@ -214,7 +214,7 @@ impl Compiler {
             let eair = crate::eair::types::build_eair(session, main_did);
             // let _ = dbg!(&eair);
             let pill = pill::body::build_pill(session, &eair, main_did);
-            pill::body::dump_pill(&mut stderr(), &pill).unwrap();
+            pill::body::dump_pill(&mut stderr(), &pill, main_did).unwrap();
 
             // pill::lowering::lower_universe(session, uni);
         });

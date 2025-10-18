@@ -35,7 +35,7 @@ use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{AdtKind, BlockExit, Imm, Operand, Rvalue, Stmt};
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
-use crate::session::Session;
+use crate::session::{Session, cx};
 use crate::symbols::SymbolId;
 use crate::types::ty::TyKind;
 
@@ -1012,11 +1012,10 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> P
     }
 }
 
-pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>) -> io::Result<()> {
+pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
     const INDENT: &str = "      ";
-    let name = "<i dont know yet :3>";
 
-    write!(w, "fun {name}(")?;
+    write!(w, "fun {}(", cx(|cx| cx.name_of(did)))?;
 
     if let Some(args) = pill.locals.as_slice().get(1..pill.arg_count) {
         for (ix, arg) in args.iter().enumerate() {

@@ -1,5 +1,6 @@
 #![feature(allocator_api)]
 #![feature(ptr_metadata)]
+#![feature(iter_intersperse)]
 #![warn(clippy::style)]
 #![warn(clippy::complexity)]
 #![warn(clippy::perf)]

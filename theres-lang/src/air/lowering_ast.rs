@@ -7,7 +7,7 @@ use crate::arena::Arena;
 use crate::ast::*;
 
 use crate::air;
-use crate::air::def::{BodyId, BodyVec, DefId, DefMap, DefType, DefVec, Resolved};
+use crate::air::def::{BodyId, BodyVec, DefId, DefMap, DefPath, DefType, DefVec, Resolved};
 use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
 use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
@@ -43,14 +43,14 @@ pub struct Mappings {
     // binds_to_items: AstIdMap<Vec<AstId>>,
 
     // self_ty_ast_id_to_ty: AstIdMap<Ty>,
-    pub(super) def_types: DefVec<DefType>,
+    pub(super) def_types: DefVec<(DefType, DefPath)>,
 }
 
 impl Mappings {
     pub fn new(
         ast_id_to_def_id: AstIdMap<DefId>,
         def_id_to_ast_id: DefMap<AstId>,
-        def_types: DefVec<DefType>,
+        def_types: DefVec<(DefType, DefPath)>,
     ) -> Self {
         Self {
             instance_to_field_list: HashMap::new(),
@@ -117,7 +117,7 @@ pub struct AirMap<'air> {
     field_to_instance: HashMap<DefId, DefId>,
     ctor_to_instance: HashMap<DefId, DefId>,
 
-    pub(super) def_types: DefVec<DefType>,
+    pub(super) def_types: DefVec<(DefType, DefPath)>,
 }
 
 impl<'air> AirMap<'air> {
@@ -307,7 +307,11 @@ impl<'air> AirMap<'air> {
     }
 
     pub fn def_type(&self, did: DefId) -> DefType {
-        self.def_types[did]
+        self.def_types[did].0
+    }
+
+    pub fn def_path(&self, did: DefId) -> &DefPath {
+        &self.def_types[did].1
     }
 }
 

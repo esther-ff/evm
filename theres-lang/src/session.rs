@@ -2,8 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ptr::{from_ref, null};
 
-use crate::air::def::{BodyId, DefId, DefType, IntTy, PrimTy, Resolved};
-use crate::air::node::{self, BindItemKind, Field, Lambda, Node, ThingKind};
+use crate::air::def::{BodyId, DefId, DefPathSeg, DefType, IntTy, PrimTy, Resolved};
+use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
 use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
 use crate::ast::Name;
@@ -139,6 +139,20 @@ impl<'sess> Session<'sess> {
 
     pub fn air_get_parent(&self, did: DefId) -> DefId {
         self.air_map.parent(did)
+    }
+
+    pub fn name_of(&self, did: DefId) -> std::sync::Arc<str> {
+        self.air_map
+            .def_path(did)
+            .inner()
+            .iter()
+            .map(|seg| match seg {
+                DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => sym.get_interned(),
+                DefPathSeg::Lambda => "{lambda}",
+            })
+            .intersperse("::")
+            .collect::<String>()
+            .into()
     }
 
     pub fn upvars_of(&'sess self, did: DefId) -> &'sess HashSet<AirId> {

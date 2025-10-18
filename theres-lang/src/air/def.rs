@@ -1,9 +1,48 @@
+use crate::{air::name_res::Namespace, symbols::SymbolId};
+
 crate::newtyped_index!(DefId, DefMap, DefVec);
 crate::newtyped_index!(BodyId, BodyMap, BodyVec);
 
 // debug dogshit
 pub fn def_id(i: u32) -> DefId {
     DefId { private: i }
+}
+
+#[derive(Clone, Copy)]
+pub enum DefPathSeg {
+    TypeNs(SymbolId),
+    ValueNs(SymbolId),
+    Lambda,
+}
+
+#[derive(Clone)]
+pub struct DefPath {
+    segments: Vec<DefPathSeg>,
+}
+
+impl DefPath {
+    pub fn new() -> Self {
+        Self { segments: vec![] }
+    }
+
+    pub fn pop(&mut self) {
+        self.segments.pop();
+    }
+
+    pub fn push_lambda(&mut self) {
+        self.segments.push(DefPathSeg::Lambda);
+    }
+
+    pub fn push_ns(&mut self, sym: SymbolId, ns: Namespace) {
+        self.segments.push(match ns {
+            Namespace::Types => DefPathSeg::TypeNs(sym),
+            Namespace::Values => DefPathSeg::ValueNs(sym),
+        });
+    }
+
+    pub fn inner(&self) -> &[DefPathSeg] {
+        &self.segments
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

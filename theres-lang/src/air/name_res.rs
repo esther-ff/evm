@@ -3,7 +3,7 @@ use std::mem;
 use std::ops::Sub;
 
 use crate::air::Mappings;
-use crate::air::def::{DefId, DefMap, DefType, DefVec, IntTy, PrimTy, Resolved};
+use crate::air::def::{DefId, DefMap, DefPath, DefType, DefVec, IntTy, PrimTy, Resolved};
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 use crate::errors::{DiagEmitter, Phase, TheresError};
@@ -47,7 +47,7 @@ impl TheresError for ResError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Namespace {
+pub(crate) enum Namespace {
     Types,
     Values,
 }
@@ -138,13 +138,15 @@ struct FirstPass {
     scopes: ScopeVec<ScopeData>,
     path: Scopes,
     current_scope: Scope,
-    did_defs: DefVec<DefType>,
+    did_defs: DefVec<(DefType, DefPath)>,
     realm_scopes: DefMap<(ScopeVec<ScopeData>, Scopes)>,
 
     ast_id_did: HashMap<AstId, DefId>,
     did_ast_id: HashMap<DefId, AstId>,
 
     thing_ast_id: Option<AstId>,
+
+    defs: DefPath,
 }
 
 impl FirstPass {
@@ -161,12 +163,15 @@ impl FirstPass {
             realm_scopes: HashMap::default(),
             did_ast_id: HashMap::default(),
             ast_id_did: HashMap::default(),
+            defs: DefPath::new(),
         }
     }
 
     #[track_caller]
-    fn define(&mut self, ast_id: AstId, ty: DefType, _name: Name) -> DefId {
-        let did = self.did_defs.push(ty);
+    fn define(&mut self, ast_id: AstId, ty: DefType, name: Name, ns: Namespace) -> DefId {
+        let mut path = self.defs.clone();
+        path.push_ns(name.interned, ns);
+        let did = self.did_defs.push((ty, path));
 
         assert!(self.ast_id_did.insert(ast_id, did).is_none());
         assert!(self.did_ast_id.insert(did, ast_id).is_none());
@@ -201,10 +206,11 @@ impl FirstPass {
         self.current_scope = old;
     }
 
-    fn in_realm<F>(&mut self, work: F, realm_did: DefId)
+    fn in_realm<F>(&mut self, work: F, realm_did: DefId, name: SymbolId)
     where
         F: FnOnce(&mut Self),
     {
+        self.defs.push_ns(name, Namespace::Types);
         self.realm_scopes.entry(realm_did).or_insert_with(|| {
             let mut data = ScopeVec::new();
             let path = data.push(ScopeData::new(None));
@@ -223,6 +229,7 @@ impl FirstPass {
             mem::swap(&mut self.scopes, realm_scope_data);
             mem::swap(&mut self.path, realm_path);
         }
+        self.defs.pop();
     }
 }
 
@@ -250,6 +257,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Realm,
             val.name,
+            Namespace::Types,
         );
 
         self.add_to_scope(
@@ -265,6 +273,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
                 }
             },
             id,
+            val.name.interned,
         );
     }
 
@@ -273,6 +282,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Bind,
             Name::DUMMY,
+            Namespace::Types,
         );
 
         self.add_to_scope(
@@ -312,6 +322,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Fun,
             val.sig.name,
+            Namespace::Values,
         );
 
         self.add_to_scope(
@@ -328,6 +339,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
             self.thing_ast_id.as_ref().copied().unwrap(),
             DefType::Instance,
             val.name,
+            Namespace::Types,
         );
 
         self.add_to_scope(
@@ -336,7 +348,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
             Resolved::Def(id, DefType::Instance),
         );
 
-        let ctor_def_id = self.define(val.ctor_id, DefType::AdtCtor, val.name);
+        let ctor_def_id = self.define(val.ctor_id, DefType::AdtCtor, val.name, Namespace::Values);
 
         self.add_to_scope(
             Namespace::Values,
@@ -350,7 +362,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
     }
 
     fn visit_field(&mut self, val: &'vis Field) -> Self::Result {
-        let _ = self.define(val.id, DefType::Field, val.name);
+        let _ = self.define(val.id, DefType::Field, val.name, Namespace::Types);
     }
 
     fn visit_block(&mut self, val: &'vis Block) -> Self::Result {
@@ -367,7 +379,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
 
     fn visit_expr(&mut self, val: &'vis Expr) -> Self::Result {
         if let ExprType::Lambda { body, .. } = &val.ty {
-            self.define(val.id, DefType::Lambda, Name::DUMMY);
+            self.define(val.id, DefType::Lambda, Name::DUMMY, Namespace::Values);
             return match body {
                 LambdaBody::Block(bl) => self.visit_block(bl),
                 LambdaBody::Expr(expr) => self.with_new_scope(|this| this.visit_expr(expr)),
@@ -408,6 +420,7 @@ impl<'res> SecondPass<'res> {
             ast_id_did,
             did_ast_id,
             thing_ast_id: _,
+            defs: _,
         } = resolver;
 
         // Get rid of first scope OK!

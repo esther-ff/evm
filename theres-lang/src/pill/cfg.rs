@@ -147,7 +147,9 @@ impl Debug for Rvalue<'_> {
                     }),
                 }?;
 
-                if !args.is_empty() {
+                if args.is_empty() {
+                    Ok(())
+                } else {
                     write!(f, " {{")?;
 
                     for (ix, arg) in args.iter().enumerate() {
@@ -155,8 +157,6 @@ impl Debug for Rvalue<'_> {
                     }
 
                     write!(f, " }}")
-                } else {
-                    Ok(())
                 }
             }
 
