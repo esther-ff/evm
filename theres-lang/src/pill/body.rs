@@ -1103,6 +1103,8 @@ pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<(
         } else {
             write!(w, "{INDENT}<broken: no exit!>")
         }?;
+
+        writeln!(w)?;
     }
 
     writeln!(w, "}}")
