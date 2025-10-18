@@ -98,7 +98,7 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn unify(&mut self, expected: Ty<'ty>, got: Ty<'ty>) -> Result<(), UnifyError> {
-        log::trace!("entered `unify` expected={expected:?} got={got:?}");
+        // log::trace!("entered `unify` expected={expected:?} got={got:?}");
         match (*expected, *got) {
             (TyKind::Bool, TyKind::Bool)
             | (TyKind::Float, TyKind::Float)
@@ -117,7 +117,7 @@ impl<'ty> FunCx<'ty> {
             (TyKind::Array(ty_left), TyKind::Array(ty_right)) => self.unify(ty_left, ty_right)?,
 
             (TyKind::InferTy(infer), concrete) | (concrete, TyKind::InferTy(infer)) => {
-                log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
+                // log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
 
                 if infer.is_integer() && !concrete.is_integer_like()
                 || infer.is_float() && !concrete.is_float_like() {
@@ -135,7 +135,7 @@ impl<'ty> FunCx<'ty> {
                     return self.unify(*ty, concrete_ref)
                 }
 
-                log::debug!("unified ty var {infer:#?} and concrete {concrete:#?}");
+                // log::debug!("unified ty var {infer:#?} and concrete {concrete:#?}");
 
                 self.ty_var_types.insert(infer.vid, concrete_ref);
             }
@@ -185,12 +185,14 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_local(&mut self, local: &Local<'_>) -> Ty<'ty> {
-        log::trace!("entering `typeck_local`");
+        log::trace!("------ entering `typeck_local` for {}", local.name.interned);
         if let Some(local_ty) = self.local_tys.get(&local.air_id) {
             return *local_ty;
         }
 
+        log::trace!("----- typeck'ing local {}", local.name.interned);
         let init_ty = local.init.map(|expr| self.type_of(expr));
+
         match (local.ty, init_ty) {
             (None, Some(ty)) => {
                 self.local_tys.insert(local.air_id, ty);
@@ -202,6 +204,8 @@ impl<'ty> FunCx<'ty> {
                 if self.unify(lowered, ty).is_err() {
                     self.type_mismatch_err(lowered, ty, air_ty.span);
                 }
+
+                self.local_tys.insert(local.air_id, ty);
 
                 lowered
             }
@@ -493,7 +497,6 @@ impl<'ty> FunCx<'ty> {
         }
 
         let block_ty = self.typeck_block(block);
-
         if let Some(else_block) = else_ {
             let ty = self.type_of(else_block);
 
@@ -651,8 +654,6 @@ impl<'ty> FunCx<'ty> {
             return *ty;
         }
 
-        log::debug!("type_of - need to typeck expr {expr:#?}");
-
         let expr_ty = self.typeck_expr(expr);
         self.node_type.insert(expr.air_id, expr_ty);
         expr_ty
@@ -758,7 +759,6 @@ impl<'ty> TypeTable<'ty> {
     }
 
     pub fn node_ty(&self, air_id: AirId) -> Ty<'ty> {
-        dbg!(air_id);
         self.air_node_tys.get(&air_id).copied().unwrap()
     }
 
@@ -810,17 +810,34 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
     type Result = ();
 
     fn visit_local(&mut self, local: &'vis Local<'vis>) -> Self::Result {
+        // dbg!(&self.cx.local_tys);
         let val = self
             .cx
             .local_tys
             .get(&local.air_id)
             .expect("Trying to get type of a local that isn't there?");
 
-        println!("Visitor, ty for {} is {}", local.air_id, val);
+        let ty = match **val {
+            TyKind::InferTy(..) => match *self.cx.ty_var_ty(*val) {
+                TyKind::InferTy(inner) => match inner.kind {
+                    InferKind::Float => self.sess.f64(),
+                    InferKind::Integer => self.sess.i64(),
+                    InferKind::Regular => {
+                        let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
+                        self.sess.diag().emit_err(TypingError::InferFail, loc);
+                        self.sess.ty_err()
+                    }
+                },
+
+                any => self.sess.intern_ty(any),
+            },
+
+            _ => *val,
+        };
 
         // mhm?
-        self.table.air_node_tys.insert(local.air_id, *val);
-        self.table.local_variables.insert(local.air_id, *val);
+        self.table.air_node_tys.insert(local.air_id, ty);
+        self.table.local_variables.insert(local.air_id, ty);
     }
 
     fn visit_stmt(&mut self, stmt: &'vis Stmt<'vis>) -> Self::Result {
@@ -845,7 +862,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
                 let resolved = match *self.cx.ty_var_ty(ty) {
                     TyKind::InferTy(inner) => match inner.kind {
                         InferKind::Float => self.sess.f64(),
-                        InferKind::Integer => self.sess.i32(),
+                        InferKind::Integer => self.sess.i64(),
                         InferKind::Regular => {
                             let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
                             self.sess.diag().emit_err(TypingError::InferFail, loc);
@@ -853,7 +870,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
                         }
                     },
 
-                    _ => ty,
+                    any => self.sess.intern_ty(any),
                 };
 
                 self.table.air_node_tys.insert(expr.air_id, resolved);

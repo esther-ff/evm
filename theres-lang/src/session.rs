@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::ptr::{from_ref, null};
 
 use crate::air::def::{BodyId, DefId, DefType, IntTy, PrimTy, Resolved};
-use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
+use crate::air::node::{self, BindItemKind, Field, Lambda, Node, ThingKind};
 use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
 use crate::ast::Name;
@@ -21,6 +21,7 @@ thread_local! {
     }
 }
 
+#[track_caller]
 pub fn cx<'cx, F, R>(f: F) -> R
 where
     F: FnOnce(&'cx Session<'cx>) -> R,
@@ -32,7 +33,7 @@ where
 
 pub struct Session<'sess> {
     arena: &'sess Arena,
-    air_map: AirMap<'sess>,
+    pub(crate) air_map: AirMap<'sess>,
     pub(crate) types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
     def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,

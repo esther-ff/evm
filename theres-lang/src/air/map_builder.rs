@@ -78,13 +78,15 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
     }
 
     fn visit_expr(&mut self, expr: &'air Expr<'air>) -> Self::Result {
-        self.m.insert_node(Node::Expr(expr), expr.air_id);
-
         if let ExprKind::Lambda(lambda) = expr.kind {
+            self.m.insert_node(Node::Expr(expr), expr.air_id);
+            self.m.insert_node(Node::Lambda(lambda), expr.air_id);
             let parent_did = self
                 .current_item
                 .expect("expression should be inside some item");
             self.m.child_to_parent.insert(lambda.did, parent_did);
+        } else {
+            self.m.insert_node(Node::Expr(expr), expr.air_id);
         }
 
         walk_expr(self, expr);

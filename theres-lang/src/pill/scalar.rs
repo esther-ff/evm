@@ -24,7 +24,7 @@ macro_rules! scalar_impls {
             }
 
             pub fn $to(self) -> $ty {
-                assert!(self.size.get() == size_of::<$ty>());
+                assert!(self.size.get() == size_of::<$ty>(), "size was meant to be: {}, was: {}", size_of::<$ty>(), self.size.get());
 
                 let num_bytes = self.bytes[..size_of::<$ty>()]
                     .try_into()
@@ -42,6 +42,9 @@ impl Scalar {
         u16 > to_u16 > new_u16,
         u32 > to_u32 > new_u32,
         u64 > to_u64 > new_u64,
+        i8 > to_i8 > new_i8,
+        i16 > to_i16 > new_i16,
+        i32 > to_i32 > new_i32,
         i64 > to_i64 > new_i64,
         f64 > to_f64 > new_f64,
         f32 > to_f32 > new_f32
@@ -50,13 +53,16 @@ impl Scalar {
     pub fn to_bool(self) -> bool {
         let byte = self.to_u8();
 
-        assert!(byte > 1, "`to_bool` has an invalid val for a bool: {byte}!");
+        assert!(
+            byte >= 1,
+            "`to_bool` has an invalid val for a bool: {byte}!"
+        );
 
         byte == 1
     }
 
     pub fn new_bool(val: bool) -> Self {
-        Self::new_u8(val as u8)
+        Self::new_u8(u8::from(val))
     }
 }
 

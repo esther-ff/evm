@@ -73,6 +73,10 @@ impl<I, T> IdxVec<I, T> {
     //     }
     // }
 
+    pub fn reserve(&mut self, size: usize) {
+        self.inner.reserve(size);
+    }
+
     pub fn new_from_vec(vec: Vec<T>) -> Self {
         Self {
             _boo: core::marker::PhantomData,

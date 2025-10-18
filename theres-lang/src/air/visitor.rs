@@ -252,6 +252,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
                 output,
                 body: _,
                 span: _,
+                expr_air_id: _,
             } = lambda;
 
             visit_iter!(v: v, m: visit_param, *inputs);

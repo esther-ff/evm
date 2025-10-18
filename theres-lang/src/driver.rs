@@ -5,6 +5,7 @@ use crate::ast::PrettyPrinter;
 use crate::ast::Universe;
 use crate::errors::DiagEmitter;
 use crate::lexer::{Lexemes, Lexer};
+use crate::pill;
 use crate::session::Session;
 use crate::sources::{FileManager, SourceId, Sources};
 use crate::types::fun_cx::typeck_universe;
@@ -135,16 +136,16 @@ impl Log for TheresLog {
     }
 
     fn flush(&self) {
-        let mut stderr = self.stderr.lock();
-        let reader = self.log_buffer.read().unwrap();
-        for (start, end) in reader.indices.iter().copied() {
-            let data = reader
-                .buffer
-                .get(start..end)
-                .expect("indices given were invalid!");
+        // let mut stderr = self.stderr.lock();
+        // let reader = self.log_buffer.read().unwrap();
+        // for (start, end) in reader.indices.iter().copied() {
+        //     let data = reader
+        //         .buffer
+        //         .get(start..end)
+        //         .expect("indices given were invalid!");
 
-            stderr.write_all(data).expect("stderr writing failed.");
-        }
+        //     stderr.write_all(data).expect("stderr writing failed.");
+        // }
     }
 }
 
@@ -205,11 +206,16 @@ impl Compiler {
         let (uni, map) = air::lower_universe(&arena, &diags, &ast);
 
         Session::new(&diags, self.flags, &self.sources, &arena, map).enter(|session| {
+            air::dump_air(&mut stdout(), self.flags.dump_hir, uni, &session.air_map).unwrap();
+
             typeck_universe(session, uni);
             let main_did = check::check_for_main(session, uni).expect("todo: no main lmao!");
             log::debug!("main fn is {main_did}");
             let eair = crate::eair::types::build_eair(session, main_did);
-            let _ = dbg!(eair);
+            // let _ = dbg!(&eair);
+            let pill = pill::body::build_pill(session, &eair, main_did);
+            pill::body::dump_pill(&mut stderr(), &pill).unwrap();
+
             // pill::lowering::lower_universe(session, uni);
         });
     }

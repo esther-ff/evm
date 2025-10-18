@@ -145,7 +145,6 @@ impl Parser<'_> {
     fn declaration(&mut self) -> Result<ThingKind> {
         let tok = self.lexemes.peek_token();
 
-        log::trace!("declaration tok={tok:#?}");
         let decl = match tok.kind {
             TokenKind::Function => ThingKind::Function(self.function_declaration()?),
             TokenKind::Instance => self.instance_decl()?,

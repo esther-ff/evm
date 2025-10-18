@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::arena::Arena;
 use crate::pill::body::Local;
 use crate::pill::cfg::Operand;
@@ -33,7 +35,7 @@ impl<'il> AccessBuilder<'il> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 enum AccessKind<'il> {
     Index(Operand<'il>),
     Field(FieldId),
@@ -48,5 +50,24 @@ pub struct Access<'il> {
 impl Access<'_> {
     pub fn base(base: Local) -> Self {
         Self { base, modifs: &[] }
+    }
+
+    pub fn get_base(&self) -> Local {
+        self.base
+    }
+}
+
+impl Debug for Access<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "_{}", self.base.to_usize())?;
+
+        for kind in self.modifs {
+            match kind {
+                AccessKind::Index(_idx) => write!(f, "[idx?]")?,
+                AccessKind::Field(id) => write!(f, ".f{}", id.to_usize())?,
+            }
+        }
+
+        Ok(())
     }
 }

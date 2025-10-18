@@ -287,9 +287,7 @@ impl<'air> AirMap<'air> {
     }
 
     pub fn expect_lambda(&'air self, def_id: DefId) -> &'air Lambda<'air> {
-        if let Node::Expr(expr) = self.get_def(def_id)
-            && let node::ExprKind::Lambda(l) = expr.kind
-        {
+        if let Node::Lambda(l) = self.get_def(def_id) {
             return l;
         }
 
@@ -505,7 +503,9 @@ impl<'air> AirBuilder<'air> {
             },
 
             ExprType::Lambda { args, body } => {
+                let expr_air_id = self.new_air_id();
                 let did = self.map.def_id_of(expr.id);
+
                 let inputs = self.arena.alloc_from_iter(args.iter().map(|arg| {
                     let id = self.next_air_id(arg.id);
                     Param::new(arg.ident, self.lower_ty(&arg.ty), id)
@@ -533,6 +533,7 @@ impl<'air> AirBuilder<'air> {
                     body,
                     output: None,
                     span: expr.span,
+                    expr_air_id,
                 };
 
                 node::ExprKind::Lambda(self.arena.alloc(lambda_desc))

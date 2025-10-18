@@ -16,6 +16,7 @@ pub enum Node<'h> {
     Field(&'h Field<'h>),
     Path(&'h Path<'h>),
     FnParam(&'h Param<'h>),
+    Lambda(&'h Lambda<'h>),
 }
 
 impl<'h> Node<'h> {
@@ -125,6 +126,7 @@ pub struct Lambda<'h> {
     pub output: Option<Ty<'h>>,
     pub body: BodyId,
     pub span: Span,
+    pub expr_air_id: AirId,
 }
 
 #[derive(Debug, Clone, Copy)]

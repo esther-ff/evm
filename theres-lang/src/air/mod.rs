@@ -14,6 +14,7 @@ use crate::air::node::Universe as AirUniverse;
 use crate::air::visitor::AirVisitor;
 use crate::arena::Arena;
 use crate::ast::Universe;
+use crate::driver::HirDump;
 use crate::errors::DiagEmitter;
 use std::mem;
 
@@ -30,26 +31,37 @@ pub fn lower_universe<'air>(
     map_builder::MapBuilder::new(&mut air_map).visit_universe(air_universe);
     air_map.def_types = deftypes;
 
-    // match sess.dump_air_mode() {
-    //     HirDump::All => {
-    //         println!("--- air tree dump --- \n{air_universe:#?}\n --- air tree dump ---\n",);
-    //         println!("--- air body dump ---");
-
-    //         sess.air(|map| {
-    //             for (ix, body) in map.bodies().iter().enumerate() {
-    //                 println!("body({ix}): \n{body:#?}");
-    //             }
-    //         });
-
-    //         println!("--- air body dump ---\n");
-    //     }
-
-    //     HirDump::OnlyItems => {
-    //         println!("--- air tree dump --- \n{air_universe:#?}\n --- air tree dump ---\n",);
-    //     }
-
-    //     HirDump::None => {}
-    // }
-
     (air_universe, air_map)
+}
+
+pub fn dump_air(
+    w: &mut dyn std::io::Write,
+    mode: HirDump,
+    air_universe: &AirUniverse<'_>,
+    map: &AirMap<'_>,
+) -> std::io::Result<()> {
+    match mode {
+        HirDump::All => {
+            writeln!(
+                w,
+                "--- air tree dump --- \n{air_universe:#?}\n --- air tree dump ---\n",
+            )?;
+            writeln!(w, "--- air body dump ---")?;
+
+            for (ix, body) in map.bodies().iter().enumerate() {
+                writeln!(w, "body({ix}): \n{body:#?}")?;
+            }
+
+            writeln!(w, "--- air body dump ---\n")
+        }
+
+        HirDump::OnlyItems => {
+            writeln!(
+                w,
+                "--- air tree dump --- \n{air_universe:#?}\n --- air tree dump ---\n",
+            )
+        }
+
+        HirDump::None => Ok(()),
+    }
 }

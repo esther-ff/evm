@@ -17,6 +17,7 @@ use crate::air::AirId;
 use crate::ast::{self, UnaryOp};
 use crate::id::IdxVec;
 use crate::pill;
+use crate::symbols::SymbolId;
 use crate::types::fun_cx::FieldId;
 use crate::types::ty::{Instance, TyKind};
 use crate::{
@@ -29,10 +30,27 @@ use crate::{
 
 pub use private::{LocalId, Locals, Params};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct LocalData<'ir> {
     ty: Ty<'ir>,
     mutbl: Constant,
+    name: Option<SymbolId>,
+}
+
+impl<'ir> LocalData<'ir> {
+    pub fn ty(&self) -> Ty<'ir> {
+        self.ty
+    }
+}
+
+impl<'ir> From<LocalData<'ir>> for crate::pill::body::LocalData<'ir> {
+    fn from(value: LocalData<'ir>) -> Self {
+        match value.name {
+            None => crate::pill::body::LocalData::new(value.mutbl, value.ty),
+
+            Some(v) => crate::pill::body::LocalData::new_user(value.mutbl, value.ty, v),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -177,6 +195,8 @@ pub enum ExprKind<'ir> {
         fields: &'ir [Expr<'ir>],
     },
 
+    Semi(&'ir Expr<'ir>),
+
     Break,
 
     /// Represents the literal for some zero-sized type
@@ -197,15 +217,15 @@ impl<'ir> Block<'ir> {
 
 #[derive(Debug)]
 pub struct Eair<'ir> {
-    locals: Locals<'ir>,
-    params: Params<'ir>,
-    entry: Option<Expr<'ir>>,
-    span: Span,
-    kind: BodyKind,
+    pub locals: Locals<'ir>,
+    pub params: Params<'ir>,
+    pub entry: Option<Expr<'ir>>,
+    pub span: Span,
+    pub kind: BodyKind,
 }
 
 #[derive(Debug)]
-enum BodyKind {
+pub enum BodyKind {
     Lambda,
     Function,
 }
@@ -225,7 +245,10 @@ impl<'ir> EairBuilder<'ir> {
         let id = self.eair.locals.push(LocalData {
             ty,
             mutbl: local.mutability,
+            name: local.name.interned.into(),
         });
+
+        dbg!(local.init);
 
         if let Some(expr) = local.init {
             let init = self.lower_expr(expr);
@@ -255,6 +278,7 @@ impl<'ir> EairBuilder<'ir> {
         let old = mem::replace(&mut self.current_block, Vec::new_in(self.cx.arena()));
 
         for stmt in block.stmts {
+            dbg!(stmt);
             match stmt.kind {
                 StmtKind::Local(local) => {
                     let id = self.lower_local(local);
@@ -263,14 +287,27 @@ impl<'ir> EairBuilder<'ir> {
 
                 StmtKind::Expr(expr) => {
                     let expr = self.lower_expr(expr);
-                    self.current_block.push(expr);
+
+                    let actual = Expr {
+                        ty: self.cx.nil(),
+                        span: expr.span,
+                        kind: ExprKind::Semi(self.cx.arena().alloc(expr)),
+                    };
+
+                    self.current_block.push(actual);
                 }
 
                 StmtKind::Thing(..) => (),
             }
         }
 
+        if let Some(ret) = block.expr {
+            let expr = self.lower_expr(ret);
+            self.current_block.push(expr);
+        }
+
         let new = mem::replace(&mut self.current_block, old);
+        dbg!(&new);
         Block { exprs: new }
     }
 
@@ -284,6 +321,10 @@ impl<'ir> EairBuilder<'ir> {
         use crate::air::node::ExprKind::*;
 
         let ty = self.types.type_of(expr);
+        assert!(
+            ty.maybe_infer().is_none(),
+            "type variables in expr! {expr:#?}"
+        );
         let span = expr.span;
 
         match expr.kind {
@@ -477,6 +518,7 @@ impl<'ir> EairBuilder<'ir> {
                 block,
                 else_,
             } => {
+                dbg!(ty);
                 let cond = self.lower_expr_alloc(condition);
                 let block_span = block.span;
                 let block = self.lower_block(block);
@@ -645,6 +687,7 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
             let id = locals.push(LocalData {
                 ty,
                 mutbl: Constant::Yes,
+                name: param.name.interned.into(),
             });
             params.push(ParamData { ty });
             (param.air_id, id)
