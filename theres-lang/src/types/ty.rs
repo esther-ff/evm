@@ -2,7 +2,7 @@ use crate::air::def::{DefId, IntTy};
 use crate::air::node::Constant;
 use crate::errors::{Phase, TheresError};
 use crate::pooled::Pooled;
-use crate::session::cx;
+use crate::session::{Session, cx};
 use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::types::fun_cx::{FieldSlice, InferId};
@@ -388,5 +388,67 @@ impl<'cx> crate::session::Session<'cx> {
     pub fn intern_ty(&'cx self, ty: TyKind<'cx>) -> Ty<'cx> {
         let ty = self.interned_types.borrow_mut().pool(ty, self.arena());
         Ty(ty)
+    }
+}
+
+pub fn instance_def<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> Instance<'cx> {
+    use crate::air::node::Field;
+    use crate::id::IdxSlice;
+
+    let (fields, name) = cx.air_get_instance(def_id);
+    let iter = fields.iter().copied().map(
+        |Field {
+             mutability: mutable,
+             name,
+             def_id,
+             ..
+         }| FieldDef {
+            def_id,
+            name: name.interned,
+            mutable,
+        },
+    );
+
+    let instance_def = InstanceDef {
+        fields: IdxSlice::new(cx.arena().alloc_from_iter(iter)),
+        name: name.interned,
+    };
+
+    cx.intern_instance_def(instance_def)
+}
+
+pub fn fn_sig_for<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> FnSig<'cx> {
+    use crate::air::def::DefType;
+
+    match cx.def_type(def_id) {
+        DefType::Fun => {
+            let (sig, _) = cx.air_get_fn(def_id);
+
+            FnSig {
+                inputs: cx
+                    .arena()
+                    .alloc_from_iter(sig.arguments.iter().map(|param| cx.lower_ty(param.ty))),
+
+                output: cx.lower_ty(sig.return_type),
+            }
+        }
+
+        DefType::AdtCtor => {
+            let instance = cx.air_get_instance_of_ctor(def_id);
+            let instance_def = cx.instance_def(instance);
+
+            FnSig {
+                inputs: cx.arena().alloc_from_iter(
+                    instance_def
+                        .fields
+                        .iter()
+                        .map(|field| cx.def_type_of(field.def_id)),
+                ),
+
+                output: cx.def_type_of(instance),
+            }
+        }
+
+        any => panic!("can't express a signature for {any:#?}"),
     }
 }

@@ -10,7 +10,7 @@ use std::collections::HashSet;
 struct BuildCollector<'hs, 'cx> {
     cx: &'cx Session<'cx>,
     needed: &'hs mut HashSet<DefId>,
-    types: TypeTable<'cx>,
+    types: &'cx TypeTable<'cx>,
 }
 
 impl<'vis> AirVisitor<'vis> for BuildCollector<'_, 'vis> {

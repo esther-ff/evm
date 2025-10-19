@@ -3,18 +3,18 @@ use std::collections::{HashMap, HashSet};
 use std::ptr::{from_ref, null};
 use std::sync::Arc;
 
-use crate::air::def::{BodyId, DefId, DefPathSeg, DefType, IntTy, PrimTy, Resolved};
-use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
+use crate::air::def::{BodyId, DefId, DefType, IntTy, PrimTy, Resolved};
+use crate::air::node::{self, Node};
 use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
 use crate::ast::Name;
 use crate::driver::Flags;
 use crate::errors::DiagEmitter;
-use crate::id::IdxSlice;
 use crate::pooled::Pool;
 use crate::sources::{SourceId, Sources};
 use crate::symbols::SymbolId;
-use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
+use crate::types::fun_cx::{TypeTable, typeck};
+use crate::types::ty::{FnSig, Instance, InstanceDef, Ty, TyKind, instance_def};
 
 thread_local! {
     pub static GLOBAL_CTXT: Cell<*const ()> = const {
@@ -57,9 +57,28 @@ crate::cache! {
     [lock: std::cell::RefCell]
 
     #[doc = "Returns the name of a definition specified by the `did` parameter."]
-    #[inline]
     pub fn name_of(&'cx! self, did: DefId) -> &'cx Arc<str> {
-        name_of
+        crate::air::def::name_of
+    }
+
+    #[doc = "Type-checks the given definition specified by `did`"]
+    pub fn typeck(&'cx! self, did: DefId) -> &'cx TypeTable<'cx> {
+        typeck
+    }
+
+    #[doc = "Creates and interns `Instance` for given `DefId` of an instance"]
+    pub fn instance_def(&'cx! self, did: DefId) -> Instance<'cx> {
+        instance_def
+    }
+
+    #[doc = "Expresses a type for the given definition at `DefId`"]
+    pub fn def_type_of(&'cx! self, did: DefId) -> Ty<'cx> {
+        crate::air::def::def_type_of
+    }
+
+    #[doc = "Expresses a function signature for the given definition at `DefId`"]
+    pub fn fn_sig_for(&'cx! self, did: DefId) -> FnSig<'cx> {
+        crate::types::ty::fn_sig_for
     }
 }
 
@@ -155,13 +174,6 @@ impl<'cx> Session<'cx> {
         self.arena
     }
 
-    pub fn make_instance(&'cx self, fields: &[Field<'cx>], sym: SymbolId) -> Ty<'cx> {
-        let def = self.gen_instance_def(fields, sym);
-        let reff = self.intern_instance_def(def);
-        let tykind = TyKind::Instance(reff);
-        self.intern_ty(tykind)
-    }
-
     pub fn intern_instance_def(&'cx self, def: InstanceDef<'cx>) -> Instance<'cx> {
         self.instances.borrow_mut().pool(def, self.arena())
     }
@@ -210,68 +222,6 @@ impl<'cx> Session<'cx> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
-    pub fn def_type_of(&'cx self, def_id: DefId) -> Ty<'cx> {
-        log::trace!("def_type_of def_id={def_id}");
-        match self.air_get_def(def_id) {
-            Node::Thing(thing) => match thing.kind {
-                ThingKind::Fn { .. } => self.intern_ty(TyKind::FnDef(def_id)),
-                ThingKind::Instance {
-                    fields,
-                    name,
-                    ctor_id: _,
-                } => self.intern_ty(TyKind::Instance(
-                    self.intern_instance_def(self.gen_instance_def(fields, name.interned)),
-                )),
-
-                ThingKind::Realm { .. } => panic!("A realm doesn't have a type!"),
-                ThingKind::Bind { .. } => panic!("A bind doesn't have a type!"),
-            },
-
-            Node::Field(field) => self.lower_ty(field.ty),
-
-            Node::BindItem(item) => match item.kind {
-                BindItemKind::Fun { .. } => self.intern_ty(TyKind::FnDef(def_id)),
-                // BindItemKind::Const { ty, .. } => self.lower_ty(ty),
-            },
-
-            any => panic!("Can't express type for {any:?}"),
-        }
-    }
-
-    pub fn fn_sig_for(&'cx self, def_id: DefId) -> FnSig<'cx> {
-        match self.def_type(def_id) {
-            DefType::Fun => {
-                let (sig, _) = self.air_get_fn(def_id);
-
-                FnSig {
-                    inputs: self
-                        .arena()
-                        .alloc_from_iter(sig.arguments.iter().map(|param| self.lower_ty(param.ty))),
-
-                    output: self.lower_ty(sig.return_type),
-                }
-            }
-
-            DefType::AdtCtor => {
-                let instance = self.air_get_instance_of_ctor(def_id);
-                let instance_def = self.instance_def(instance);
-
-                FnSig {
-                    inputs: self.arena().alloc_from_iter(
-                        instance_def
-                            .fields
-                            .iter()
-                            .map(|field| self.def_type_of(field.def_id)),
-                    ),
-
-                    output: self.def_type_of(instance),
-                }
-            }
-
-            any => panic!("can't express a signature for {any:#?}"),
-        }
-    }
-
     pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
         self.air_map.is_ctor(def_id)
     }
@@ -290,27 +240,6 @@ impl<'cx> Session<'cx> {
                 .filter(|b| self.lower_ty(b.with) == ty)
                 .collect(),
         )
-    }
-
-    pub fn instance_def(&'cx self, def_id: DefId) -> Instance<'cx> {
-        if let Some(v) = self.def_id_to_instance_interned.borrow().get(&def_id) {
-            return *v;
-        }
-
-        let (fields, name) = self.air_get_instance(def_id);
-
-        let instance_def = InstanceDef {
-            fields: IdxSlice::new(self.arena.alloc_from_iter(fields.iter().map(|field| {
-                FieldDef {
-                    def_id: field.def_id,
-                    name: field.name.interned,
-                    mutable: field.mutability,
-                }
-            }))),
-            name: name.interned,
-        };
-
-        self.intern_instance_def(instance_def)
     }
 
     pub fn lower_ty<'a>(&'cx self, ty: &node::Ty<'a>) -> Ty<'cx>
@@ -353,50 +282,4 @@ impl<'cx> Session<'cx> {
 
         self.intern_ty(tykind)
     }
-
-    fn gen_instance_def(&'cx self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'cx> {
-        InstanceDef {
-            fields: IdxSlice::new(self.arena().alloc_from_iter(fields.iter().map(|field| {
-                FieldDef {
-                    def_id: field.def_id,
-                    name: field.name.interned,
-                    mutable: field.mutability,
-                }
-            }))),
-            name,
-        }
-    }
-}
-
-fn name_of<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Arc<str> {
-    use std::fmt::Write as _;
-    let path = cx.air_map().def_path(did);
-
-    // Heuristic: ~8 characters average per segment.
-    // Might be dumb!!
-    let mut string = String::with_capacity(path.inner().len() << 8);
-    for (ix, seg) in path.inner().iter().enumerate() {
-        if ix != 0 && ix & 1 != 0 {
-            string.push_str("::");
-        }
-
-        match seg {
-            DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => {
-                string.push_str(sym.get_interned());
-            }
-            DefPathSeg::Lambda => string.push_str("{lambda}"),
-            DefPathSeg::BindBlock => {
-                let parent = cx.air_get_parent(did);
-                let parent_def = cx.air_get_bind(parent);
-                write!(
-                    &mut string,
-                    "<bind {ty}>",
-                    ty = cx.lower_ty(parent_def.with)
-                )
-                .expect("writing to memory is infallible");
-            }
-        }
-    }
-
-    cx.arena().alloc(string.into())
 }

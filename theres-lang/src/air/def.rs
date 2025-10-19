@@ -116,3 +116,63 @@ impl<Id> Resolved<Id> {
         matches!(self, Resolved::Err)
     }
 }
+
+pub fn name_of<'cx>(cx: &'cx crate::session::Session<'cx>, did: DefId) -> &'cx std::sync::Arc<str> {
+    use std::fmt::Write as _;
+    let path = cx.air_map().def_path(did);
+
+    // Heuristic: ~8 characters average per segment.
+    // Might be dumb!!
+    let mut string = String::with_capacity(path.inner().len() << 8);
+    for (ix, seg) in path.inner().iter().enumerate() {
+        if ix != 0 && ix & 1 != 0 {
+            string.push_str("::");
+        }
+
+        match seg {
+            DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => {
+                string.push_str(sym.get_interned());
+            }
+            DefPathSeg::Lambda => string.push_str("{lambda}"),
+            DefPathSeg::BindBlock => {
+                let parent = cx.air_get_parent(did);
+                let parent_def = cx.air_get_bind(parent);
+                write!(
+                    &mut string,
+                    "<bind {ty}>",
+                    ty = cx.lower_ty(parent_def.with)
+                )
+                .expect("writing to memory is infallible");
+            }
+        }
+    }
+
+    cx.arena().alloc(string.into())
+}
+
+pub fn def_type_of<'cx>(
+    cx: &'cx crate::session::Session<'cx>,
+    def_id: DefId,
+) -> crate::types::ty::Ty<'cx> {
+    use crate::air::node::{BindItemKind, Node, ThingKind};
+    use crate::types::ty::TyKind;
+
+    match cx.air_get_def(def_id) {
+        Node::Thing(thing) => match thing.kind {
+            ThingKind::Fn { .. } => cx.intern_ty(TyKind::FnDef(def_id)),
+            ThingKind::Instance { .. } => cx.intern_ty(TyKind::Instance(cx.instance_def(def_id))),
+
+            ThingKind::Realm { .. } => panic!("A realm doesn't have a type!"),
+            ThingKind::Bind { .. } => panic!("A bind doesn't have a type!"),
+        },
+
+        Node::Field(field) => cx.lower_ty(field.ty),
+
+        Node::BindItem(item) => match item.kind {
+            BindItemKind::Fun { .. } => cx.intern_ty(TyKind::FnDef(def_id)),
+            // BindItemKind::Const { ty, .. } => cx.lower_ty(ty),
+        },
+
+        any => panic!("Can't express type for {any:?}"),
+    }
+}

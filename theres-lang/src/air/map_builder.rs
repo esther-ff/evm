@@ -31,9 +31,7 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
     type Result = ();
 
     fn visit_thing(&mut self, thing: &'air Thing<'air>) -> Self::Result {
-        dbg!(self.current_item, thing.def_id);
         self.m.insert_node(Node::Thing(thing), thing.air_id);
-        let this_did = thing.def_id;
         let old = self.current_item.replace(thing.def_id);
 
         if let Some(old) = old {

@@ -245,7 +245,7 @@ pub enum BodyKind {
 
 pub struct EairBuilder<'ir> {
     eair: Eair<'ir>,
-    types: TypeTable<'ir>,
+    types: &'ir TypeTable<'ir>,
     cx: &'ir Session<'ir>,
     current_block: Vec<Expr<'ir>, &'ir Arena>,
     upvars: &'ir HashSet<AirId>,

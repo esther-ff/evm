@@ -887,48 +887,48 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
     }
 }
 
-impl<'cx> Session<'cx> {
-    pub fn typeck(&'cx self, did: DefId) -> TypeTable<'cx> {
-        let (air_sig, _) = self.air_get_fn(did);
-        let body = self.air_body_via_id(air_sig.body);
-        let ty_sig = self.fn_sig_for(did);
+pub fn typeck<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx TypeTable<'cx> {
+    let (air_sig, _) = cx.air_get_fn(did);
+    let body = cx.air_body_via_id(air_sig.body);
+    let ty_sig = cx.fn_sig_for(did);
 
-        let mut table = TypeTable::new();
-        let node_type: HashMap<_, _> = air_sig
-            .arguments
-            .iter()
-            .zip(ty_sig.inputs)
-            .map(|(param, ty)| {
-                assert!(table.air_node_tys.insert(param.air_id, *ty).is_none());
-                (param.air_id, *ty)
-            })
-            .collect();
+    let mut table = TypeTable::new();
+    let node_type: HashMap<_, _> = air_sig
+        .arguments
+        .iter()
+        .zip(ty_sig.inputs)
+        .map(|(param, ty)| {
+            assert!(table.air_node_tys.insert(param.air_id, *ty).is_none());
+            (param.air_id, *ty)
+        })
+        .collect();
 
-        let mut cx = FunCx {
-            s: self,
-            fn_ret_ty: Some(ty_sig.output),
-            node_type,
-            ty_var_types: HashMap::new(),
-            ty_var_origins: HashMap::new(),
-            infer_ty_counter: 0,
-            resolved_method_calls: HashMap::new(),
-            local_tys: HashMap::new(),
-            obligations: HashMap::new(),
-        };
+    let mut fcx = FunCx {
+        s: cx,
+        fn_ret_ty: Some(ty_sig.output),
+        node_type,
+        ty_var_types: HashMap::new(),
+        ty_var_origins: HashMap::new(),
+        infer_ty_counter: 0,
+        resolved_method_calls: HashMap::new(),
+        local_tys: HashMap::new(),
+        obligations: HashMap::new(),
+    };
 
-        let actual_ret_ty = cx.typeck_expr(body);
+    let actual_ret_ty = fcx.typeck_expr(body);
 
-        if cx.unify(ty_sig.output, actual_ret_ty).is_err() {
-            cx.type_mismatch_err(ty_sig.output, actual_ret_ty, air_sig.span);
-        }
-
-        TyCollector {
-            cx,
-            table,
-            sess: self,
-        }
-        .visit(body)
+    if fcx.unify(ty_sig.output, actual_ret_ty).is_err() {
+        fcx.type_mismatch_err(ty_sig.output, actual_ret_ty, air_sig.span);
     }
+
+    let table = TyCollector {
+        cx: fcx,
+        table,
+        sess: cx,
+    }
+    .visit(body);
+
+    cx.arena().alloc(table)
 }
 
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
