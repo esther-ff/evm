@@ -2,9 +2,13 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp;
 use std::fmt::Display;
-use std::io::{self, BufWriter, Stderr, Write};
+use std::io::{self, BufWriter, Stderr};
 use std::panic::Location;
 
+use codespan_reporting::diagnostic::{Diagnostic, Label};
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+
+use crate::session::cx;
 use crate::sources::{SourceId, Sources};
 use crate::span::Span;
 
@@ -77,10 +81,7 @@ impl<'a> DiagEmitter<'a> {
     #[track_caller]
     pub fn emit_err(&self, err: impl TheresError, span: Span) {
         log::trace!("`emit_err` triggered at loc: {}", Location::caller());
-        self.inner
-            .borrow_mut()
-            .emit_err(err, span)
-            .expect("writing to `stderr` failed!");
+        self.inner.borrow_mut().emit_err(err, span);
     }
 
     pub fn errors_emitted(&self) -> bool {
@@ -109,46 +110,69 @@ impl<'a> DiagEmitterInner<'a> {
         }
     }
 
+    // #[allow(clippy::needless_pass_by_value)]
+    // #[track_caller]
+    // fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
+    // let origin = span.line as usize;
+    // let line_nr_offset = origin.saturating_sub(EXTRA_LINES);
+    // let lines = self.get_lines(span.sourceid, origin, EXTRA_LINES);
+    // let indent = longest_line_number_from_origin(origin, EXTRA_LINES) as usize;
+
+    // writeln!(self.stderr, "{} error! aaaah!", T::phase())?;
+
+    // for (ix, line) in lines.iter().enumerate() {
+    //     let line_number = ix + line_nr_offset;
+    //     if line_number == origin {
+    //         print_to(
+    //             line_number,
+    //             line,
+    //             indent,
+    //             &mut self.stderr,
+    //             Some(Message {
+    //                 msg: err.message(),
+    //                 attached_to: span,
+    //             }),
+    //         )
+    //         .expect("writing to writer failed!");
+
+    //         continue;
+    //     }
+
+    //     print_to(line_number, line, indent, &mut self.stderr, None)
+    //         .expect("writing to writer failed!");
+    // }
+
+    // self.err_amount += 1;
+
+    // writeln!(self.stderr).unwrap();
+
+    // // later remove
+    // self.stderr.flush()?;
+
+    // Ok(())
+    // }
+
     #[allow(clippy::needless_pass_by_value)]
-    #[track_caller]
-    fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
-        let origin = span.line as usize;
-        let line_nr_offset = origin.saturating_sub(EXTRA_LINES);
-        let lines = self.get_lines(span.sourceid, origin, EXTRA_LINES);
-        let indent = longest_line_number_from_origin(origin, EXTRA_LINES) as usize;
+    #[allow(clippy::unused_self)]
+    fn emit_err(&mut self, err: impl TheresError, span: Span) {
+        let diag = Diagnostic::error()
+            .with_message(err.message())
+            .with_label(Label::primary(
+                span.sourceid.to_usize(),
+                (span.start as usize)..(span.end as usize),
+            ));
+        let writer = StandardStream::stderr(ColorChoice::Always);
+        let config = codespan_reporting::term::Config::default();
 
-        writeln!(self.stderr, "{} error! aaaah!", T::phase())?;
-
-        for (ix, line) in lines.iter().enumerate() {
-            let line_number = ix + line_nr_offset;
-            if line_number == origin {
-                print_to(
-                    line_number,
-                    line,
-                    indent,
-                    &mut self.stderr,
-                    Some(Message {
-                        msg: err.message(),
-                        attached_to: span,
-                    }),
-                )
-                .expect("writing to writer failed!");
-
-                continue;
-            }
-
-            print_to(line_number, line, indent, &mut self.stderr, None)
-                .expect("writing to writer failed!");
-        }
-
-        self.err_amount += 1;
-
-        writeln!(self.stderr).unwrap();
-
-        // later remove
-        self.stderr.flush()?;
-
-        Ok(())
+        cx(|cx| {
+            codespan_reporting::term::emit_to_write_style(
+                &mut writer.lock(),
+                &config,
+                cx.sources().files(),
+                &diag,
+            )
+            .unwrap();
+        });
     }
 
     fn get_lines(&self, id: SourceId, line_origin: usize, extra: usize) -> Vec<&'a str> {

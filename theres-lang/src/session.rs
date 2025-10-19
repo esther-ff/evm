@@ -88,7 +88,7 @@ crate::cache! {
         build_eair
     }
 
-    #[doc = "Builds an PILL body for the specified `DefId`"]
+    #[doc = "Builds a PILL body for the specified `DefId`"]
     pub fn build_pill(&'cx! self, did: DefId) -> &'cx Pill<'cx> {
         build_pill
     }
@@ -164,6 +164,10 @@ impl<'cx> Session<'cx> {
 
     pub fn air_map(&self) -> &AirMap<'_> {
         &self.air_map
+    }
+
+    pub fn sources(&self) -> &Sources {
+        self.sources
     }
 
     pub fn flags(&self) -> &Flags {

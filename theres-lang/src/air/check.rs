@@ -70,10 +70,10 @@ impl TheresError for MainError<'_> {
     fn message(&self) -> Cow<'static, str> {
         match self {
             Self::WrongRetType { ty } => {
-                format!("`main` has an incorrect return type ({ty}), consider using `nil`")
+                format!("The return type of `main` is incorrect return type ({ty}), consider using `nil`")
             }
             Self::WrongSignature { sig } => {
-                format!("`main`'s signature should be fun() => nil, while it's {sig}")
+                format!("the signature of `main` should be fun() => nil, while it's {sig}")
             }
         }
         .into()

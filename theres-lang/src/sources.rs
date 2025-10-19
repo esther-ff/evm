@@ -1,5 +1,5 @@
 use crate::id::IdxVec;
-use std::{io, path::Path};
+use std::{io, path::Path, sync::Arc};
 
 use codespan_reporting::files::SimpleFiles;
 
@@ -42,19 +42,19 @@ crate::newtyped_index!(SourceId, SourceMap, SourceVec);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceFile {
     id: SourceId,
-    access_name: String,
-    data: Box<str>,
+    access_name: Arc<str>,
+    data: Arc<str>,
     lines: Vec<LineSpan>,
 }
 
 impl SourceFile {
-    pub fn new(id: SourceId, access_name: String, data: String) -> Self {
+    pub fn new(id: SourceId, access_name: Arc<str>, data: String) -> Self {
         let mut lines = vec![LineSpan::DUMMY];
         Self::count_lines_as_spans(&mut lines, data.as_bytes());
 
         Self {
             lines,
-            data: data.into_boxed_str(),
+            data: data.into(),
             access_name,
             id,
         }
@@ -115,6 +115,7 @@ pub trait FileManager {
 }
 
 pub struct Sources {
+    simple: SimpleFiles<Arc<str>, Arc<str>>,
     files: SourceVec<SourceFile>,
     io: Box<dyn FileManager>,
 }
@@ -123,6 +124,7 @@ impl Sources {
     pub fn new(io: Box<dyn FileManager>) -> Self {
         Self {
             io,
+            simple: SimpleFiles::new(),
             files: IdxVec::new(),
         }
     }
@@ -136,21 +138,27 @@ impl Sources {
         let bytes = self.io.open_file(filepath.as_ref())?;
         let data = String::from_utf8(bytes).expect("file wasn't valid utf-8");
         let id = self.files.future_id();
-        let access_name = filepath
+        let access_name: Arc<str> = filepath
             .as_ref()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .into_owned();
+            .into_owned()
+            .into();
 
-        let file = SourceFile::new(id, access_name, data);
+        let file = SourceFile::new(id, access_name.clone(), data);
 
+        self.simple.add(access_name.clone(), file.data.clone());
         self.files.push(file);
         Ok(id)
     }
 
     pub fn get_by_source_id(&self, id: SourceId) -> &SourceFile {
         self.files.get(id).expect("source ids should be valid")
+    }
+
+    pub fn files(&self) -> &SimpleFiles<Arc<str>, Arc<str>> {
+        &self.simple
     }
 }
 
@@ -162,7 +170,11 @@ mod tests {
     #[test]
     fn source_file_lines() {
         const DATA: &str = concat!("line 1\n", "line 2\n", "line 3\n", "line 4\n", "line 5");
-        let file = SourceFile::new(SourceId::ZERO, String::from("test"), DATA.to_string());
+        let file = SourceFile::new(
+            SourceId::ZERO,
+            String::from("test").into(),
+            DATA.to_string(),
+        );
 
         let lines = file.get_lines_from_to(1, 3);
         dbg!(lines);
