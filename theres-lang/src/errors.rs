@@ -86,6 +86,10 @@ impl<'a> DiagEmitter<'a> {
     pub fn errors_emitted(&self) -> bool {
         self.inner.borrow().err_amount > 0
     }
+
+    pub fn wipe_errors(&self) {
+        self.inner.borrow_mut().err_amount = 0;
+    }
 }
 
 pub struct DiagEmitterInner<'a> {

@@ -1,6 +1,8 @@
 use crate::id::IdxVec;
 use std::{io, path::Path};
 
+use codespan_reporting::files::SimpleFiles;
+
 // #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 // pub struct OneWayVec<T>(Vec<T>);
 

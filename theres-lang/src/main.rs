@@ -55,7 +55,8 @@ fn opts() -> sap::Result<(Flags, PathBuf)> {
     let mut flags = Flags {
         dump_hir: HirDump::None,
         dump_ast: false,
-        dump_types: false,
+        dump_eair: false,
+        dump_pill: false,
         log_level: log::Level::Error,
     };
 
@@ -101,7 +102,8 @@ fn opts() -> sap::Result<(Flags, PathBuf)> {
                         "air_items" => flags.dump_hir = HirDump::OnlyItems,
                         "air" => flags.dump_hir = HirDump::All,
                         "ast" => flags.dump_ast = true,
-                        "types" => flags.dump_types = true,
+                        "eair" => flags.dump_eair = true,
+                        "pill" => flags.dump_pill = true,
 
                         any => {
                             let err = sap::ParsingError::UnexpectedArg {

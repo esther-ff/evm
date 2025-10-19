@@ -5,10 +5,10 @@ use crate::ast::PrettyPrinter;
 use crate::ast::Universe;
 use crate::errors::DiagEmitter;
 use crate::lexer::{Lexemes, Lexer};
-use crate::pill;
 use crate::session::Session;
 use crate::sources::{FileManager, SourceId, Sources};
 use crate::types::fun_cx::typeck_universe;
+
 use std::cell::Cell;
 use std::io::{Stderr, Write, stderr, stdout};
 use std::path::Path;
@@ -161,7 +161,8 @@ pub enum HirDump {
 pub struct Flags {
     pub dump_hir: HirDump,
     pub dump_ast: bool,
-    pub dump_types: bool,
+    pub dump_eair: bool,
+    pub dump_pill: bool,
     pub log_level: Level,
 }
 
@@ -207,16 +208,10 @@ impl Compiler {
 
         Session::new(&diags, self.flags, &self.sources, &arena, map).enter(|session| {
             air::dump_air(&mut stdout(), self.flags.dump_hir, uni, session.air_map()).unwrap();
-
             typeck_universe(session, uni);
             let main_did = check::check_for_main(session, uni).expect("todo: no main lmao!");
-            log::debug!("main fn is {main_did}");
-            let eair = crate::eair::types::build_eair(session, main_did);
-            // let _ = dbg!(&eair);
-            let pill = pill::body::build_pill(session, &eair, main_did);
-            pill::body::dump_pill(&mut stderr(), &pill, main_did).unwrap();
 
-            // pill::lowering::lower_universe(session, uni);
+            let _ = session.build_pill(main_did);
         });
     }
 

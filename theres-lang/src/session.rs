@@ -9,7 +9,9 @@ use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
 use crate::ast::Name;
 use crate::driver::Flags;
+use crate::eair::types::{Eair, build_eair};
 use crate::errors::DiagEmitter;
+use crate::pill::body::{Pill, build_pill};
 use crate::pooled::Pool;
 use crate::sources::{SourceId, Sources};
 use crate::symbols::SymbolId;
@@ -79,6 +81,16 @@ crate::cache! {
     #[doc = "Expresses a function signature for the given definition at `DefId`"]
     pub fn fn_sig_for(&'cx! self, did: DefId) -> FnSig<'cx> {
         crate::types::ty::fn_sig_for
+    }
+
+    #[doc = "Builds an EAIR body for the specified `DefId`"]
+    pub fn build_eair(&'cx! self, did: DefId) -> &'cx Eair<'cx> {
+        build_eair
+    }
+
+    #[doc = "Builds an PILL body for the specified `DefId`"]
+    pub fn build_pill(&'cx! self, did: DefId) -> &'cx Pill<'cx> {
+        build_pill
     }
 }
 
@@ -152,6 +164,10 @@ impl<'cx> Session<'cx> {
 
     pub fn air_map(&self) -> &AirMap<'_> {
         &self.air_map
+    }
+
+    pub fn flags(&self) -> &Flags {
+        &self.flags
     }
 
     pub fn dump_air_mode(&self) -> crate::driver::HirDump {

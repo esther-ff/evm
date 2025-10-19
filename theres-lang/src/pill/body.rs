@@ -30,7 +30,7 @@ use crate::air::def::DefId;
 use crate::air::node::{AirLiteral, Constant};
 use crate::ast;
 use crate::eair::types::{
-    Block, BodyKind, Eair, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId,
+    Block, BodyKind, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId,
 };
 use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{AdtKind, BasicBlock, BlockExit, Cfg, Imm, Operand, Rvalue, Stmt};
@@ -97,9 +97,7 @@ struct PillBuilder<'il> {
 
 impl<'il> PillBuilder<'il> {
     fn live(&mut self, bb: BasicBlock, local: Local) {
-        println!("-- live for {bb} - {local}");
         if !local.is_dummy() && !self.alive.contains(&local) {
-            println!("local {local} is now alive!");
             self.cfg.live(bb, local);
             self.alive.insert(local);
         }
@@ -612,7 +610,6 @@ impl<'il> PillBuilder<'il> {
         tmp: Local,
         op: LogicalOp,
     ) -> BasicBlock {
-        println!("Are you here");
         let (short_case_ret, negate, binop) = match op {
             LogicalOp::And => (
                 Imm::scalar(self.cx, Scalar::new_bool(false), self.cx.types.bool),
@@ -943,7 +940,8 @@ impl<'il> PillBuilder<'il> {
     }
 }
 
-pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> Pill<'cx> {
+pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
+    let body = cx.build_eair(did);
     let mut captures = HashMap::new();
     let mut cfg = Cfg::new();
     let mut alive = HashSet::with_capacity(body.params.len());
@@ -1022,16 +1020,26 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> P
     builder.cfg.live(bb, ret_place);
     builder.cfg.end_block(bb, BlockExit::Return);
 
-    Pill {
+    let body = Pill {
         span: body.span,
         arg_count,
         cfg: builder.cfg,
         locals: builder.locals,
+    };
+
+    let alloc = cx.arena().alloc(body);
+
+    if cx.flags().dump_pill {
+        let w = std::io::stdout();
+        let mut lock = w.lock();
+        dump_pill(&mut lock, alloc, did).expect("writing to stdout failed!")
     }
+
+    alloc
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
+fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
     const INDENT: &str = "      ";
     enum State {
         Params,

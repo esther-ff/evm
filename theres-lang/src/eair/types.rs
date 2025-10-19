@@ -342,7 +342,7 @@ impl<'ir> EairBuilder<'ir> {
                 let lhs = self.lower_expr_alloc(lhs);
                 let rhs = self.lower_expr_alloc(rhs);
 
-                let expr = match bin_op_to_eair(op) {
+                match bin_op_to_eair(op) {
                     Ops::Regular(op) => {
                         /* later check for overloads */
                         Expr {
@@ -356,10 +356,7 @@ impl<'ir> EairBuilder<'ir> {
                         ty,
                         span: expr.span,
                     },
-                };
-
-                dbg!(op);
-                dbg!(expr)
+                }
             }
 
             Unary { target, op } => Expr {
@@ -655,8 +652,7 @@ fn bin_op_to_eair(binop: ast::BinOp) -> Ops {
     Ops::Regular(reg)
 }
 
-pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
-    // REALLY STUPID!
+pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
     let dummy = cx.arena().alloc(HashSet::new());
 
     let types;
@@ -732,5 +728,13 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
     builder.eair.entry.replace(entry);
     assert!(builder.eair.entry.is_some());
 
-    builder.eair
+    if cx.flags().dump_eair {
+        use std::io::Write as _;
+
+        let w = std::io::stdout();
+        let mut lock = w.lock();
+        writeln!(&mut lock, "{:#?}", &builder.eair).expect("writing to stdout failed!")
+    };
+
+    cx.arena().alloc(builder.eair)
 }
