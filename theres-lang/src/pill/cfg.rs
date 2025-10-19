@@ -12,6 +12,7 @@ use crate::pill::body::Local;
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
 use crate::session::{Session, cx};
+use crate::span::Span;
 use crate::types::ty::{Instance, LambdaEnv};
 use crate::types::ty::{Ty, TyKind};
 
@@ -25,22 +26,25 @@ pub enum ImmKind {
 pub struct Imm<'il> {
     kind: ImmKind,
     ty: Ty<'il>,
+    span: Span,
 }
 
 impl<'il> Imm<'il> {
-    pub fn empty(cx: &'il Session<'il>, ty: Ty<'il>) -> &'il Self {
+    pub fn empty(cx: &'il Session<'il>, ty: Ty<'il>, span: Span) -> &'il Self {
         let this = Self {
             kind: ImmKind::Empty,
             ty,
+            span,
         };
 
         cx.arena().alloc(this)
     }
 
-    pub fn scalar(cx: &'il Session<'il>, scalar: Scalar, ty: Ty<'il>) -> &'il Self {
+    pub fn scalar(cx: &'il Session<'il>, scalar: Scalar, ty: Ty<'il>, span: Span) -> &'il Self {
         let this = Self {
             kind: ImmKind::Scalar(scalar),
             ty,
+            span,
         };
 
         cx.arena().alloc(this)
@@ -94,7 +98,7 @@ impl Debug for Operand<'_> {
 }
 
 #[derive(Debug)]
-pub enum BlockExit<'il> {
+pub enum BlockExitKind<'il> {
     Goto(BasicBlock),
     Branch {
         val: Operand<'il>,
@@ -102,6 +106,22 @@ pub enum BlockExit<'il> {
         false_: BasicBlock,
     },
     Return,
+}
+
+#[derive(Debug)]
+pub struct BlockExit<'il> {
+    span: Span,
+    kind: BlockExitKind<'il>,
+}
+
+impl<'il> BlockExit<'il> {
+    pub fn kind(&self) -> &BlockExitKind<'il> {
+        &self.kind
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -175,7 +195,7 @@ impl Debug for Rvalue<'_> {
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum Stmt<'il> {
+pub enum StmtKind<'il> {
     Assign {
         dest: Access<'il>,
         src: Rvalue<'il>,
@@ -197,6 +217,22 @@ pub enum Stmt<'il> {
     Nop,
 
     LocalLive(Local),
+}
+
+#[derive(Debug)]
+pub struct Stmt<'il> {
+    kind: StmtKind<'il>,
+    span: Span,
+}
+
+impl<'il> Stmt<'il> {
+    pub fn kind(&self) -> &StmtKind<'il> {
+        &self.kind
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
 }
 
 #[derive(Debug)]
@@ -227,13 +263,83 @@ impl<'il> Cfg<'il> {
         }
     }
 
-    pub fn live(&mut self, bb: BasicBlock, local: Local) {
-        self.bbs[bb].stmts.push(Stmt::LocalLive(local));
+    pub fn live(&mut self, bb: BasicBlock, span: Span, local: Local) {
+        self.push_stmt(
+            bb,
+            Stmt {
+                kind: StmtKind::LocalLive(local),
+                span,
+            },
+        );
     }
 
-    pub fn end_block(&mut self, bb: BasicBlock, exit: BlockExit<'il>) {
-        debug_assert!(self.bbs[bb].exit.is_none());
-        self.bbs[bb].exit.replace(exit);
+    pub fn assign(&mut self, bb: BasicBlock, dest: Access<'il>, src: Rvalue<'il>, span: Span) {
+        self.push_stmt(
+            bb,
+            Stmt {
+                kind: StmtKind::Assign { dest, src },
+                span,
+            },
+        );
+    }
+
+    pub fn call(
+        &mut self,
+        bb: BasicBlock,
+        fun: Operand<'il>,
+        args: Vec<Operand<'il>>,
+        ret: Access<'il>,
+        span: Span,
+    ) {
+        self.push_stmt(
+            bb,
+            Stmt {
+                kind: StmtKind::Call { fun, ret, args },
+                span,
+            },
+        );
+    }
+
+    pub fn check(&mut self, bb: BasicBlock, cond: Operand<'il>, span: Span) {
+        self.push_stmt(
+            bb,
+            Stmt {
+                kind: StmtKind::CheckCond(cond),
+                span,
+            },
+        );
+    }
+
+    pub fn goto(&mut self, bb: BasicBlock, target: BasicBlock, span: Span) {
+        self.bbs[bb].exit.replace(BlockExit {
+            span,
+            kind: BlockExitKind::Goto(target),
+        });
+    }
+
+    pub fn bb_return(&mut self, bb: BasicBlock, span: Span) {
+        self.bbs[bb].exit.replace(BlockExit {
+            span,
+            kind: BlockExitKind::Return,
+        });
+    }
+
+    pub fn dummy_goto(&mut self, bb: BasicBlock, span: Span) {
+        self.goto(bb, BasicBlock::DUMMY, span);
+    }
+
+    pub fn branch(
+        &mut self,
+        bb: BasicBlock,
+        val: Operand<'il>,
+        true_: BasicBlock,
+        false_: BasicBlock,
+        span: Span,
+    ) {
+        self.bbs[bb].exit.replace(BlockExit {
+            span,
+            kind: BlockExitKind::Branch { val, true_, false_ },
+        });
     }
 
     pub fn push_stmt(&mut self, bb: BasicBlock, stmt: Stmt<'il>) {
@@ -245,12 +351,6 @@ impl<'il> Cfg<'il> {
             stmts: vec![],
             exit: None,
         })
-    }
-
-    pub fn cur(&self) -> BasicBlock {
-        let len = self.bbs.len();
-        assert!(len != 0);
-        BasicBlock::new_usize(len.saturating_sub(1))
     }
 
     pub fn blocks(&'il self) -> impl Iterator<Item = (BasicBlock, &'il BbData<'il>)> {

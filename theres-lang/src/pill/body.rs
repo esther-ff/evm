@@ -33,7 +33,7 @@ use crate::eair::types::{
     Block, BodyKind, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId,
 };
 use crate::pill::access::{Access, AccessBuilder};
-use crate::pill::cfg::{AdtKind, BasicBlock, BlockExit, Cfg, Imm, Operand, Rvalue, Stmt};
+use crate::pill::cfg::{AdtKind, BasicBlock, BlockExitKind, Cfg, Imm, Operand, Rvalue, StmtKind};
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
 use crate::session::{Session, cx};
@@ -96,9 +96,9 @@ struct PillBuilder<'il> {
 }
 
 impl<'il> PillBuilder<'il> {
-    fn live(&mut self, bb: BasicBlock, local: Local) {
+    fn live(&mut self, bb: BasicBlock, local: Local, span: Span) {
         if !local.is_dummy() && !self.alive.contains(&local) {
-            self.cfg.live(bb, local);
+            self.cfg.live(bb, span, local);
             self.alive.insert(local);
         }
     }
@@ -133,7 +133,10 @@ impl<'il> PillBuilder<'il> {
                     _ => unreachable!("what the holy FUCK??"),
                 };
 
-                (bb, Operand::Imm(Imm::scalar(self.cx, scalar, expr.ty)))
+                (
+                    bb,
+                    Operand::Imm(Imm::scalar(self.cx, scalar, expr.ty, expr.span)),
+                )
             }
 
             ExprKind::Local(loc) => (bb, Operand::Use(self.map[loc].into())),
@@ -155,7 +158,7 @@ impl<'il> PillBuilder<'il> {
                 (bb, Operand::Use(acc.finish(self.cx)))
             }
 
-            ExprKind::Empty => (bb, Operand::Imm(Imm::empty(self.cx, expr.ty))),
+            ExprKind::Empty => (bb, Operand::Imm(Imm::empty(self.cx, expr.ty, expr.span))),
 
             _ => {
                 let tmp = self.temporary(expr.ty);
@@ -187,13 +190,7 @@ impl<'il> PillBuilder<'il> {
                         .collect(),
                 };
 
-                self.cfg.push_stmt(
-                    bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: rvalue,
-                    },
-                );
+                self.cfg.assign(bb, into.into(), rvalue, expr.span);
 
                 bb
             }
@@ -205,7 +202,7 @@ impl<'il> PillBuilder<'il> {
 
                 let tmp = self.temporary(inner.ty);
                 bb = self.lower_expr_into(inner, bb, tmp);
-                self.cfg.push_stmt(bb, Stmt::LocalLive(into));
+                self.cfg.live(bb, expr.span, into);
                 bb
             }
 
@@ -223,13 +220,7 @@ impl<'il> PillBuilder<'il> {
                     args,
                 };
 
-                self.cfg.push_stmt(
-                    bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: rvalue,
-                    },
-                );
+                self.cfg.assign(bb, into.into(), rvalue, expr.span);
 
                 bb
             }
@@ -243,12 +234,13 @@ impl<'il> PillBuilder<'il> {
                     AirLiteral::Int(val) => Scalar::new_i64(*val),
                 };
 
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Imm(Imm::scalar(self.cx, scalar, expr.ty))),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Imm(Imm::scalar(
+                        self.cx, scalar, expr.ty, expr.span,
+                    ))),
+                    expr.span,
                 );
 
                 bb
@@ -256,12 +248,11 @@ impl<'il> PillBuilder<'il> {
 
             ExprKind::Local(local) => {
                 let lowered_local = *self.map.get(local).unwrap();
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Use(lowered_local.into())),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Use(lowered_local.into())),
+                    expr.span,
                 );
                 bb
             }
@@ -270,12 +261,11 @@ impl<'il> PillBuilder<'il> {
                 let mut acc;
                 (bb, acc) = self.process_index(base, idx, bb);
 
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Use(acc.finish(self.cx))),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Use(acc.finish(self.cx))),
+                    expr.span,
                 );
                 bb
             }
@@ -283,12 +273,11 @@ impl<'il> PillBuilder<'il> {
             ExprKind::Upvar { upvar } => {
                 let local = self.captures.get(upvar).unwrap();
 
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Use(*local)),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Use(*local)),
+                    expr.span,
                 );
                 bb
             }
@@ -298,12 +287,11 @@ impl<'il> PillBuilder<'il> {
                 (bb, acc) = self.as_access(base, bb);
                 acc.field(*field_idx);
 
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Use(acc.finish(self.cx))),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Use(acc.finish(self.cx))),
+                    expr.span,
                 );
 
                 bb
@@ -311,38 +299,39 @@ impl<'il> PillBuilder<'il> {
 
             ExprKind::Logical { lhs, rhs, op } => self.process_logical_op(lhs, rhs, bb, into, *op),
 
-            ExprKind::List(exprs) => self.process_list(into, exprs, bb),
+            ExprKind::List(exprs) => self.process_list(into, exprs, bb, expr.span),
 
             ExprKind::Empty => {
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Imm(Imm::empty(self.cx, expr.ty))),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Imm(Imm::empty(self.cx, expr.ty, expr.span))),
+                    expr.span,
                 );
 
                 bb
             }
 
+            // TODO: dedup somewhere too
             ExprKind::Break => {
                 let goto = self.current_loop_end.expect("break outside loop!");
 
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Imm(Imm::empty(
-                            self.cx,
-                            self.cx.types.diverges,
-                        ))),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Imm(Imm::empty(
+                        self.cx,
+                        self.cx.types.diverges,
+                        expr.span,
+                    ))),
+                    expr.span,
                 );
 
-                self.cfg.end_block(bb, BlockExit::Goto(goto));
+                self.cfg.goto(bb, goto, expr.span);
                 goto
             }
 
+            // TODO: dedup with the special case in assign
             ExprKind::Call { callee, args } => {
                 let fun;
                 (bb, fun) = self.as_operand(callee, bb);
@@ -355,14 +344,9 @@ impl<'il> PillBuilder<'il> {
                     call_args.push(op);
                 }
 
-                let stmt = Stmt::Call {
-                    fun,
-                    ret: ret.into(),
-                    args: call_args,
-                };
+                self.cfg.call(bb, fun, call_args, ret.into(), expr.span);
 
-                self.cfg.push_stmt(bb, stmt);
-                self.live(bb, ret);
+                self.live(bb, ret, expr.span);
                 bb
             }
 
@@ -373,18 +357,16 @@ impl<'il> PillBuilder<'il> {
                 (bb, l_rhs) = self.as_operand(rhs, bb);
 
                 let op = (*op).into();
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Binary {
-                            op,
-                            lhs: l_lhs,
-                            rhs: l_rhs,
-                        },
+                    into.into(),
+                    Rvalue::Binary {
+                        op,
+                        lhs: l_lhs,
+                        rhs: l_rhs,
                     },
+                    expr.span,
                 );
-
                 bb
             }
 
@@ -407,14 +389,9 @@ impl<'il> PillBuilder<'il> {
                         call_args.push(op);
                     }
 
-                    let stmt = Stmt::Call {
-                        fun,
-                        ret: self.map[&loc].into(),
-                        args: call_args,
-                    };
-
-                    self.cfg.push_stmt(bb, stmt);
-                    self.live(bb, self.map[&loc]);
+                    self.cfg
+                        .call(bb, fun, call_args, self.map[&loc].into(), rhs.span);
+                    self.live(bb, self.map[&loc], rhs.span);
                     return bb;
                 }
 
@@ -423,16 +400,10 @@ impl<'il> PillBuilder<'il> {
                 (bb, rvalue) = self.as_rvalue(rhs, bb);
                 (bb, lvalue) = self.as_access_full(lhs, bb);
 
-                self.cfg.push_stmt(
-                    bb,
-                    Stmt::Assign {
-                        dest: lvalue,
-                        src: rvalue,
-                    },
-                );
+                self.cfg.assign(bb, lvalue, rvalue, expr.span);
 
                 if let ExprKind::Local(loc) = lhs.kind {
-                    self.live(bb, self.map[&loc]);
+                    self.live(bb, self.map[&loc], expr.span);
                 }
 
                 bb
@@ -442,18 +413,17 @@ impl<'il> PillBuilder<'il> {
                 let val;
                 (bb, val) = self.as_operand(operand, bb);
                 let dest = into.into();
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest,
-                        src: Rvalue::Unary {
-                            op: match *op {
-                                ast::UnaryOp::Negation => UnOp::Neg,
-                                ast::UnaryOp::Not => UnOp::Not,
-                            },
-                            val,
+                    dest,
+                    Rvalue::Unary {
+                        op: match *op {
+                            ast::UnaryOp::Negation => UnOp::Neg,
+                            ast::UnaryOp::Not => UnOp::Not,
                         },
+                        val,
                     },
+                    expr.span,
                 );
 
                 bb
@@ -465,32 +435,26 @@ impl<'il> PillBuilder<'il> {
                 false_,
             } => self.process_if_expr(into, cond, true_, *false_, bb),
 
-            ExprKind::Return(expr) => {
-                if let Some(expr) = expr {
+            ExprKind::Return(ret_expr) => {
+                if let Some(expr) = ret_expr {
                     let ret;
                     (bb, ret) = self.as_rvalue(expr, bb);
-                    self.cfg.push_stmt(
-                        bb,
-                        Stmt::Assign {
-                            dest: Local::ret_access(),
-                            src: ret,
-                        },
-                    );
+                    self.cfg.assign(bb, Local::ret_access(), ret, expr.span);
                 }
 
-                self.cfg.push_stmt(
+                self.cfg.assign(
                     bb,
-                    Stmt::Assign {
-                        dest: into.into(),
-                        src: Rvalue::Regular(Operand::Imm(Imm::empty(
-                            self.cx,
-                            self.cx.types.diverges,
-                        ))),
-                    },
+                    into.into(),
+                    Rvalue::Regular(Operand::Imm(Imm::empty(
+                        self.cx,
+                        self.cx.types.diverges,
+                        expr.span,
+                    ))),
+                    expr.span,
                 );
 
-                self.cfg.live(bb, Local::ret_place());
-                self.cfg.end_block(bb, BlockExit::Goto(BasicBlock::DUMMY));
+                self.cfg.live(bb, expr.span, Local::ret_place());
+                self.cfg.dummy_goto(bb, expr.span);
 
                 bb
             }
@@ -500,17 +464,15 @@ impl<'il> PillBuilder<'il> {
             ExprKind::Loop(body) => {
                 let dest = into;
                 let loop_start = self.cfg.new_block();
-                self.cfg.end_block(bb, BlockExit::Goto(loop_start));
+                self.cfg.goto(bb, loop_start, expr.span);
                 let loop_end = self.cfg.new_block();
                 self.current_loop_end.replace(loop_end);
 
                 let bb = self.process_block(dest, body, loop_start);
 
-                self.cfg.end_block(bb, BlockExit::Goto(loop_start));
-
+                self.cfg.goto(bb, loop_start, expr.span);
                 self.current_loop_end.take();
-
-                self.cfg.push_stmt(loop_end, Stmt::LocalLive(into));
+                self.cfg.live(bb, Span::DUMMY, into);
                 loop_end
             }
         }
@@ -524,6 +486,7 @@ impl<'il> PillBuilder<'il> {
         false_: Option<&Expr<'il>>,
         bb: BasicBlock,
     ) -> BasicBlock {
+        let cond_span = cond.span;
         let loc = local;
         let local = local.into();
         let (bb, cond) = self.as_operand(cond, bb);
@@ -531,14 +494,7 @@ impl<'il> PillBuilder<'il> {
         let bb_true = self.cfg.new_block();
         let bb_false = self.cfg.new_block();
 
-        self.cfg.end_block(
-            bb,
-            BlockExit::Branch {
-                val: cond,
-                true_: bb_true,
-                false_: bb_false,
-            },
-        );
+        self.cfg.branch(bb, cond, bb_true, bb_false, cond_span);
 
         let bb_end = self.cfg.new_block();
 
@@ -551,27 +507,16 @@ impl<'il> PillBuilder<'il> {
             }
         };
 
-        self.cfg.push_stmt(
-            bb_true_end,
-            Stmt::Assign {
-                dest: local,
-                src: cond_succ,
-            },
-        );
+        self.cfg.assign(bb_true_end, local, cond_succ, true_.span);
 
         if let Some(cond_fail) = cond_fail {
-            self.cfg.push_stmt(
-                bb_false_end,
-                Stmt::Assign {
-                    dest: local,
-                    src: cond_fail,
-                },
-            );
+            self.cfg
+                .assign(bb_false_end, local, cond_fail, false_.unwrap().span);
         }
 
-        self.cfg.live(bb_end, loc);
-        self.cfg.end_block(bb_true_end, BlockExit::Goto(bb_end));
-        self.cfg.end_block(bb_false_end, BlockExit::Goto(bb_end));
+        self.cfg.live(bb_end, Span::DUMMY, loc);
+        self.cfg.goto(bb_true_end, bb_end, Span::DUMMY);
+        self.cfg.goto(bb_false_end, bb_end, Span::DUMMY);
 
         bb_end
     }
@@ -584,6 +529,7 @@ impl<'il> PillBuilder<'il> {
         mut bb: BasicBlock,
         local: Local,
     ) -> BasicBlock {
+        let span = Span::between(lhs.span, rhs.span);
         let (new_bb, lhs) = self.as_operand(lhs, bb);
         bb = new_bb;
         let (new_bb, rhs) = self.as_operand(rhs, bb);
@@ -591,13 +537,8 @@ impl<'il> PillBuilder<'il> {
 
         let dest = local.into();
 
-        self.cfg.push_stmt(
-            bb,
-            Stmt::Assign {
-                dest,
-                src: Rvalue::Binary { op, lhs, rhs },
-            },
-        );
+        self.cfg
+            .assign(bb, dest, Rvalue::Binary { op, lhs, rhs }, span);
 
         bb
     }
@@ -612,13 +553,23 @@ impl<'il> PillBuilder<'il> {
     ) -> BasicBlock {
         let (short_case_ret, negate, binop) = match op {
             LogicalOp::And => (
-                Imm::scalar(self.cx, Scalar::new_bool(false), self.cx.types.bool),
+                Imm::scalar(
+                    self.cx,
+                    Scalar::new_bool(false),
+                    self.cx.types.bool,
+                    Span::DUMMY,
+                ),
                 true,
                 BinOp::BitAnd,
             ),
 
             LogicalOp::Or => (
-                Imm::scalar(self.cx, Scalar::new_bool(true), self.cx.types.bool),
+                Imm::scalar(
+                    self.cx,
+                    Scalar::new_bool(true),
+                    self.cx.types.bool,
+                    Span::DUMMY,
+                ),
                 false,
                 BinOp::BitOr,
             ),
@@ -639,55 +590,51 @@ impl<'il> PillBuilder<'il> {
         };
 
         let eval = self.temporary(self.cx.types.bool);
-        self.cfg.push_stmt(
-            bb,
-            Stmt::Assign {
-                dest: eval.into(),
-                src: cond,
-            },
-        );
+        self.cfg.assign(bb, eval.into(), cond, Span::DUMMY);
 
-        self.live(bb, eval);
-        self.cfg.end_block(
+        self.live(bb, eval, Span::DUMMY);
+        self.cfg.branch(
             bb,
-            BlockExit::Branch {
-                val: Operand::Use(eval.into()),
-                true_: lhs_true,
-                false_: lhs_false,
-            },
-        );
-
-        self.cfg.push_stmt(
+            Operand::Use(eval.into()),
             lhs_true,
-            Stmt::Assign {
-                dest: tmp.into(),
-                src: Rvalue::Regular(Operand::Imm(short_case_ret)),
-            },
+            lhs_false,
+            Span::DUMMY,
         );
 
-        self.cfg.end_block(lhs_true, BlockExit::Goto(end_bb));
+        self.cfg.assign(
+            lhs_true,
+            tmp.into(),
+            Rvalue::Regular(Operand::Imm(short_case_ret)),
+            Span::DUMMY,
+        );
+
+        self.cfg.goto(lhs_true, end_bb, Span::DUMMY);
         let (lhs_false, val) = self.as_operand(rhs, lhs_false);
 
-        self.cfg.push_stmt(
+        self.cfg.assign(
             lhs_false,
-            Stmt::Assign {
-                dest: tmp.into(),
-                src: Rvalue::Binary {
-                    op: binop,
-                    lhs,
-                    rhs: val,
-                },
+            tmp.into(),
+            Rvalue::Binary {
+                op: binop,
+                lhs,
+                rhs: val,
             },
+            Span::DUMMY,
         );
 
-        self.live(end_bb, tmp);
-        self.cfg.end_block(lhs_false, BlockExit::Goto(end_bb));
+        self.live(end_bb, tmp, Span::DUMMY);
+        self.cfg.goto(lhs_false, end_bb, Span::DUMMY);
         end_bb
     }
 
-    fn process_list(&mut self, tmp: Local, exprs: &[Expr<'il>], mut bb: BasicBlock) -> BasicBlock {
+    fn process_list(
+        &mut self,
+        tmp: Local,
+        exprs: &[Expr<'il>],
+        mut bb: BasicBlock,
+        span: Span,
+    ) -> BasicBlock {
         let mut members = Vec::with_capacity(exprs.len());
-        let start = bb;
         for expr in exprs {
             let op;
             (bb, op) = self.as_operand(expr, bb);
@@ -695,14 +642,7 @@ impl<'il> PillBuilder<'il> {
         }
 
         let rvalue = Rvalue::List(members);
-        self.cfg.push_stmt(
-            start,
-            Stmt::Assign {
-                dest: tmp.into(),
-                src: rvalue,
-            },
-        );
-
+        self.cfg.assign(bb, tmp.into(), rvalue, span);
         bb
     }
 
@@ -728,7 +668,7 @@ impl<'il> PillBuilder<'il> {
                 //     break;
                 // }
 
-                self.cfg.push_stmt(bb, Stmt::Assign { dest, src: op });
+                self.cfg.assign(bb, dest, op, expr.span);
                 break;
             }
 
@@ -739,7 +679,7 @@ impl<'il> PillBuilder<'il> {
                 ExprKind::Semi(inner) => {
                     let tmp = self.temporary(inner.ty);
                     bb = self.lower_expr_into(inner, bb, tmp);
-                    self.live(bb, tmp);
+                    self.live(bb, tmp, inner.span);
                 }
 
                 _ => {
@@ -758,33 +698,29 @@ impl<'il> PillBuilder<'il> {
         idx: &Expr<'il>,
         bb: BasicBlock,
     ) -> (BasicBlock, AccessBuilder<'il>) {
+        let span = Span::between(base.span, idx.span);
+        let idx_span = idx.span;
         let (bb, mut base) = self.as_access(base, bb);
 
         let (bb, idx) = self.as_operand(idx, bb);
         let len = self.temporary(self.cx.types.u64).into();
         let eval = self.temporary(self.cx.types.bool).into();
 
-        self.cfg.push_stmt(
+        self.cfg
+            .assign(bb, len, Rvalue::Length(base.finish(self.cx)), idx_span);
+
+        self.cfg.assign(
             bb,
-            Stmt::Assign {
-                dest: len,
-                src: Rvalue::Length(base.finish(self.cx)),
+            eval,
+            Rvalue::Binary {
+                op: BinOp::Lt,
+                lhs: idx,
+                rhs: Operand::Use(len),
             },
+            idx_span,
         );
 
-        self.cfg.push_stmt(
-            bb,
-            Stmt::Assign {
-                dest: eval,
-                src: Rvalue::Binary {
-                    op: BinOp::Lt,
-                    lhs: idx,
-                    rhs: Operand::Use(len),
-                },
-            },
-        );
-
-        self.cfg.push_stmt(bb, Stmt::CheckCond(Operand::Use(eval)));
+        self.cfg.check(bb, Operand::Use(eval), span);
 
         base.index(idx);
         (bb, base)
@@ -864,7 +800,11 @@ impl<'il> PillBuilder<'il> {
                 bb = self.lower_expr_into(inner, bb, tmp);
                 (
                     bb,
-                    Rvalue::Regular(Operand::Imm(Imm::empty(self.cx, self.cx.types.nil))),
+                    Rvalue::Regular(Operand::Imm(Imm::empty(
+                        self.cx,
+                        self.cx.types.nil,
+                        inner.span,
+                    ))),
                 )
             }
 
@@ -909,13 +849,8 @@ impl<'il> PillBuilder<'il> {
             _ => {
                 let tmp = self.temporary(expr.ty);
                 let (bb, src) = self.as_operand(expr, bb);
-                self.cfg.push_stmt(
-                    bb,
-                    Stmt::Assign {
-                        dest: tmp.into(),
-                        src: Rvalue::Regular(src),
-                    },
-                );
+                self.cfg
+                    .assign(bb, tmp.into(), Rvalue::Regular(src), Span::DUMMY);
 
                 (bb, AccessBuilder::new(self.cx.arena(), tmp))
             }
@@ -971,7 +906,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
             origin: LocalOrigin::Temporary,
         });
 
-        cfg.push_stmt(block, Stmt::LocalLive(env));
+        cfg.live(block, Span::DUMMY, env);
 
         // let parent = cx.air_get_parent(did);
         // let types = cx.typeck(parent);
@@ -992,7 +927,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
             ty: param.ty(),
             origin: LocalOrigin::Param(param.name()),
         });
-        cfg.push_stmt(block, Stmt::LocalLive(param_local));
+        cfg.live(block, Span::DUMMY, param_local);
         alive.insert(param_local);
         params.insert(ParamId::new_usize(ix), param_local);
     }
@@ -1017,8 +952,16 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     };
 
     let bb = builder.lower_expr_into(body_entry, block, ret_place);
-    builder.cfg.live(bb, ret_place);
-    builder.cfg.end_block(bb, BlockExit::Return);
+    let entry_span = body_entry.span;
+    let span = Span::new(
+        entry_span.end() - 1,
+        entry_span.end(),
+        entry_span.line,
+        entry_span.sourceid,
+    );
+
+    builder.cfg.live(bb, span, ret_place);
+    builder.cfg.bb_return(bb, span);
 
     let body = Pill {
         span: body.span,
@@ -1123,8 +1066,8 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
         writeln!(w, "    bb{}:", id.to_usize())?;
 
         for stmt in bb.stmts() {
-            match stmt {
-                Stmt::Call { fun, ret, args } => {
+            match stmt.kind() {
+                StmtKind::Call { fun, ret, args } => {
                     if args.is_empty() {
                         writeln!(w, "{INDENT}Call ({fun:#?}) => {ret:?}")
                     } else {
@@ -1132,13 +1075,13 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
                     }?;
                 }
 
-                Stmt::Nop => writeln!(w, "{INDENT}Nop")?,
+                StmtKind::Nop => writeln!(w, "{INDENT}Nop")?,
 
-                Stmt::Assign { dest, src } => writeln!(w, "{INDENT}{dest:?} = {src:?}")?,
+                StmtKind::Assign { dest, src } => writeln!(w, "{INDENT}{dest:?} = {src:?}")?,
 
-                Stmt::CheckCond(cond) => writeln!(w, "{INDENT}CheckCond({cond:?})")?,
+                StmtKind::CheckCond(cond) => writeln!(w, "{INDENT}CheckCond({cond:?})")?,
 
-                Stmt::LocalLive(local) => writeln!(w, "{INDENT}Live(_{})", local.to_usize())?,
+                StmtKind::LocalLive(local) => writeln!(w, "{INDENT}Live(_{})", local.to_usize())?,
             }
         }
 
@@ -1146,15 +1089,15 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
         write!(w, "{INDENT}")?;
 
         if let Some(exit) = bb.exit() {
-            match exit {
-                BlockExit::Goto(b) => writeln!(w, "goto bb{}", b.to_usize()),
-                BlockExit::Branch { val, true_, false_ } => writeln!(
+            match exit.kind() {
+                BlockExitKind::Goto(b) => writeln!(w, "goto bb{}", b.to_usize()),
+                BlockExitKind::Branch { val, true_, false_ } => writeln!(
                     w,
                     "branch ({val:?}) {{ true: bb{true_bb}, false: bb{false_bb} }}",
                     true_bb = true_.to_usize(),
                     false_bb = false_.to_usize()
                 ),
-                BlockExit::Return => writeln!(w, "return"),
+                BlockExitKind::Return => writeln!(w, "return"),
             }
         } else {
             write!(w, "{INDENT}<broken: no exit!>")
