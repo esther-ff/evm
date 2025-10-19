@@ -153,7 +153,6 @@ impl<'a> DiagEmitterInner<'a> {
     // }
 
     #[allow(clippy::needless_pass_by_value)]
-    #[allow(clippy::unused_self)]
     fn emit_err(&mut self, err: impl TheresError, span: Span) {
         let diag = Diagnostic::error()
             .with_message(err.message())
@@ -164,15 +163,13 @@ impl<'a> DiagEmitterInner<'a> {
         let writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();
 
-        cx(|cx| {
-            codespan_reporting::term::emit_to_write_style(
-                &mut writer.lock(),
-                &config,
-                cx.sources().files(),
-                &diag,
-            )
-            .unwrap();
-        });
+        codespan_reporting::term::emit_to_write_style(
+            &mut writer.lock(),
+            &config,
+            self.srcs.files(),
+            &diag,
+        )
+        .unwrap();
     }
 
     fn get_lines(&self, id: SourceId, line_origin: usize, extra: usize) -> Vec<&'a str> {
