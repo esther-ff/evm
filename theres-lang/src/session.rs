@@ -10,7 +10,7 @@ use crate::ast::Name;
 use crate::driver::Flags;
 use crate::errors::DiagEmitter;
 use crate::id::IdxSlice;
-use crate::pooled::{Pool, Pooled};
+use crate::pooled::Pool;
 use crate::sources::{SourceId, Sources};
 use crate::symbols::SymbolId;
 use crate::types::ty::{FieldDef, FnSig, Instance, InstanceDef, Ty, TyKind};
@@ -31,16 +31,40 @@ where
     f(unsafe { &*(ptr.cast()) })
 }
 
+pub struct Types<'ty> {
+    pub nil: Ty<'ty>,
+    pub bool: Ty<'ty>,
+
+    pub u8: Ty<'ty>,
+    pub u16: Ty<'ty>,
+    pub u32: Ty<'ty>,
+    pub u64: Ty<'ty>,
+
+    pub i8: Ty<'ty>,
+    pub i16: Ty<'ty>,
+    pub i32: Ty<'ty>,
+    pub i64: Ty<'ty>,
+
+    pub f32: Ty<'ty>,
+    pub f64: Ty<'ty>,
+
+    pub err: Ty<'ty>,
+    pub diverges: Ty<'ty>,
+}
+
 pub struct Session<'sess> {
     arena: &'sess Arena,
-    pub(crate) air_map: AirMap<'sess>,
-    pub(crate) types: RefCell<Pool<'sess, TyKind<'sess>>>,
-    instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
-    def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
+    sources: &'sess Sources,
+    air_map: AirMap<'sess>,
 
+    pub(crate) interned_types: RefCell<Pool<'sess, TyKind<'sess>>>,
+    instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
+
+    def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
     diags: &'sess DiagEmitter<'sess>,
     flags: Flags,
-    sources: &'sess Sources,
+
+    pub types: Types<'sess>,
 }
 
 impl<'sess> Session<'sess> {
@@ -51,15 +75,35 @@ impl<'sess> Session<'sess> {
         arena: &'sess Arena,
         air_map: AirMap<'sess>,
     ) -> Self {
+        let mut pool = Pool::new();
+
+        let types = Types {
+            nil: Ty(pool.pool(TyKind::Nil, arena)),
+            bool: Ty(pool.pool(TyKind::Bool, arena)),
+            u8: Ty(pool.pool(TyKind::Uint(IntTy::N8), arena)),
+            u16: Ty(pool.pool(TyKind::Uint(IntTy::N16), arena)),
+            u32: Ty(pool.pool(TyKind::Uint(IntTy::N32), arena)),
+            u64: Ty(pool.pool(TyKind::Uint(IntTy::N64), arena)),
+            i8: Ty(pool.pool(TyKind::Int(IntTy::N8), arena)),
+            i16: Ty(pool.pool(TyKind::Int(IntTy::N16), arena)),
+            i32: Ty(pool.pool(TyKind::Int(IntTy::N32), arena)),
+            i64: Ty(pool.pool(TyKind::Int(IntTy::N64), arena)),
+            f32: Ty(pool.pool(TyKind::Float, arena)),
+            f64: Ty(pool.pool(TyKind::Double, arena)),
+            err: Ty(pool.pool(TyKind::Error, arena)),
+            diverges: Ty(pool.pool(TyKind::Diverges, arena)),
+        };
+
         Self {
             arena,
             def_id_to_instance_interned: RefCell::new(HashMap::new()),
             air_map,
-            types: RefCell::new(Pool::new()),
+            interned_types: RefCell::new(pool),
             instances: RefCell::new(Pool::new()),
             diags,
             flags,
             sources,
+            types,
         }
     }
 
@@ -72,6 +116,10 @@ impl<'sess> Session<'sess> {
             work(self);
             cell.set(null());
         });
+    }
+
+    pub fn air_map(&self) -> &AirMap<'_> {
+        &self.air_map
     }
 
     pub fn dump_air_mode(&self) -> crate::driver::HirDump {
@@ -94,15 +142,15 @@ impl<'sess> Session<'sess> {
         self.arena
     }
 
-    pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
-        let mut instances = self.instances.borrow_mut();
-        if let Some(pooled) = instances.get(&def).copied() {
-            return pooled;
-        }
+    pub fn make_instance(&'sess self, fields: &[Field<'sess>], sym: SymbolId) -> Ty<'sess> {
+        let def = self.gen_instance_def(fields, sym);
+        let reff = self.intern_instance_def(def);
+        let tykind = TyKind::Instance(reff);
+        self.intern_ty(tykind)
+    }
 
-        let new = Pooled(self.arena().alloc(def));
-        instances.insert(def, new);
-        new
+    pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
+        self.instances.borrow_mut().pool(def, self.arena())
     }
 
     pub fn def_type(&self, did: DefId) -> DefType {
@@ -157,10 +205,6 @@ impl<'sess> Session<'sess> {
 
     pub fn upvars_of(&'sess self, did: DefId) -> &'sess HashSet<AirId> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
-    }
-
-    pub fn make_instance(&'sess self, fields: &[Field<'sess>], sym: SymbolId) -> Instance<'sess> {
-        self.intern_instance_def(self.gen_instance_def(fields, sym))
     }
 
     pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
@@ -263,14 +307,7 @@ impl<'sess> Session<'sess> {
             name: name.interned,
         };
 
-        let mut instances = self.instances.borrow_mut();
-        if let Some(pooled) = instances.get(&instance_def).copied() {
-            return pooled;
-        }
-
-        let new = Pooled(self.arena().alloc(instance_def));
-        instances.insert(instance_def, new);
-        new
+        self.intern_instance_def(instance_def)
     }
 
     pub fn lower_ty<'a>(&'sess self, ty: &node::Ty<'a>) -> Ty<'sess>
@@ -282,7 +319,7 @@ impl<'sess> Session<'sess> {
                 inputs: self
                     .arena
                     .alloc_from_iter(inputs.iter().map(|this| self.lower_ty(this))),
-                output: output.map_or_else(|| self.nil(), |this| self.lower_ty(this)),
+                output: output.map_or(self.types.nil, |this| self.lower_ty(this)),
             },
             node::TyKind::Infer => panic!("lowered an Infer ty"),
             node::TyKind::Err => TyKind::Error,
@@ -304,7 +341,7 @@ impl<'sess> Session<'sess> {
                     _ => unreachable!(),
                 },
 
-                Resolved::Err => return self.ty_err(),
+                Resolved::Err => return self.types.err,
                 Resolved::Local(..) => {
                     unreachable!()
                 }
@@ -326,34 +363,4 @@ impl<'sess> Session<'sess> {
             name,
         }
     }
-}
-
-macro_rules! type_fns {
-    ($($name:ident -> $kind:expr),*) => {
-        $(
-            pub fn $name(&'ty self) -> Ty<'ty> {
-                self.intern_ty($kind)
-            }
-        )*
-    };
-}
-
-impl<'ty> Session<'ty> {
-    type_fns!(
-        u8 -> TyKind::Uint(IntTy::N8),
-        u16 -> TyKind::Uint(IntTy::N16),
-        u32 -> TyKind::Uint(IntTy::N32),
-        u64 -> TyKind::Uint(IntTy::N64),
-        i8 -> TyKind::Int(IntTy::N8),
-        i16 -> TyKind::Int(IntTy::N16),
-        i32 -> TyKind::Int(IntTy::N32),
-        i64 -> TyKind::Int(IntTy::N64),
-        f32 -> TyKind::Float,
-        f64 -> TyKind::Double,
-        nil -> TyKind::Nil,
-        ty_err -> TyKind::Error,
-        ty_diverge -> TyKind::Diverges,
-
-        bool -> TyKind::Bool
-    );
 }

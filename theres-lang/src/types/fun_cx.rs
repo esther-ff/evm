@@ -248,10 +248,10 @@ impl<'ty> FunCx<'ty> {
             ExprKind::Block(block) => self.typeck_block(block),
             ExprKind::Field { src, field } => self.typeck_expr_field(src, field),
             ExprKind::List(exprs) => self.typeck_expr_list(exprs, expr.span),
-            ExprKind::Break => self.s.ty_diverge(),
+            ExprKind::Break => self.s.types.diverges,
             ExprKind::Loop { body, reason: _ } => {
                 self.typeck_block(body);
-                self.s.nil()
+                self.s.types.nil
             }
 
             ExprKind::Index {
@@ -270,7 +270,7 @@ impl<'ty> FunCx<'ty> {
                     );
                 }
 
-                self.s.nil()
+                self.s.types.nil
             }
 
             ExprKind::If {
@@ -298,7 +298,7 @@ impl<'ty> FunCx<'ty> {
                         output
                     }
 
-                    TyKind::Error => self.s.ty_err(),
+                    TyKind::Error => self.s.types.err,
 
                     _ => {
                         dbg!(Location::caller());
@@ -309,13 +309,13 @@ impl<'ty> FunCx<'ty> {
                             expr.span,
                         );
 
-                        self.s.ty_err()
+                        self.s.types.err
                     }
                 }
             }
 
             ExprKind::Return { expr: ret_expr } => {
-                let ty = ret_expr.map_or(self.s.nil(), |elm| self.type_of(elm));
+                let ty = ret_expr.map_or(self.s.types.nil, |elm| self.type_of(elm));
 
                 let ret_ty = self
                     .fn_ret_ty
@@ -325,7 +325,7 @@ impl<'ty> FunCx<'ty> {
                     self.type_mismatch_err(ret_ty, ty, ret_expr.map_or(expr.span, |s| s.span));
                 }
 
-                self.s.ty_diverge()
+                self.s.types.diverges
             }
 
             ExprKind::AssignWithOp {
@@ -340,7 +340,7 @@ impl<'ty> FunCx<'ty> {
                     todo!("No binary op ({op:?}) for {variable_ty:?} and {expr_ty:?}")
                 }
 
-                self.s.nil()
+                self.s.types.nil
             }
 
             // ExprKind::CommaSep(exprs) => exprs
@@ -377,11 +377,11 @@ impl<'ty> FunCx<'ty> {
                 Span::between(lhs.span, rhs.span),
             );
 
-            return self.s.ty_err();
+            return self.s.types.err;
         }
 
         if let BinOp::LogicalOr | BinOp::LogicalAnd | BinOp::NotEquality | BinOp::Equality = op {
-            self.s.bool()
+            self.s.types.bool
         } else {
             ty_lhs
         }
@@ -407,7 +407,7 @@ impl<'ty> FunCx<'ty> {
             .diag()
             .emit_err(TypingError::NoUnaryOp { on: (ty) }, target.span);
 
-        self.s.ty_err()
+        self.s.types.err
     }
 
     fn typeck_expr_index(
@@ -423,13 +423,13 @@ impl<'ty> FunCx<'ty> {
                 .diag()
                 .emit_err(TypingError::NoIndexOp { on: (src_ty) }, expr_span);
 
-            return self.s.ty_err();
+            return self.s.types.err;
         };
 
         let index_ty = self.type_of(index);
 
-        if self.unify(self.s.u64(), index_ty).is_err() {
-            self.type_mismatch_err(self.s.u64(), index_ty, expr_span);
+        if self.unify(self.s.types.u64, index_ty).is_err() {
+            self.type_mismatch_err(self.s.types.u64, index_ty, expr_span);
         }
 
         inner_ty
@@ -437,7 +437,7 @@ impl<'ty> FunCx<'ty> {
 
     fn typeck_expr_literal(&mut self, lit: AirLiteral) -> Ty<'ty> {
         match lit {
-            AirLiteral::Bool(..) => self.s.bool(),
+            AirLiteral::Bool(..) => self.s.types.bool,
             AirLiteral::Uint(..) | AirLiteral::Int(..) => {
                 self.new_infer_var(InferKind::Integer, Span::DUMMY)
             }
@@ -493,7 +493,7 @@ impl<'ty> FunCx<'ty> {
     ) -> Ty<'ty> {
         let cond = self.type_of(condition);
         if *cond != TyKind::Bool {
-            self.type_mismatch_err(self.s.bool(), cond, condition.span);
+            self.type_mismatch_err(self.s.types.bool, cond, condition.span);
         }
 
         let block_ty = self.typeck_block(block);
@@ -506,14 +506,14 @@ impl<'ty> FunCx<'ty> {
 
             block_ty
         } else {
-            self.s.nil()
+            self.s.types.nil
         }
     }
 
     fn typeck_expr_field(&mut self, src: &Expr<'_>, field_name: SymbolId) -> Ty<'ty> {
         let src_ty = self.type_of(src);
         if src_ty.is_error() {
-            return self.s.ty_err();
+            return self.s.types.err;
         }
 
         let err = if let TyKind::Instance(def) = *src_ty {
@@ -530,7 +530,7 @@ impl<'ty> FunCx<'ty> {
         };
 
         self.s.diag().emit_err(err, src.span);
-        self.s.ty_err()
+        self.s.types.err
     }
 
     fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
@@ -556,7 +556,7 @@ impl<'ty> FunCx<'ty> {
 
             Resolved::Def(def_id, DefType::Const) => self.s.def_type_of(def_id),
 
-            Resolved::Err => self.s.ty_err(),
+            Resolved::Err => self.s.types.err,
 
             _ => unreachable!("what the fuck?"),
         }
@@ -598,10 +598,10 @@ impl<'ty> FunCx<'ty> {
     ) -> Ty<'ty> {
         let recv_ty = self.type_of(receiver);
         if recv_ty.is_error() {
-            return self.s.ty_err();
+            return self.s.types.err;
         }
 
-        let mut ret_ty = self.s.ty_err();
+        let mut ret_ty = self.s.types.err;
 
         self.s.binds_for_ty(recv_ty, |binds| {
             let Some((def_id, _, span)) = binds
@@ -646,7 +646,9 @@ impl<'ty> FunCx<'ty> {
             self.typeck_stmt(stmt);
         }
 
-        block.expr.map_or(self.s.nil(), |expr| self.type_of(expr))
+        block
+            .expr
+            .map_or(self.s.types.nil, |expr| self.type_of(expr))
     }
 
     fn type_of(&mut self, expr: &Expr<'_>) -> Ty<'ty> {
@@ -820,12 +822,12 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
         let ty = match **val {
             TyKind::InferTy(..) => match *self.cx.ty_var_ty(*val) {
                 TyKind::InferTy(inner) => match inner.kind {
-                    InferKind::Float => self.sess.f64(),
-                    InferKind::Integer => self.sess.i64(),
+                    InferKind::Float => self.sess.types.f64,
+                    InferKind::Integer => self.sess.types.i64,
                     InferKind::Regular => {
                         let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
                         self.sess.diag().emit_err(TypingError::InferFail, loc);
-                        self.sess.ty_err()
+                        self.sess.types.err
                     }
                 },
 
@@ -861,12 +863,12 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
             TyKind::InferTy(..) => {
                 let resolved = match *self.cx.ty_var_ty(ty) {
                     TyKind::InferTy(inner) => match inner.kind {
-                        InferKind::Float => self.sess.f64(),
-                        InferKind::Integer => self.sess.i64(),
+                        InferKind::Float => self.sess.types.f64,
+                        InferKind::Integer => self.sess.types.i64,
                         InferKind::Regular => {
                             let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
                             self.sess.diag().emit_err(TypingError::InferFail, loc);
-                            self.sess.ty_err()
+                            self.sess.types.err
                         }
                     },
 

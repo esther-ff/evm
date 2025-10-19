@@ -330,7 +330,7 @@ impl<'il> PillBuilder<'il> {
                         dest: into.into(),
                         src: Rvalue::Regular(Operand::Imm(Imm::empty(
                             self.cx,
-                            self.cx.ty_diverge(),
+                            self.cx.types.diverges,
                         ))),
                     },
                 );
@@ -478,7 +478,7 @@ impl<'il> PillBuilder<'il> {
                         dest: into.into(),
                         src: Rvalue::Regular(Operand::Imm(Imm::empty(
                             self.cx,
-                            self.cx.ty_diverge(),
+                            self.cx.types.diverges,
                         ))),
                     },
                 );
@@ -603,13 +603,13 @@ impl<'il> PillBuilder<'il> {
     ) -> BasicBlock {
         let (short_case_ret, negate, binop) = match op {
             LogicalOp::And => (
-                Imm::scalar(self.cx, Scalar::new_bool(false), self.cx.bool()),
+                Imm::scalar(self.cx, Scalar::new_bool(false), self.cx.types.bool),
                 true,
                 BinOp::BitAnd,
             ),
 
             LogicalOp::Or => (
-                Imm::scalar(self.cx, Scalar::new_bool(true), self.cx.bool()),
+                Imm::scalar(self.cx, Scalar::new_bool(true), self.cx.types.bool),
                 false,
                 BinOp::BitOr,
             ),
@@ -629,7 +629,7 @@ impl<'il> PillBuilder<'il> {
             Rvalue::Regular(lhs)
         };
 
-        let eval = self.temporary(self.cx.bool());
+        let eval = self.temporary(self.cx.types.bool);
         self.cfg.push_stmt(
             bb,
             Stmt::Assign {
@@ -751,8 +751,8 @@ impl<'il> PillBuilder<'il> {
         let (bb, mut base) = self.as_access(base, bb);
 
         let (bb, idx) = self.as_operand(idx, bb);
-        let len = self.temporary(self.cx.u64()).into();
-        let eval = self.temporary(self.cx.bool()).into();
+        let len = self.temporary(self.cx.types.u64).into();
+        let eval = self.temporary(self.cx.types.bool).into();
 
         self.cfg.push_stmt(
             bb,
@@ -855,7 +855,7 @@ impl<'il> PillBuilder<'il> {
                 bb = self.lower_expr_into(inner, bb, tmp);
                 (
                     bb,
-                    Rvalue::Regular(Operand::Imm(Imm::empty(self.cx, self.cx.nil()))),
+                    Rvalue::Regular(Operand::Imm(Imm::empty(self.cx, self.cx.types.nil))),
                 )
             }
 

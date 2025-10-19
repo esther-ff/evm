@@ -265,7 +265,7 @@ impl<'ir> EairBuilder<'ir> {
                     from_lowering: true,
                 },
                 span: expr.span,
-                ty: self.cx.nil(),
+                ty: self.cx.types.nil,
             };
 
             self.current_block.push(actual_init);
@@ -289,7 +289,7 @@ impl<'ir> EairBuilder<'ir> {
                     let expr = self.lower_expr(expr);
 
                     let actual = Expr {
-                        ty: self.cx.nil(),
+                        ty: self.cx.types.nil,
                         span: expr.span,
                         kind: ExprKind::Semi(self.cx.arena().alloc(expr)),
                     };
@@ -525,10 +525,7 @@ impl<'ir> EairBuilder<'ir> {
                 let false_ = else_.map(|expr| self.lower_expr_alloc(expr));
 
                 let true_ = self.cx.arena().alloc(Expr {
-                    ty: block
-                        .exprs
-                        .last()
-                        .map_or_else(|| self.cx.nil(), |expr| expr.ty),
+                    ty: block.exprs.last().map_or(self.cx.types.nil, |expr| expr.ty),
                     kind: ExprKind::Block(block),
                     span: block_span,
                 });

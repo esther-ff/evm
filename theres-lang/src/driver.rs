@@ -206,7 +206,7 @@ impl Compiler {
         let (uni, map) = air::lower_universe(&arena, &diags, &ast);
 
         Session::new(&diags, self.flags, &self.sources, &arena, map).enter(|session| {
-            air::dump_air(&mut stdout(), self.flags.dump_hir, uni, &session.air_map).unwrap();
+            air::dump_air(&mut stdout(), self.flags.dump_hir, uni, session.air_map()).unwrap();
 
             typeck_universe(session, uni);
             let main_did = check::check_for_main(session, uni).expect("todo: no main lmao!");

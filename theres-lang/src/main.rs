@@ -12,6 +12,7 @@
 mod air;
 mod arena;
 mod ast;
+mod cache;
 mod driver;
 mod eair;
 mod errors;

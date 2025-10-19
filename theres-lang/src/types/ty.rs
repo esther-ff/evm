@@ -14,7 +14,7 @@ use std::ops::Deref;
 /// Interned type for a particular something.
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Ty<'ty>(Pooled<'ty, TyKind<'ty>>);
+pub struct Ty<'ty>(pub Pooled<'ty, TyKind<'ty>>);
 
 impl Debug for Ty<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -386,13 +386,7 @@ impl Display for Ty<'_> {
 
 impl<'cx> crate::session::Session<'cx> {
     pub fn intern_ty(&'cx self, ty: TyKind<'cx>) -> Ty<'cx> {
-        let mut tys = self.types.borrow_mut();
-        if let Some(pooled) = tys.get(&ty).copied() {
-            return Ty(pooled);
-        }
-
-        let new = Pooled(self.arena().alloc(ty));
-        tys.insert(ty, new);
-        Ty(new)
+        let ty = self.interned_types.borrow_mut().pool(ty, self.arena());
+        Ty(ty)
     }
 }
