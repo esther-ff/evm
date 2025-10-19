@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ptr::{from_ref, null};
+use std::sync::Arc;
 
 use crate::air::def::{BodyId, DefId, DefPathSeg, DefType, IntTy, PrimTy, Resolved};
 use crate::air::node::{self, BindItemKind, Field, Node, ThingKind};
@@ -52,6 +53,16 @@ pub struct Types<'ty> {
     pub diverges: Ty<'ty>,
 }
 
+crate::cache! {
+    [lock: std::cell::RefCell]
+
+    #[doc = "Returns the name of a definition specified by the `did` parameter."]
+    #[inline]
+    pub fn name_of(&'cx! self, did: DefId) -> &'cx Arc<str> {
+        name_of
+    }
+}
+
 pub struct Session<'sess> {
     arena: &'sess Arena,
     sources: &'sess Sources,
@@ -65,15 +76,16 @@ pub struct Session<'sess> {
     flags: Flags,
 
     pub types: Types<'sess>,
+    cache: Cache<'sess>,
 }
 
-impl<'sess> Session<'sess> {
+impl<'cx> Session<'cx> {
     pub fn new(
-        diags: &'sess DiagEmitter<'sess>,
+        diags: &'cx DiagEmitter<'cx>,
         flags: Flags,
-        sources: &'sess Sources,
-        arena: &'sess Arena,
-        air_map: AirMap<'sess>,
+        sources: &'cx Sources,
+        arena: &'cx Arena,
+        air_map: AirMap<'cx>,
     ) -> Self {
         let mut pool = Pool::new();
 
@@ -104,12 +116,13 @@ impl<'sess> Session<'sess> {
             flags,
             sources,
             types,
+            cache: Cache::new(),
         }
     }
 
-    pub fn enter<F>(&'sess self, work: F)
+    pub fn enter<F>(&'cx self, work: F)
     where
-        F: FnOnce(&'sess Self),
+        F: FnOnce(&'cx Self),
     {
         GLOBAL_CTXT.with(|cell| {
             cell.set(from_ref(self).cast());
@@ -134,7 +147,7 @@ impl<'sess> Session<'sess> {
         self.sources.get_by_source_id(id).name()
     }
 
-    pub fn diag(&self) -> &'sess DiagEmitter<'_> {
+    pub fn diag(&self) -> &'cx DiagEmitter<'_> {
         self.diags
     }
 
@@ -142,14 +155,14 @@ impl<'sess> Session<'sess> {
         self.arena
     }
 
-    pub fn make_instance(&'sess self, fields: &[Field<'sess>], sym: SymbolId) -> Ty<'sess> {
+    pub fn make_instance(&'cx self, fields: &[Field<'cx>], sym: SymbolId) -> Ty<'cx> {
         let def = self.gen_instance_def(fields, sym);
         let reff = self.intern_instance_def(def);
         let tykind = TyKind::Instance(reff);
         self.intern_ty(tykind)
     }
 
-    pub fn intern_instance_def(&'sess self, def: InstanceDef<'sess>) -> Instance<'sess> {
+    pub fn intern_instance_def(&'cx self, def: InstanceDef<'cx>) -> Instance<'cx> {
         self.instances.borrow_mut().pool(def, self.arena())
     }
 
@@ -161,7 +174,7 @@ impl<'sess> Session<'sess> {
         self.air_map.get_def(did)
     }
 
-    pub fn air_get_instance_of_ctor(&'sess self, did: DefId) -> DefId {
+    pub fn air_get_instance_of_ctor(&'cx self, did: DefId) -> DefId {
         self.air_map.get_instance_of_ctor(did)
     }
 
@@ -189,25 +202,11 @@ impl<'sess> Session<'sess> {
         self.air_map.parent(did)
     }
 
-    pub fn name_of(&self, did: DefId) -> std::sync::Arc<str> {
-        self.air_map
-            .def_path(did)
-            .inner()
-            .iter()
-            .map(|seg| match seg {
-                DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => sym.get_interned(),
-                DefPathSeg::Lambda => "{lambda}",
-            })
-            .intersperse("::")
-            .collect::<String>()
-            .into()
-    }
-
-    pub fn upvars_of(&'sess self, did: DefId) -> &'sess HashSet<AirId> {
+    pub fn upvars_of(&'cx self, did: DefId) -> &'cx HashSet<AirId> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
-    pub fn def_type_of(&'sess self, def_id: DefId) -> Ty<'sess> {
+    pub fn def_type_of(&'cx self, def_id: DefId) -> Ty<'cx> {
         log::trace!("def_type_of def_id={def_id}");
         match self.air_get_def(def_id) {
             Node::Thing(thing) => match thing.kind {
@@ -235,7 +234,7 @@ impl<'sess> Session<'sess> {
         }
     }
 
-    pub fn fn_sig_for(&'sess self, def_id: DefId) -> FnSig<'sess> {
+    pub fn fn_sig_for(&'cx self, def_id: DefId) -> FnSig<'cx> {
         match self.def_type(def_id) {
             DefType::Fun => {
                 let (sig, _) = self.air_get_fn(def_id);
@@ -274,7 +273,7 @@ impl<'sess> Session<'sess> {
     }
 
     /// This is so fucking stupid
-    pub fn binds_for_ty<F, R>(&'sess self, ty: Ty<'sess>, work: F) -> R
+    pub fn binds_for_ty<F, R>(&'cx self, ty: Ty<'cx>, work: F) -> R
     where
         F: FnOnce(Vec<node::Bind<'_>>) -> R,
     {
@@ -289,7 +288,7 @@ impl<'sess> Session<'sess> {
         )
     }
 
-    pub fn instance_def(&'sess self, def_id: DefId) -> Instance<'sess> {
+    pub fn instance_def(&'cx self, def_id: DefId) -> Instance<'cx> {
         if let Some(v) = self.def_id_to_instance_interned.borrow().get(&def_id) {
             return *v;
         }
@@ -310,9 +309,9 @@ impl<'sess> Session<'sess> {
         self.intern_instance_def(instance_def)
     }
 
-    pub fn lower_ty<'a>(&'sess self, ty: &node::Ty<'a>) -> Ty<'sess>
+    pub fn lower_ty<'a>(&'cx self, ty: &node::Ty<'a>) -> Ty<'cx>
     where
-        'sess: 'a,
+        'cx: 'a,
     {
         let tykind = match ty.kind {
             node::TyKind::Fun { inputs, output } => TyKind::Fn {
@@ -351,7 +350,7 @@ impl<'sess> Session<'sess> {
         self.intern_ty(tykind)
     }
 
-    fn gen_instance_def(&'sess self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'sess> {
+    fn gen_instance_def(&'cx self, fields: &[Field<'_>], name: SymbolId) -> InstanceDef<'cx> {
         InstanceDef {
             fields: IdxSlice::new(self.arena().alloc_from_iter(fields.iter().map(|field| {
                 FieldDef {
@@ -363,4 +362,21 @@ impl<'sess> Session<'sess> {
             name,
         }
     }
+}
+
+fn name_of<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Arc<str> {
+    let arc = cx
+        .air_map()
+        .def_path(did)
+        .inner()
+        .iter()
+        .map(|seg| match seg {
+            DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => sym.get_interned(),
+            DefPathSeg::Lambda => "{lambda}",
+        })
+        .intersperse("::")
+        .collect::<String>()
+        .into();
+
+    cx.arena().alloc(arc)
 }

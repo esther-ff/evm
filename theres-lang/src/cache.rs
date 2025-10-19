@@ -1,5 +1,7 @@
+use crate::air::def::DefId;
+
 #[macro_export]
-macro_rules! cache_fn {
+macro_rules! cache {
     (
         [lock: $($lock:tt)*]
         $(
@@ -21,18 +23,42 @@ macro_rules! cache_fn {
     ) => {
         type CacheCell<K, V> = $($lock)*<::std::collections::HashMap<K, V>>;
 
-        #[derive(Debug)]
+        mod a {
+            pub(crate) trait Detuple<T>: Sized {
+                fn spec_into(self) -> T;
+            }
 
-        struct Cache {
+            impl<T> Detuple<T> for (T,) {
+                #[inline(always)]
+                fn spec_into(self) -> T {
+                    self.0
+                }
+            }
+
+            impl<T> Detuple<T> for T {
+                #[inline(always)]
+                fn spec_into(self) -> T {
+                    self
+                }
+            }
+        }
+
+        use a::Detuple as _;
+
+        #[derive(Debug)]
+        #[allow(unused_parens)]
+        struct Cache<'cx> {
+            _boo: ::core::marker::PhantomData<&'cx ()>,
             $(
                 $name:
                 CacheCell<($($param_ty),*), $ret>,
             )*
         }
 
-        impl Cache {
+        impl<'cx> Cache<'cx> {
             pub(crate) fn new() -> Self {
                 Self {
+                    _boo: ::core::marker::PhantomData,
                     $(
                         $name: CacheCell::new(::std::collections::HashMap::new()),
                     )*
@@ -40,7 +66,7 @@ macro_rules! cache_fn {
             }
         }
 
-        impl Session {
+        impl<'cx> Session<'cx> {
             $(
                 $(
                     #[$outer]
@@ -51,7 +77,7 @@ macro_rules! cache_fn {
                 ) -> $ret
                 {
                     if let Some(cache) = self.cache.$name.borrow().get(
-                        &($($param,)*)
+                        &($($param,)*).spec_into()
                     )
                     {
                         return *cache
@@ -59,12 +85,24 @@ macro_rules! cache_fn {
 
                     let ret = $body(self, $($param,)*);
                     self.cache.$name.borrow_mut().insert
-                        (($($param,)*),
+                        (($($param,)*).spec_into(),
                     ret);
 
-                    ret
+                    self.cache.$name.borrow_mut()[&(($($param,)*)).spec_into()]
+
                 }
             )*
         }
     };
+}
+
+impl From<(DefId,)> for DefId {
+    fn from(value: (DefId,)) -> Self {
+        value.0
+    }
+}
+impl<'a> From<&'a (DefId,)> for &'a DefId {
+    fn from(value: &'a (DefId,)) -> Self {
+        &value.0
+    }
 }
