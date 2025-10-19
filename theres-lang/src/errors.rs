@@ -8,7 +8,6 @@ use std::panic::Location;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
-use crate::session::cx;
 use crate::sources::{SourceId, Sources};
 use crate::span::Span;
 

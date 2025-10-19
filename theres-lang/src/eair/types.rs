@@ -733,8 +733,8 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
 
         let w = std::io::stdout();
         let mut lock = w.lock();
-        writeln!(&mut lock, "{:#?}", &builder.eair).expect("writing to stdout failed!")
-    };
+        writeln!(&mut lock, "{:#?}", &builder.eair).expect("writing to stdout failed!");
+    }
 
     cx.arena().alloc(builder.eair)
 }

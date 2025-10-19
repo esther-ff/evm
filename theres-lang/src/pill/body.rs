@@ -1032,7 +1032,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     if cx.flags().dump_pill {
         let w = std::io::stdout();
         let mut lock = w.lock();
-        dump_pill(&mut lock, alloc, did).expect("writing to stdout failed!")
+        dump_pill(&mut lock, alloc, did).expect("writing to stdout failed!");
     }
 
     alloc
