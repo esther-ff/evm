@@ -24,7 +24,6 @@ mod private {
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use std::panic::Location;
 
 use crate::air::AirId;
 use crate::air::def::DefId;
@@ -668,8 +667,8 @@ impl<'il> PillBuilder<'il> {
                 src: Rvalue::Regular(Operand::Imm(short_case_ret)),
             },
         );
-        self.cfg.end_block(lhs_true, BlockExit::Goto(end_bb));
 
+        self.cfg.end_block(lhs_true, BlockExit::Goto(end_bb));
         let (lhs_false, val) = self.as_operand(rhs, lhs_false);
 
         self.cfg.push_stmt(
@@ -1031,16 +1030,15 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> P
     }
 }
 
-enum State {
-    Params,
-    Locals,
-}
-
 #[allow(clippy::too_many_lines)]
 pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
     const INDENT: &str = "      ";
-    write!(w, "fun {}(", cx(|cx| cx.name_of(did)))?;
+    enum State {
+        Params,
+        Locals,
+    }
 
+    write!(w, "fun {}(", cx(|cx| cx.name_of(did)))?;
     let mut state = State::Params;
     let mut arg_count = pill.arg_count;
     for (ix, local) in pill
@@ -1137,7 +1135,7 @@ pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<(
         }
 
         writeln!(w)?;
-        write!(w, "{INDENT}exit: ")?;
+        write!(w, "{INDENT}")?;
 
         if let Some(exit) = bb.exit() {
             match exit {
