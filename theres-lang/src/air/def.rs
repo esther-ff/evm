@@ -12,6 +12,7 @@ pub fn def_id(i: u32) -> DefId {
 pub enum DefPathSeg {
     TypeNs(SymbolId),
     ValueNs(SymbolId),
+    BindBlock,
     Lambda,
 }
 
@@ -31,6 +32,10 @@ impl DefPath {
 
     pub fn push_lambda(&mut self) {
         self.segments.push(DefPathSeg::Lambda);
+    }
+
+    pub fn push_bind(&mut self) {
+        self.segments.push(DefPathSeg::BindBlock);
     }
 
     pub fn push_ns(&mut self, sym: SymbolId, ns: Namespace) {

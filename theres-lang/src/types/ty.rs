@@ -347,9 +347,9 @@ impl Display for Ty<'_> {
                 use crate::session::Session;
 
                 fn inner<'cx>(cx: &'cx Session<'cx>, f: &mut Formatter, did: DefId) -> fmt::Result {
-                    let sym = cx.air_get_fn(did).1;
+                    // let sym = cx.air_get_fn(did).1;
                     let typed_sig = cx.fn_sig_for(did);
-                    write!(f, "fun {name}(", name = sym.get_interned())?;
+                    write!(f, "fun {name}(", name = cx.name_of(did))?;
 
                     for (ix, ty) in typed_sig.inputs.iter().enumerate() {
                         write!(f, "{ty}")?;

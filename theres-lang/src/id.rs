@@ -111,9 +111,9 @@ impl<I: IndexId, T> IdxVec<I, T> {
     //     IdxSlice::new(self.inner.as_slice())
     // }
 
-    // pub fn inner(&self) -> &[T] {
-    //     &self.inner
-    // }
+    pub fn inner(&self) -> &[T] {
+        &self.inner
+    }
 
     // pub fn len(&self) -> usize {
     //     self.inner.len()

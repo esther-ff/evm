@@ -3,7 +3,7 @@ mod private {
     crate::newtyped_index!(ParamId, ParamMap, ParamVec, ParamSlice);
 
     pub type Locals<'ir> = LocalVec<super::LocalData<'ir>>;
-    pub type Params<'ir> = LocalVec<super::ParamData<'ir>>;
+    pub type Params<'ir> = ParamVec<super::ParamData<'ir>>;
 }
 
 use std::collections::{HashMap, HashSet};
@@ -28,7 +28,7 @@ use crate::{
     types::{fun_cx::TypeTable, ty::Ty},
 };
 
-pub use private::{LocalId, Locals, Params};
+pub use private::{LocalId, Locals, ParamId, Params};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalData<'ir> {
@@ -56,6 +56,17 @@ impl<'ir> From<LocalData<'ir>> for crate::pill::body::LocalData<'ir> {
 #[derive(Debug)]
 pub struct ParamData<'ir> {
     ty: Ty<'ir>,
+    name: Option<SymbolId>,
+}
+
+impl<'ir> ParamData<'ir> {
+    pub fn ty(&self) -> Ty<'ir> {
+        self.ty
+    }
+
+    pub fn name(&self) -> Option<SymbolId> {
+        self.name
+    }
 }
 
 #[derive(Debug)]
@@ -179,6 +190,8 @@ pub enum ExprKind<'ir> {
 
     Local(LocalId),
 
+    Param(ParamId),
+
     List(&'ir [Expr<'ir>]),
 
     Upvar {
@@ -237,6 +250,7 @@ pub struct EairBuilder<'ir> {
     current_block: Vec<Expr<'ir>, &'ir Arena>,
     upvars: &'ir HashSet<AirId>,
     lowered_locals: HashMap<AirId, LocalId>,
+    lowered_params: HashMap<AirId, ParamId>,
 }
 
 impl<'ir> EairBuilder<'ir> {
@@ -247,8 +261,6 @@ impl<'ir> EairBuilder<'ir> {
             mutbl: local.mutability,
             name: local.name.interned.into(),
         });
-
-        dbg!(local.init);
 
         if let Some(expr) = local.init {
             let init = self.lower_expr(expr);
@@ -278,7 +290,6 @@ impl<'ir> EairBuilder<'ir> {
         let old = mem::replace(&mut self.current_block, Vec::new_in(self.cx.arena()));
 
         for stmt in block.stmts {
-            dbg!(stmt);
             match stmt.kind {
                 StmtKind::Local(local) => {
                     let id = self.lower_local(local);
@@ -307,7 +318,6 @@ impl<'ir> EairBuilder<'ir> {
         }
 
         let new = mem::replace(&mut self.current_block, old);
-        dbg!(&new);
         Block { exprs: new }
     }
 
@@ -332,7 +342,7 @@ impl<'ir> EairBuilder<'ir> {
                 let lhs = self.lower_expr_alloc(lhs);
                 let rhs = self.lower_expr_alloc(rhs);
 
-                match bin_op_to_eair(op) {
+                let expr = match bin_op_to_eair(op) {
                     Ops::Regular(op) => {
                         /* later check for overloads */
                         Expr {
@@ -346,7 +356,10 @@ impl<'ir> EairBuilder<'ir> {
                         ty,
                         span: expr.span,
                     },
-                }
+                };
+
+                dbg!(op);
+                dbg!(expr)
             }
 
             Unary { target, op } => Expr {
@@ -518,7 +531,6 @@ impl<'ir> EairBuilder<'ir> {
                 block,
                 else_,
             } => {
-                dbg!(ty);
                 let cond = self.lower_expr_alloc(condition);
                 let block_span = block.span;
                 let block = self.lower_block(block);
@@ -572,8 +584,14 @@ impl<'ir> EairBuilder<'ir> {
                     let kind = if self.upvars.contains(local_id) {
                         ExprKind::Upvar { upvar: *local_id }
                     } else {
-                        let lowered_id = *self.lowered_locals.get(local_id).unwrap();
-                        ExprKind::Local(lowered_id)
+                        match self.lowered_params.get(local_id) {
+                            None => {
+                                let lowered_id = *self.lowered_locals.get(local_id).unwrap();
+                                ExprKind::Local(lowered_id)
+                            }
+
+                            Some(p) => ExprKind::Param(*p),
+                        }
                     };
 
                     Expr { kind, ty, span }
@@ -645,7 +663,7 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
     let inputs;
 
     let mut params: Params<'cx> = IdxVec::new();
-    let mut locals: Locals<'cx> = IdxVec::new();
+    let locals: Locals<'cx> = IdxVec::new();
 
     let kind = match cx.def_type(did) {
         DefType::Lambda => BodyKind::Lambda,
@@ -653,6 +671,7 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
 
         wrong => unreachable!("`build_eair`: trying to lower a {wrong:#?}"),
     };
+
     let upvars = if let DefType::Lambda = cx.def_type(did) {
         let parent = cx.air_get_parent(did);
         let upvars = cx.upvars_of(did);
@@ -677,16 +696,14 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
         dummy
     };
 
-    let lowered_locals: HashMap<_, _> = inputs
+    let lowered_params: HashMap<_, _> = inputs
         .iter()
         .map(|param| {
             let ty = types.node_ty(param.air_id);
-            let id = locals.push(LocalData {
+            let id = params.push(ParamData {
                 ty,
-                mutbl: Constant::Yes,
                 name: param.name.interned.into(),
             });
-            params.push(ParamData { ty });
             (param.air_id, id)
         })
         .collect();
@@ -707,7 +724,8 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Eair<'cx> {
         types,
         current_block: Vec::new_in(cx.arena()),
         upvars,
-        lowered_locals,
+        lowered_locals: HashMap::new(),
+        lowered_params,
     };
 
     let entry = builder.lower_expr(body);

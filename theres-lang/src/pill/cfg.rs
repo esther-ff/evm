@@ -73,7 +73,7 @@ impl Debug for Imm<'_> {
                 _ => write!(f, "<broken: {}>", self.ty),
             },
 
-            ImmKind::Empty => write!(f, "Empty::<{ty}>", ty = self.ty),
+            ImmKind::Empty => write!(f, "{{{ty}}}", ty = self.ty),
         }
     }
 }
@@ -227,6 +227,10 @@ impl<'il> Cfg<'il> {
         }
     }
 
+    pub fn live(&mut self, bb: BasicBlock, local: Local) {
+        self.bbs[bb].stmts.push(Stmt::LocalLive(local));
+    }
+
     pub fn end_block(&mut self, bb: BasicBlock, exit: BlockExit<'il>) {
         debug_assert!(self.bbs[bb].exit.is_none());
         self.bbs[bb].exit.replace(exit);
@@ -254,5 +258,9 @@ impl<'il> Cfg<'il> {
             .iter()
             .enumerate()
             .map(|(ix, bb)| (BasicBlock::new_usize(ix), bb))
+    }
+
+    pub fn len(&self) -> usize {
+        self.bbs.len()
     }
 }

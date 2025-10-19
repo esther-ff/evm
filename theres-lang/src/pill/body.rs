@@ -22,22 +22,25 @@ mod private {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::panic::Location;
 
 use crate::air::AirId;
 use crate::air::def::DefId;
-use crate::air::node::AirLiteral;
+use crate::air::node::{AirLiteral, Constant};
 use crate::ast;
-use crate::eair::types::{Block, BodyKind, Eair, Expr, ExprKind, LogicalOp};
+use crate::eair::types::{
+    Block, BodyKind, Eair, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId,
+};
 use crate::pill::access::{Access, AccessBuilder};
-use crate::pill::cfg::{AdtKind, BlockExit, Imm, Operand, Rvalue, Stmt};
+use crate::pill::cfg::{AdtKind, BasicBlock, BlockExit, Cfg, Imm, Operand, Rvalue, Stmt};
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
 use crate::session::{Session, cx};
+use crate::span::Span;
 use crate::symbols::SymbolId;
-use crate::types::ty::TyKind;
+use crate::types::ty::{Ty, TyKind};
 
 pub use private::Local;
 use private::Locals;
@@ -53,6 +56,7 @@ pub struct LocalData<'il> {
 enum LocalOrigin {
     Temporary,
     User(SymbolId),
+    Param(Option<SymbolId>),
 }
 
 impl<'il> LocalData<'il> {
@@ -73,14 +77,6 @@ impl<'il> LocalData<'il> {
     }
 }
 
-use crate::{
-    air::node::Constant,
-    eair::types::LocalId as EairLocal,
-    pill::cfg::{BasicBlock, Cfg},
-    span::Span,
-    types::ty::Ty,
-};
-
 #[derive(Debug)]
 pub struct Pill<'il> {
     span: Span,
@@ -96,9 +92,20 @@ struct PillBuilder<'il> {
     map: HashMap<EairLocal, Local>,
     captures: HashMap<AirId, Access<'il>>,
     current_loop_end: Option<BasicBlock>,
+    params: HashMap<ParamId, Local>,
+    alive: HashSet<Local>,
 }
 
 impl<'il> PillBuilder<'il> {
+    fn live(&mut self, bb: BasicBlock, local: Local) {
+        println!("-- live for {bb} - {local}");
+        if !local.is_dummy() && !self.alive.contains(&local) {
+            println!("local {local} is now alive!");
+            self.cfg.live(bb, local);
+            self.alive.insert(local);
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     #[track_caller]
     fn as_operand(&mut self, expr: &Expr<'il>, mut bb: BasicBlock) -> (BasicBlock, Operand<'il>) {
@@ -154,7 +161,6 @@ impl<'il> PillBuilder<'il> {
             ExprKind::Empty => (bb, Operand::Imm(Imm::empty(self.cx, expr.ty))),
 
             _ => {
-                println!("{:?}", expr.kind);
                 let tmp = self.temporary(expr.ty);
                 bb = self.lower_expr_into(expr, bb, tmp);
 
@@ -167,6 +173,7 @@ impl<'il> PillBuilder<'il> {
     #[track_caller]
     fn lower_expr_into(&mut self, expr: &Expr<'il>, mut bb: BasicBlock, into: Local) -> BasicBlock {
         match &expr.kind {
+            ExprKind::Param(..) => todo!(),
             ExprKind::Lambda => {
                 let ty = expr.ty;
                 let lambda = ty.expect_lambda();
@@ -358,6 +365,7 @@ impl<'il> PillBuilder<'il> {
                 };
 
                 self.cfg.push_stmt(bb, stmt);
+                self.live(bb, ret);
                 bb
             }
 
@@ -409,6 +417,7 @@ impl<'il> PillBuilder<'il> {
                     };
 
                     self.cfg.push_stmt(bb, stmt);
+                    self.live(bb, self.map[&loc]);
                     return bb;
                 }
 
@@ -425,8 +434,8 @@ impl<'il> PillBuilder<'il> {
                     },
                 );
 
-                if !into.is_dummy() {
-                    self.cfg.push_stmt(bb, Stmt::LocalLive(into));
+                if let ExprKind::Local(loc) = lhs.kind {
+                    self.live(bb, self.map[&loc]);
                 }
 
                 bb
@@ -483,6 +492,7 @@ impl<'il> PillBuilder<'il> {
                     },
                 );
 
+                self.cfg.live(bb, Local::ret_place());
                 self.cfg.end_block(bb, BlockExit::Goto(BasicBlock::DUMMY));
 
                 bb
@@ -517,6 +527,7 @@ impl<'il> PillBuilder<'il> {
         false_: Option<&Expr<'il>>,
         bb: BasicBlock,
     ) -> BasicBlock {
+        let loc = local;
         let local = local.into();
         let (bb, cond) = self.as_operand(cond, bb);
 
@@ -561,6 +572,7 @@ impl<'il> PillBuilder<'il> {
             );
         }
 
+        self.cfg.live(bb_end, loc);
         self.cfg.end_block(bb_true_end, BlockExit::Goto(bb_end));
         self.cfg.end_block(bb_false_end, BlockExit::Goto(bb_end));
 
@@ -601,6 +613,7 @@ impl<'il> PillBuilder<'il> {
         tmp: Local,
         op: LogicalOp,
     ) -> BasicBlock {
+        println!("Are you here");
         let (short_case_ret, negate, binop) = match op {
             LogicalOp::And => (
                 Imm::scalar(self.cx, Scalar::new_bool(false), self.cx.types.bool),
@@ -637,6 +650,8 @@ impl<'il> PillBuilder<'il> {
                 src: cond,
             },
         );
+
+        self.live(bb, eval);
         self.cfg.end_block(
             bb,
             BlockExit::Branch {
@@ -645,6 +660,7 @@ impl<'il> PillBuilder<'il> {
                 false_: lhs_false,
             },
         );
+
         self.cfg.push_stmt(
             lhs_true,
             Stmt::Assign {
@@ -657,7 +673,7 @@ impl<'il> PillBuilder<'il> {
         let (lhs_false, val) = self.as_operand(rhs, lhs_false);
 
         self.cfg.push_stmt(
-            lhs_true,
+            lhs_false,
             Stmt::Assign {
                 dest: tmp.into(),
                 src: Rvalue::Binary {
@@ -668,6 +684,7 @@ impl<'il> PillBuilder<'il> {
             },
         );
 
+        self.live(end_bb, tmp);
         self.cfg.end_block(lhs_false, BlockExit::Goto(end_bb));
         end_bb
     }
@@ -696,8 +713,6 @@ impl<'il> PillBuilder<'il> {
     fn process_block(&mut self, dest: Local, block: &Block<'il>, mut bb: BasicBlock) -> BasicBlock {
         let dest = dest.into();
         let exprs = block.exprs();
-
-        dbg!(block);
 
         for (ix, expr) in exprs.iter().enumerate() {
             if ix == exprs.len() - 1 {
@@ -728,12 +743,11 @@ impl<'il> PillBuilder<'il> {
                 ExprKind::Semi(inner) => {
                     let tmp = self.temporary(inner.ty);
                     bb = self.lower_expr_into(inner, bb, tmp);
+                    self.live(bb, tmp);
                 }
 
                 _ => {
-                    println!("ignored expr: {expr:#?}, it's ty: {}", expr.ty);
                     let tmp = self.temporary(expr.ty);
-                    dbg!(tmp);
                     bb = self.lower_expr_into(expr, bb, tmp);
                 }
             }
@@ -850,7 +864,6 @@ impl<'il> PillBuilder<'il> {
             }
 
             ExprKind::Semi(inner) => {
-                println!("Semi! at {}", Location::caller());
                 let tmp = self.temporary(inner.ty);
                 bb = self.lower_expr_into(inner, bb, tmp);
                 (
@@ -867,7 +880,6 @@ impl<'il> PillBuilder<'il> {
             }
 
             _ => {
-                println!("expr to as_rvalue: {expr:?} ");
                 let (bb, op) = self.as_operand(expr, bb);
 
                 (bb, Rvalue::Regular(op))
@@ -899,7 +911,6 @@ impl<'il> PillBuilder<'il> {
             ),
 
             _ => {
-                println!("expr to as_access: {expr:?}");
                 let tmp = self.temporary(expr.ty);
                 let (bb, src) = self.as_operand(expr, bb);
                 self.cfg.push_stmt(
@@ -918,41 +929,43 @@ impl<'il> PillBuilder<'il> {
     #[track_caller]
     #[inline]
     fn temporary(&mut self, ty: Ty<'il>) -> Local {
-        let id = self.locals.push(LocalData {
+        self.locals.push(LocalData {
             mutbl: Constant::Yes,
             ty,
             origin: LocalOrigin::Temporary,
-        });
+        })
 
-        println!(
-            "loc: {} id: {}, ty: {}",
-            Location::caller(),
-            id.to_usize(),
-            ty
-        );
-        id
+        // println!(
+        //     "loc: {} id: {}, ty: {}",
+        //     Location::caller(),
+        //     id.to_usize(),
+        //     ty
+        // );
     }
 }
 
 pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> Pill<'cx> {
     let mut captures = HashMap::new();
-    let cap = body.params.len() + body.locals.len() + 1;
-    let mut locals = Locals::new_from_vec(Vec::with_capacity(cap));
+    let mut cfg = Cfg::new();
+    let mut alive = HashSet::with_capacity(body.params.len());
+    let mut arg_count = body.params.len();
+    let mut locals = Locals::new_from_vec(Vec::with_capacity(arg_count + 1));
+    let mut params = HashMap::with_capacity(body.params.len() + 1);
 
     let body_entry = body
         .entry
         .as_ref()
         .expect("body should have an entry point!");
-    let _ = locals.push(LocalData {
-        mutbl: Constant::Yes,
+
+    let ret_place = locals.push(LocalData {
+        mutbl: Constant::No,
         ty: body_entry.ty,
         origin: LocalOrigin::Temporary,
     });
 
-    let mut extra = 0;
-    // fix! after trestig :3
+    let block = cfg.new_block();
+
     if let BodyKind::Lambda = body.kind {
-        extra += 1;
         let ty = cx.def_type_of(did);
         let upvars = cx.upvars_of(did);
         let env = locals.push(LocalData {
@@ -960,29 +973,34 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> P
             ty,
             origin: LocalOrigin::Temporary,
         });
-        locals.reserve(upvars.len() + 1);
 
-        let parent = cx.air_get_parent(did);
-        let types = cx.typeck(parent);
+        cfg.push_stmt(block, Stmt::LocalLive(env));
 
+        // let parent = cx.air_get_parent(did);
+        // let types = cx.typeck(parent);
+
+        captures.reserve(upvars.len());
         for var in upvars {
-            let ty = types.node_ty(*var);
+            // let ty = types.node_ty(*var);
             let acc = Access::base(env);
-
-            let _ = locals.push(LocalData {
-                mutbl: Constant::Yes,
-                ty,
-                origin: LocalOrigin::Temporary,
-            });
-
             captures.insert(*var, acc);
         }
+
+        arg_count += 1;
     }
 
-    for _param in body.params.iter() {
-        todo!()
+    for (ix, param) in body.params.iter().enumerate() {
+        let param_local = locals.push(LocalData {
+            mutbl: Constant::No,
+            ty: param.ty(),
+            origin: LocalOrigin::Param(param.name()),
+        });
+        cfg.push_stmt(block, Stmt::LocalLive(param_local));
+        alive.insert(param_local);
+        params.insert(ParamId::new_usize(ix), param_local);
     }
 
+    locals.reserve(body.locals.len());
     let mut map = HashMap::with_capacity(body.locals.len());
     for (local, data) in body.locals.iter().enumerate() {
         assert!(data.ty().maybe_infer().is_none());
@@ -992,72 +1010,104 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, body: &Eair<'cx>, did: DefId) -> P
 
     let mut builder = PillBuilder {
         cx,
-        cfg: Cfg::new(),
+        cfg,
         locals,
         captures,
         map,
         current_loop_end: None,
+        params,
+        alive,
     };
 
-    let block = builder.cfg.new_block();
-    // dbg!(body_entry);
-    let bb = builder.lower_expr_into(body_entry, block, Local::ZERO);
+    let bb = builder.lower_expr_into(body_entry, block, ret_place);
+    builder.cfg.live(bb, ret_place);
     builder.cfg.end_block(bb, BlockExit::Return);
 
     Pill {
         span: body.span,
-        arg_count: body.params.len() + extra,
+        arg_count,
         cfg: builder.cfg,
         locals: builder.locals,
     }
 }
 
+enum State {
+    Params,
+    Locals,
+}
+
+#[allow(clippy::too_many_lines)]
 pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
     const INDENT: &str = "      ";
-
     write!(w, "fun {}(", cx(|cx| cx.name_of(did)))?;
 
-    if let Some(args) = pill.locals.as_slice().get(1..pill.arg_count) {
-        for (ix, arg) in args.iter().enumerate() {
-            write!(
-                w,
-                "{mutbl} _{ix}: {ty}",
-                ty = arg.ty,
-                mutbl = match arg.mutbl {
-                    Constant::Yes => "mut",
-                    Constant::No => "const",
+    let mut state = State::Params;
+    let mut arg_count = pill.arg_count;
+    for (ix, local) in pill
+        .locals
+        .inner()
+        .get(1..)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
+        match state {
+            State::Params => {
+                if arg_count == 1 {
+                    state = State::Locals;
                 }
-            )?;
 
-            if ix != args.len() - 1 {
-                write!(w, " ,")?;
-            }
-        }
-    }
+                write!(
+                    w,
+                    "{mutbl} _{num}: {ty}",
+                    ty = local.ty,
+                    mutbl = match local.mutbl {
+                        Constant::Yes => "mut",
+                        Constant::No => "const",
+                    },
+                    num = ix + 1
+                )?;
 
-    writeln!(w, ") => {ty} {{", ty = pill.locals[Local::ZERO].ty)?;
-
-    if let Some(args) = pill.locals.as_slice().get(pill.arg_count..) {
-        for (ix, arg) in args
-            .iter()
-            .chain(std::iter::once(&pill.locals[Local::ZERO]))
-            .enumerate()
-        {
-            write!(
-                w,
-                "    let {mutbl} _{ix}: {ty}",
-                ty = arg.ty,
-                mutbl = match arg.mutbl {
-                    Constant::Yes => "mut",
-                    Constant::No => "const",
+                if let LocalOrigin::Param(name) = local.origin {
+                    match name {
+                        None => write!(w, "<lambda env>"),
+                        Some(sym) => write!(w, " ({})", sym.get_interned()),
+                    }?;
                 }
-            )?;
 
-            if let LocalOrigin::User(v) = arg.origin {
-                write!(w, " ({})", v.get_interned())?;
+                if arg_count != 1 {
+                    write!(w, " ,")?;
+                } else if arg_count == 1 {
+                    writeln!(w, ") => {ty} {{", ty = pill.locals[Local::ZERO].ty)?;
+
+                    writeln!(
+                        w,
+                        "    let mut _0: {ty}",
+                        ty = pill.locals.first().unwrap().ty,
+                    )?;
+                }
+
+                arg_count -= 1;
             }
 
-            writeln!(w)?;
+            State::Locals => {
+                write!(
+                    w,
+                    "    let {mutbl} _{ix}: {ty}",
+                    ty = local.ty,
+                    mutbl = match local.mutbl {
+                        Constant::Yes => "mut",
+                        Constant::No => "const",
+                    },
+                    ix = if ix == 0 { 0 } else { ix + pill.arg_count }
+                )?;
+
+                if let LocalOrigin::User(v) = local.origin {
+                    write!(w, " ({})", v.get_interned())?;
+                }
+
+                writeln!(w)?;
+            }
         }
     }
 
@@ -1104,7 +1154,9 @@ pub fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<(
             write!(w, "{INDENT}<broken: no exit!>")
         }?;
 
-        writeln!(w)?;
+        if id.to_usize() != pill.cfg.len() - 1 {
+            writeln!(w)?;
+        }
     }
 
     writeln!(w, "}}")

@@ -893,11 +893,15 @@ impl<'cx> Session<'cx> {
         let body = self.air_body_via_id(air_sig.body);
         let ty_sig = self.fn_sig_for(did);
 
+        let mut table = TypeTable::new();
         let node_type: HashMap<_, _> = air_sig
             .arguments
             .iter()
             .zip(ty_sig.inputs)
-            .map(|(param, ty)| (param.air_id, *ty))
+            .map(|(param, ty)| {
+                assert!(table.air_node_tys.insert(param.air_id, *ty).is_none());
+                (param.air_id, *ty)
+            })
             .collect();
 
         let mut cx = FunCx {
@@ -920,7 +924,7 @@ impl<'cx> Session<'cx> {
 
         TyCollector {
             cx,
-            table: TypeTable::new(),
+            table,
             sess: self,
         }
         .visit(body)

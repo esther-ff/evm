@@ -273,6 +273,15 @@ impl<'air> AirMap<'air> {
         }
     }
 
+    pub fn expect_bind(&'air self, def_id: DefId) -> &'air node::Bind<'air> {
+        let node::Thing { kind, .. } = self.get_thing(def_id);
+        let node::ThingKind::Bind(bind) = kind else {
+            panic!("{def_id} doesn't point to a bind!")
+        };
+
+        bind
+    }
+
     pub fn expect_instance(&'air self, def_id: DefId) -> (&'air [node::Field<'air>], Name) {
         let node::ThingKind::Instance {
             fields,

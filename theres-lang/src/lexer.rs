@@ -209,10 +209,10 @@ impl Display for TokenKind {
 }
 
 macro_rules! operators {
-    (Bitwise, $char:expr, $lexer:expr, $with_eq:ident, $not_eq:ident) => {{
+    (Bitwise, $char:expr, $lexer:expr, $with_eq:ident, $not_eq:ident, $logic:ident) => {{
         if $lexer.chars.next_char() == Some($char) {
             let span = $lexer.new_span($lexer.chars.position, $lexer.chars.position + 1);
-            let token = Token::new(span, TokenKind::LogicalAnd);
+            let token = Token::new(span, TokenKind::$logic);
             $lexer.tokens.push(token);
             continue;
         }
@@ -430,10 +430,10 @@ impl<'a> Lexer<'a> {
                     operators!(self, ModAssign, Modulo);
                 }
                 '&' => {
-                    operators!(Bitwise, '&', self, BitAndAssign, BitAnd);
+                    operators!(Bitwise, '&', self, BitAndAssign, BitAnd, LogicalAnd);
                 }
                 '|' => {
-                    operators!(Bitwise, '&', self, BitOrAssign, BitOr);
+                    operators!(Bitwise, '|', self, BitOrAssign, BitOr, LogicalOr);
                 }
 
                 '^' => {

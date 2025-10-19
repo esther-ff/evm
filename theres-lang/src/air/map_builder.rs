@@ -31,8 +31,15 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
     type Result = ();
 
     fn visit_thing(&mut self, thing: &'air Thing<'air>) -> Self::Result {
+        dbg!(self.current_item, thing.def_id);
         self.m.insert_node(Node::Thing(thing), thing.air_id);
+        let this_did = thing.def_id;
         let old = self.current_item.replace(thing.def_id);
+
+        if let Some(old) = old {
+            self.m.child_to_parent.insert(thing.def_id, old);
+        }
+
         walk_thing(self, thing);
         self.current_item = old;
     }
@@ -40,6 +47,10 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
     fn visit_bind_item(&mut self, bind_item: &'air node::BindItem<'air>) -> Self::Result {
         self.m
             .insert_node(Node::BindItem(bind_item), bind_item.air_id);
+
+        self.m
+            .child_to_parent
+            .insert(bind_item.def_id, self.current_item.unwrap());
 
         match bind_item.kind {
             node::BindItemKind::Fun { sig, name: _ } => self.visit_fn_sig(sig),

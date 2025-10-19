@@ -53,10 +53,7 @@ impl Scalar {
     pub fn to_bool(self) -> bool {
         let byte = self.to_u8();
 
-        assert!(
-            byte >= 1,
-            "`to_bool` has an invalid val for a bool: {byte}!"
-        );
+        assert!(byte < 2, "`to_bool` has an invalid val for a bool: {byte}!");
 
         byte == 1
     }

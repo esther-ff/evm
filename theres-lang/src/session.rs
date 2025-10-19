@@ -190,6 +190,10 @@ impl<'cx> Session<'cx> {
         self.air_map.expect_lambda(did)
     }
 
+    pub fn air_get_bind(&self, did: DefId) -> &node::Bind<'_> {
+        self.air_map.expect_bind(did)
+    }
+
     pub fn air_body(&self, did: DefId) -> &node::Expr<'_> {
         self.air_map.body_of(did)
     }
@@ -365,18 +369,34 @@ impl<'cx> Session<'cx> {
 }
 
 fn name_of<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Arc<str> {
-    let arc = cx
-        .air_map()
-        .def_path(did)
-        .inner()
-        .iter()
-        .map(|seg| match seg {
-            DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => sym.get_interned(),
-            DefPathSeg::Lambda => "{lambda}",
-        })
-        .intersperse("::")
-        .collect::<String>()
-        .into();
+    use std::fmt::Write as _;
+    let path = cx.air_map().def_path(did);
 
-    cx.arena().alloc(arc)
+    // Heuristic: ~8 characters average per segment.
+    // Might be dumb!!
+    let mut string = String::with_capacity(path.inner().len() << 8);
+    for (ix, seg) in path.inner().iter().enumerate() {
+        if ix != 0 && ix & 1 != 0 {
+            string.push_str("::");
+        }
+
+        match seg {
+            DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => {
+                string.push_str(sym.get_interned());
+            }
+            DefPathSeg::Lambda => string.push_str("{lambda}"),
+            DefPathSeg::BindBlock => {
+                let parent = cx.air_get_parent(did);
+                let parent_def = cx.air_get_bind(parent);
+                write!(
+                    &mut string,
+                    "<bind {ty}>",
+                    ty = cx.lower_ty(parent_def.with)
+                )
+                .expect("writing to memory is infallible");
+            }
+        }
+    }
+
+    cx.arena().alloc(string.into())
 }

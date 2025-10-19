@@ -42,14 +42,12 @@ impl<'air> AirVisitor<'air> for MainCheck<'_> {
                     },
                     sig.span,
                 );
-                return;
             }
 
             if !typed_sig.inputs.is_empty() {
                 self.cx
                     .diag()
                     .emit_err(MainError::WrongSignature { sig: typed_sig }, sig.span);
-                return;
             }
 
             self.result = Some(thing.def_id);

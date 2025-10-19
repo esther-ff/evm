@@ -956,6 +956,7 @@ impl Parser<'_> {
         let start = lhs.span;
 
         while self.consume_if(TokenKind::LogicalAnd) {
+            println!("logic_and!");
             let rhs = self.equality()?;
             let span = Span::between(start, rhs.span);
             let expr_ty = ExprType::BinaryExpr {

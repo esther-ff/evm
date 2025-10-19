@@ -291,11 +291,13 @@ impl<'vis> Visitor<'vis> for FirstPass {
             Resolved::Def(id, DefType::Realm),
         );
 
+        self.defs.push_bind();
         self.with_new_scope(|this| {
             for item in &val.items {
                 this.visit_bind_item(item);
             }
         });
+        self.defs.pop();
     }
 
     #[track_caller]
