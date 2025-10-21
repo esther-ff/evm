@@ -33,7 +33,9 @@ use crate::eair::types::{
     Block, BodyKind, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId,
 };
 use crate::pill::access::{Access, AccessBuilder};
-use crate::pill::cfg::{AdtKind, BasicBlock, BlockExitKind, Cfg, Imm, Operand, Rvalue, StmtKind};
+use crate::pill::cfg::{
+    AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, StmtKind,
+};
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
 use crate::session::{Session, cx};
@@ -951,7 +953,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         alive,
     };
 
-    let bb = builder.lower_expr_into(body_entry, block, ret_place);
+    let ret_bb = builder.lower_expr_into(body_entry, block, ret_place);
     let entry_span = body_entry.span;
     let span = Span::new(
         entry_span.end() - 1,
@@ -960,8 +962,22 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         entry_span.sourceid,
     );
 
-    builder.cfg.live(bb, span, ret_place);
-    builder.cfg.bb_return(bb, span);
+    builder.cfg.live(ret_bb, span, ret_place);
+    builder.cfg.bb_return(ret_bb, span);
+
+    for (_, block) in builder.cfg.blocks_mut() {
+        let Some(exit) = block.exit() else {
+            unreachable!("basic block without terminator")
+        };
+
+        if let BlockExitKind::Goto(bb) = exit.kind()
+            && bb.is_dummy()
+        {
+            block
+                .exit
+                .replace(BlockExit::new(BlockExitKind::Goto(ret_bb), exit.span()));
+        }
+    }
 
     let body = Pill {
         span: body.span,
@@ -1063,7 +1079,21 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
     writeln!(w)?;
 
     for (id, bb) in pill.cfg.blocks() {
-        writeln!(w, "    bb{}:", id.to_usize())?;
+        write!(w, "    bb{}", id.to_usize(),)?;
+
+        let preds = bb.predecessors();
+        if !preds.is_empty() {
+            write!(w, " {{")?;
+            for (ix, pred) in preds.iter().enumerate() {
+                write!(w, "bb{}", pred.to_usize())?;
+
+                if ix != preds.len() - 1 {
+                    write!(w, ", ")?;
+                }
+            }
+            write!(w, "}}")?;
+        }
+        writeln!(w, ":")?;
 
         for stmt in bb.stmts() {
             match stmt.kind() {

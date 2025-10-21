@@ -115,6 +115,10 @@ pub struct BlockExit<'il> {
 }
 
 impl<'il> BlockExit<'il> {
+    pub(super) fn new(kind: BlockExitKind<'il>, span: Span) -> Self {
+        Self { span, kind }
+    }
+
     pub fn kind(&self) -> &BlockExitKind<'il> {
         &self.kind
     }
@@ -237,8 +241,9 @@ impl<'il> Stmt<'il> {
 
 #[derive(Debug)]
 pub struct BbData<'il> {
+    predecessors: Vec<BasicBlock>,
     stmts: Vec<Stmt<'il>>,
-    exit: Option<BlockExit<'il>>,
+    pub(super) exit: Option<BlockExit<'il>>,
 }
 
 impl<'il> BbData<'il> {
@@ -248,6 +253,14 @@ impl<'il> BbData<'il> {
 
     pub fn exit(&self) -> Option<&BlockExit<'il>> {
         self.exit.as_ref()
+    }
+
+    pub fn predecessors(&self) -> &[BasicBlock] {
+        &self.predecessors
+    }
+
+    pub fn add_predecessor(&mut self, bb: BasicBlock) {
+        self.predecessors.push(bb);
     }
 }
 
@@ -311,6 +324,7 @@ impl<'il> Cfg<'il> {
     }
 
     pub fn goto(&mut self, bb: BasicBlock, target: BasicBlock, span: Span) {
+        self.bbs[target].predecessors.push(bb);
         self.bbs[bb].exit.replace(BlockExit {
             span,
             kind: BlockExitKind::Goto(target),
@@ -336,6 +350,8 @@ impl<'il> Cfg<'il> {
         false_: BasicBlock,
         span: Span,
     ) {
+        self.bbs[true_].predecessors.push(bb);
+        self.bbs[false_].predecessors.push(bb);
         self.bbs[bb].exit.replace(BlockExit {
             span,
             kind: BlockExitKind::Branch { val, true_, false_ },
@@ -348,6 +364,7 @@ impl<'il> Cfg<'il> {
 
     pub fn new_block(&mut self) -> BasicBlock {
         self.bbs.push(BbData {
+            predecessors: vec![],
             stmts: vec![],
             exit: None,
         })
@@ -358,6 +375,14 @@ impl<'il> Cfg<'il> {
             .iter()
             .enumerate()
             .map(|(ix, bb)| (BasicBlock::new_usize(ix), bb))
+    }
+
+    pub fn blocks_mut(&mut self) -> impl Iterator<Item = (BasicBlock, &mut BbData<'il>)> {
+        self.bbs
+            .to_slice_mut()
+            .iter_mut()
+            .enumerate()
+            .map(move |(ix, bb)| (BasicBlock::new_usize(ix), bb))
     }
 
     pub fn len(&self) -> usize {

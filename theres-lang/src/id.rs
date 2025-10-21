@@ -17,6 +17,10 @@ impl<I, T> IdxSlice<I, T> {
     pub fn new(slice: &[T]) -> &Self {
         unsafe { &*(core::ptr::from_ref(slice) as *const Self) }
     }
+
+    pub fn new_mut(slice: &mut [T]) -> &mut Self {
+        unsafe { &mut *(core::ptr::from_mut(slice) as *mut Self) }
+    }
 }
 
 impl<I: IndexId, T> IdxSlice<I, T> {
@@ -40,6 +44,12 @@ impl<I, T> core::ops::Deref for IdxSlice<I, T> {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl<I, T> core::ops::DerefMut for IdxSlice<I, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 
@@ -107,9 +117,13 @@ impl<I: IndexId, T> IdxVec<I, T> {
         self.inner.get_mut(id.idx())
     }
 
-    // pub fn to_slice(&self) -> &IdxSlice<I, T> {
-    //     IdxSlice::new(self.inner.as_slice())
-    // }
+    pub fn to_slice(&self) -> &IdxSlice<I, T> {
+        IdxSlice::new(self.inner.as_slice())
+    }
+
+    pub fn to_slice_mut(&mut self) -> &mut IdxSlice<I, T> {
+        IdxSlice::new_mut(self.inner.as_mut_slice())
+    }
 
     pub fn inner(&self) -> &[T] {
         &self.inner
