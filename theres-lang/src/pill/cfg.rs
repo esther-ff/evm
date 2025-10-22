@@ -213,11 +213,6 @@ pub enum StmtKind<'il> {
 
     CheckCond(Operand<'il>),
 
-    // TailCall {
-    //     fun: Operand,
-    //     ret: AltarId,
-    //     args: Vec<Operand>,
-    // }
     Nop,
 
     LocalLive(Local),

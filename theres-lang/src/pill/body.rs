@@ -86,6 +86,19 @@ pub struct Pill<'il> {
     locals: Locals<'il>,
 }
 
+impl<'il> Pill<'il> {
+    pub(crate) fn cfg(&self) -> &Cfg<'il> {
+        &self.cfg
+    }
+
+    pub(crate) fn locals(&self) -> impl Iterator<Item = (Local, &LocalData<'il>)> {
+        self.locals
+            .iter()
+            .enumerate()
+            .map(|(ix, val)| (Local::new_usize(ix), val))
+    }
+}
+
 struct PillBuilder<'il> {
     cx: &'il Session<'il>,
     cfg: Cfg<'il>,

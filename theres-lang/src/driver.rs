@@ -211,7 +211,9 @@ impl Compiler {
             typeck_universe(session, uni);
             let main_did = check::check_for_main(session, uni).expect("todo: no main lmao!");
 
-            let _ = session.build_pill(main_did);
+            let pill = session.build_pill(main_did);
+            let flow = crate::pill::dataflow::analyze_maybe_init_variables(pill.cfg());
+            dbg!(flow);
         });
     }
 

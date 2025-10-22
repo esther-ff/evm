@@ -55,6 +55,14 @@ impl Access<'_> {
     pub fn get_base(&self) -> Local {
         self.base
     }
+
+    pub fn only_local(&self) -> Option<Local> {
+        if self.modifs.is_empty() {
+            return Some(self.base);
+        }
+
+        None
+    }
 }
 
 impl Debug for Access<'_> {
