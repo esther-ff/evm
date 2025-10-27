@@ -1112,6 +1112,8 @@ impl Parser<'_> {
             let tok = self.lexemes.previous();
 
             let op = match tok.kind {
+                TokenKind::BitAnd => UnaryOp::AddrOf,
+                TokenKind::Star => UnaryOp::Deref,
                 TokenKind::ExclamationMark => UnaryOp::Not,
                 TokenKind::Minus => UnaryOp::Negation,
                 _ => {

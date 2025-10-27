@@ -66,6 +66,7 @@ macro_rules! cache {
             }
         }
 
+        #[allow(clippy::double_parens)]
         impl<'cx> Session<'cx> {
             $(
                 $(

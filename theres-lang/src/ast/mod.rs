@@ -65,14 +65,18 @@ impl Display for BinOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnaryOp {
     Negation,
+    Deref,
+    AddrOf,
     Not,
 }
 
 impl Display for UnaryOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let write = match self {
+            UnaryOp::AddrOf => "ref",
             UnaryOp::Negation => "neg",
             UnaryOp::Not => "not",
+            UnaryOp::Deref => "deref",
         };
 
         write!(f, "{write}")

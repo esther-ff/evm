@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ptr::{from_ref, null};
 use std::sync::Arc;
 
@@ -88,7 +88,7 @@ crate::cache! {
         build_eair
     }
 
-    #[doc = "Builds a PILL body for the specified `DefId`"]
+    /// Builds a PILL body for the specified `DefId`
     pub fn build_pill(&'cx! self, did: DefId) -> &'cx Pill<'cx> {
         build_pill
     }
@@ -102,7 +102,6 @@ pub struct Session<'sess> {
     pub(crate) interned_types: RefCell<Pool<'sess, TyKind<'sess>>>,
     instances: RefCell<Pool<'sess, InstanceDef<'sess>>>,
 
-    def_id_to_instance_interned: RefCell<HashMap<DefId, Instance<'sess>>>,
     diags: &'sess DiagEmitter<'sess>,
     flags: Flags,
 
@@ -139,7 +138,6 @@ impl<'cx> Session<'cx> {
 
         Self {
             arena,
-            def_id_to_instance_interned: RefCell::new(HashMap::new()),
             air_map,
             interned_types: RefCell::new(pool),
             instances: RefCell::new(Pool::new()),

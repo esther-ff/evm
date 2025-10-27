@@ -157,6 +157,8 @@ pub enum Rvalue<'il> {
     List(Vec<Operand<'il>>),
 
     Length(Access<'il>),
+
+    AddrOf(Access<'il>),
 }
 
 impl Debug for Rvalue<'_> {
@@ -183,6 +185,8 @@ impl Debug for Rvalue<'_> {
                     write!(f, " }}")
                 }
             }
+
+            Self::AddrOf(inner) => write!(f, "&{inner:?}"),
 
             Self::List(list) => write!(f, "{list:?}"),
 

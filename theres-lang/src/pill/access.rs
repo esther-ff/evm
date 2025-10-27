@@ -23,6 +23,10 @@ impl<'il> AccessBuilder<'il> {
         self.modifs.push(AccessKind::Index(idx));
     }
 
+    pub fn deref(&mut self) {
+        self.modifs.push(AccessKind::Deref)
+    }
+
     pub fn field(&mut self, field: FieldId) {
         self.modifs.push(AccessKind::Field(field));
     }
@@ -39,6 +43,7 @@ impl<'il> AccessBuilder<'il> {
 enum AccessKind<'il> {
     Index(Operand<'il>),
     Field(FieldId),
+    Deref,
 }
 
 #[derive(Copy, Clone)]
@@ -72,6 +77,7 @@ impl Debug for Access<'_> {
         for kind in self.modifs {
             match kind {
                 AccessKind::Index(_idx) => write!(f, "[idx?]")?,
+                AccessKind::Deref => write!(f, "*")?,
                 AccessKind::Field(id) => write!(f, ".f{}", id.to_usize())?,
             }
         }

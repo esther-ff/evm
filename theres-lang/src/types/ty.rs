@@ -97,6 +97,8 @@ pub enum TyKind<'ty> {
     InferTy(InferTy),
 
     Lambda(&'ty LambdaEnv<'ty>),
+
+    Ref(Ty<'ty>),
 }
 
 impl<'ty> TyKind<'ty> {
@@ -110,6 +112,18 @@ impl<'ty> TyKind<'ty> {
                     ..
                 })
         )
+    }
+
+    pub fn is_ref(self) -> bool {
+        matches!(self, TyKind::Ref(..))
+    }
+
+    pub fn peel_ref(self) -> Ty<'ty> {
+        let TyKind::Ref(inner) = self else {
+            panic!("`peel_ref` called on non-reference type")
+        };
+
+        inner
     }
 
     pub fn is_float_like(self) -> bool {
@@ -304,6 +318,7 @@ impl TheresError for TypingError<'_> {
 impl Display for Ty<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let str = match **self {
+            TyKind::Ref(inner) => return write!(f, "&{inner}"),
             TyKind::Bool => "bool",
             TyKind::Uint(size) => match size {
                 IntTy::N8 => "u8",

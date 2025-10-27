@@ -387,27 +387,47 @@ impl<'ty> FunCx<'ty> {
         }
     }
 
-    fn typeck_expr_un_op(&mut self, target: &Expr<'_>, _op: UnaryOp) -> Ty<'ty> {
+    fn typeck_expr_un_op(&mut self, target: &Expr<'_>, op: UnaryOp) -> Ty<'ty> {
         let ty = self.type_of(target);
+        match op {
+            UnaryOp::Deref => {
+                if !ty.is_ref() {
+                    self.s
+                        .diag()
+                        .emit_err(TypingError::NoUnaryOp { on: (ty) }, target.span);
 
-        if let TyKind::Bool = *ty {
-            return ty;
-        }
+                    return self.s.types.err;
+                }
 
-        match *ty {
-            TyKind::Bool | TyKind::Int(..) => (),
-            TyKind::InferTy(inferty) if inferty.is_integer() => {
-                self.obligation_for(inferty.id(), Obligation::Neg);
-                return ty;
+                ty.peel_ref()
             }
-            _ => return ty,
+
+            UnaryOp::AddrOf => self.s.intern_ty(TyKind::Ref(ty)),
+
+            UnaryOp::Negation => match *ty {
+                TyKind::Int(..) => ty,
+                TyKind::InferTy(infer) => {
+                    self.obligation_for(infer.id(), Obligation::Neg);
+                    ty
+                }
+                _ => {
+                    self.s
+                        .diag()
+                        .emit_err(TypingError::NoUnaryOp { on: (ty) }, target.span);
+                    self.s.types.err
+                }
+            },
+
+            UnaryOp::Not => match *ty {
+                TyKind::Int(..) | TyKind::Bool | TyKind::Uint(..) => ty,
+                _ => {
+                    self.s
+                        .diag()
+                        .emit_err(TypingError::NoUnaryOp { on: (ty) }, target.span);
+                    self.s.types.err
+                }
+            },
         }
-
-        self.s
-            .diag()
-            .emit_err(TypingError::NoUnaryOp { on: (ty) }, target.span);
-
-        self.s.types.err
     }
 
     fn typeck_expr_index(
@@ -720,7 +740,7 @@ impl<'ty> FunCx<'ty> {
         loop {
             match (
                 sig_tys.next(),
-                call_tys.next().map(|expr| self.typeck_expr(expr)),
+                call_tys.next().map(|expr| self.type_of(expr)),
             ) {
                 (Some(sig_ty), Some(call_ty)) => {
                     if self.unify(sig_ty, call_ty).is_err() {

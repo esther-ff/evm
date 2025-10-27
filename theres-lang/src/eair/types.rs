@@ -188,6 +188,10 @@ pub enum ExprKind<'ir> {
         idx: &'ir Expr<'ir>,
     },
 
+    AddrOf(&'ir Expr<'ir>),
+
+    Deref(&'ir Expr<'ir>),
+
     Local(LocalId),
 
     Param(ParamId),
@@ -359,13 +363,27 @@ impl<'ir> EairBuilder<'ir> {
                 }
             }
 
-            Unary { target, op } => Expr {
-                kind: ExprKind::Unary {
-                    operand: self.lower_expr_alloc(target),
-                    op,
+            Unary { target, op } => match op {
+                UnaryOp::Negation | UnaryOp::Not => Expr {
+                    kind: ExprKind::Unary {
+                        operand: self.lower_expr_alloc(target),
+                        op,
+                    },
+                    ty,
+                    span,
                 },
-                ty,
-                span,
+
+                UnaryOp::Deref => Expr {
+                    ty,
+                    span,
+                    kind: ExprKind::Deref(self.lower_expr_alloc(target)),
+                },
+
+                UnaryOp::AddrOf => Expr {
+                    ty,
+                    span,
+                    kind: ExprKind::AddrOf(self.lower_expr_alloc(target)),
+                },
             },
 
             Assign { variable, value } => Expr {

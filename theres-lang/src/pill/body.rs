@@ -435,6 +435,7 @@ impl<'il> PillBuilder<'il> {
                         op: match *op {
                             ast::UnaryOp::Negation => UnOp::Neg,
                             ast::UnaryOp::Not => UnOp::Not,
+                            _ => unreachable!(),
                         },
                         val,
                     },
@@ -489,6 +490,14 @@ impl<'il> PillBuilder<'il> {
                 self.current_loop_end.take();
                 self.cfg.live(bb, Span::DUMMY, into);
                 loop_end
+            }
+
+            _ => {
+                let rvalue;
+                (bb, rvalue) = self.as_rvalue(expr, bb);
+                self.cfg.assign(bb, into.into(), rvalue, expr.span);
+                self.live(bb, into, expr.span);
+                bb
             }
         }
     }
@@ -804,6 +813,7 @@ impl<'il> PillBuilder<'il> {
                         op: match op {
                             ast::UnaryOp::Negation => UnOp::Neg,
                             ast::UnaryOp::Not => UnOp::Not,
+                            _ => unreachable!(),
                         },
                         val,
                     },
@@ -823,11 +833,17 @@ impl<'il> PillBuilder<'il> {
                 )
             }
 
-            ExprKind::Field { .. } | ExprKind::Index { .. } => {
+            ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::Deref(..) => {
                 let acc;
                 (bb, acc) = self.as_access_full(expr, bb);
 
                 (bb, Rvalue::Regular(Operand::Use(acc)))
+            }
+
+            ExprKind::AddrOf(inner) => {
+                let acc;
+                (bb, acc) = self.as_access_full(inner, bb);
+                (bb, Rvalue::AddrOf(acc))
             }
 
             _ => {
@@ -843,7 +859,11 @@ impl<'il> PillBuilder<'il> {
         (bb, builder.finish(self.cx))
     }
 
-    fn as_access(&mut self, expr: &Expr<'il>, bb: BasicBlock) -> (BasicBlock, AccessBuilder<'il>) {
+    fn as_access(
+        &mut self,
+        expr: &Expr<'il>,
+        mut bb: BasicBlock,
+    ) -> (BasicBlock, AccessBuilder<'il>) {
         match expr.kind {
             ExprKind::Field { base, field_idx } => {
                 let (bb, mut base) = self.as_access(base, bb);
@@ -860,6 +880,13 @@ impl<'il> PillBuilder<'il> {
                 bb,
                 AccessBuilder::new(self.cx.arena(), self.captures[&upvar].get_base()),
             ),
+
+            ExprKind::Deref(inner) => {
+                let mut derefed;
+                (bb, derefed) = self.as_access(inner, bb);
+                derefed.deref();
+                (bb, derefed)
+            }
 
             _ => {
                 let tmp = self.temporary(expr.ty);
@@ -880,13 +907,6 @@ impl<'il> PillBuilder<'il> {
             ty,
             origin: LocalOrigin::Temporary,
         })
-
-        // println!(
-        //     "loc: {} id: {}, ty: {}",
-        //     Location::caller(),
-        //     id.to_usize(),
-        //     ty
-        // );
     }
 }
 
