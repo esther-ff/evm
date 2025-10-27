@@ -88,6 +88,15 @@ pub enum Operand<'il> {
     Use(Access<'il>),
 }
 
+impl<'il> Operand<'il> {
+    pub fn maybe_use(&self) -> Option<Access<'il>> {
+        match self {
+            Self::Imm { .. } => None,
+            Self::Use(inner) => Some(*inner),
+        }
+    }
+}
+
 impl Debug for Operand<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

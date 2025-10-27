@@ -2,7 +2,7 @@ use crate::{
     id::IdxVec,
     pill::{
         body::Local,
-        cfg::{BasicBlock, BlockExitKind, Cfg, StmtKind},
+        cfg::{BasicBlock, Cfg, Operand, Rvalue, StmtKind},
     },
 };
 
@@ -72,15 +72,59 @@ impl MaybeInitVariables {
     }
 }
 
-pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
-    let base = DataflowState {
-        gen_: HashSet::new(),
-        in_: HashSet::new(),
-        out: HashSet::new(),
-    };
+pub struct Dead;
 
+fn analyze_operand(op: &Operand<'_>, alive: &HashSet<Local>) {
+    match op.maybe_use() {
+        None => (),
+        Some(loc) if alive.contains(&loc.get_base()) => (),
+        Some(..) => {
+            todo!("uninit var")
+        }
+    }
+}
+
+fn analyze_rvalue(rvalue: &Rvalue<'_>, alive: &HashSet<Local>) {
+    match rvalue {
+        Rvalue::Binary { lhs, rhs, .. } => {
+            analyze_operand(lhs, alive);
+            analyze_operand(rhs, alive);
+        }
+
+        Rvalue::Unary { val, .. } => analyze_operand(val, alive),
+        Rvalue::Adt { args, .. } => {
+            for elm in args {
+                analyze_operand(elm, alive);
+            }
+        }
+
+        Rvalue::List(elems) => {
+            for elm in elems {
+                analyze_operand(elm, alive);
+            }
+        }
+
+        Rvalue::Length(place) | Rvalue::AddrOf(place) => {
+            let base = place.get_base();
+
+            if !alive.contains(&base) {
+                todo!("uninit var")
+            }
+        }
+        Rvalue::Regular(op) => analyze_operand(op, alive),
+    }
+}
+
+pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
     let mut variables = MaybeInitVariables {
-        states: IdxVec::new_from_vec(vec![base; cfg.len()]),
+        states: IdxVec::new_from_vec(vec![
+            DataflowState {
+                gen_: HashSet::new(),
+                in_: HashSet::new(),
+                out: HashSet::new(),
+            };
+            cfg.len()
+        ]),
     };
 
     variables.compute_gen(cfg);
@@ -93,7 +137,7 @@ pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
 
         for stmt in data.stmts() {
             match stmt.kind() {
-                StmtKind::Assign { dest, src: _ } => {
+                StmtKind::Assign { dest, src } => {
                     if let Some(base) = dest.only_local() {
                         alive.insert(base);
                         continue;
@@ -104,12 +148,20 @@ pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
                         todo!("uninit use of variable")
                     }
 
-                    todo!("travel through rvalue")
+                    analyze_rvalue(src, &alive);
                 }
 
-                StmtKind::Call { fun, ret, args } => todo!(),
+                StmtKind::Call { fun, ret: _, args } => {
+                    analyze_operand(fun, &alive);
 
-                StmtKind::CheckCond(op) => todo!(),
+                    for arg in args {
+                        analyze_operand(arg, &alive);
+                    }
+                }
+
+                StmtKind::CheckCond(cond) => {
+                    analyze_operand(cond, &alive);
+                }
 
                 StmtKind::Nop | StmtKind::LocalLive(..) => (),
             }
