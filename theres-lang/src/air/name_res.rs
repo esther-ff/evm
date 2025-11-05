@@ -6,7 +6,7 @@ use crate::air::Mappings;
 use crate::air::def::{DefId, DefMap, DefPath, DefType, DefVec, IntTy, PrimTy, Resolved};
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
-use crate::errors::{DiagEmitter, Phase, TheresError};
+use crate::errors::{DiagEmitter, TheresError};
 use crate::id::IdxVec;
 use crate::maybe_visit;
 use crate::symbols::SymbolId;
@@ -14,6 +14,7 @@ use crate::visitor_common::VisitorResult;
 
 crate::newtyped_index!(Scope, ScopeMap, ScopeVec, ScopeSlice);
 
+#[derive(Debug, Clone, Copy)]
 enum ResError {
     DefinedAlready {
         name: SymbolId,
@@ -26,10 +27,6 @@ enum ResError {
 }
 
 impl TheresError for ResError {
-    fn phase() -> Phase {
-        Phase::NameResolution
-    }
-
     fn message(&self) -> std::borrow::Cow<'static, str> {
         match self {
             Self::DefinedAlready { name } => format!(

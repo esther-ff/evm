@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp;
-use std::fmt::Display;
 use std::io::{self, BufWriter, Stderr};
 use std::panic::Location;
 
@@ -11,35 +10,7 @@ use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use crate::sources::{SourceId, Sources};
 use crate::span::Span;
 
-pub enum Phase {
-    Lexing,
-    Parsing,
-    NameResolution,
-    LoweringAst,
-    TypeCk,
-    LoweringHir,
-}
-
-impl Display for Phase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
-            Self::Lexing => "lexing",
-            Self::Parsing => "parsing",
-            Self::NameResolution => "name resolution",
-            Self::LoweringAst => "lowering the ast",
-            Self::TypeCk => "type checking",
-            Self::LoweringHir => "lowering the hir",
-        };
-
-        write!(f, "{str}")
-    }
-}
-
-pub trait TheresError {
-    /// Phase of compilation the error was found in
-    /// like "lexing" or "parsing"
-    fn phase() -> Phase;
-
+pub trait TheresError: Copy {
     /// Message describing the error
     fn message(&self) -> Cow<'static, str>;
 }
@@ -109,49 +80,6 @@ impl<'a> DiagEmitterInner<'a> {
         }
     }
 
-    // #[allow(clippy::needless_pass_by_value)]
-    // #[track_caller]
-    // fn emit_err<T: TheresError>(&mut self, err: T, span: Span) -> io::Result<()> {
-    // let origin = span.line as usize;
-    // let line_nr_offset = origin.saturating_sub(EXTRA_LINES);
-    // let lines = self.get_lines(span.sourceid, origin, EXTRA_LINES);
-    // let indent = longest_line_number_from_origin(origin, EXTRA_LINES) as usize;
-
-    // writeln!(self.stderr, "{} error! aaaah!", T::phase())?;
-
-    // for (ix, line) in lines.iter().enumerate() {
-    //     let line_number = ix + line_nr_offset;
-    //     if line_number == origin {
-    //         print_to(
-    //             line_number,
-    //             line,
-    //             indent,
-    //             &mut self.stderr,
-    //             Some(Message {
-    //                 msg: err.message(),
-    //                 attached_to: span,
-    //             }),
-    //         )
-    //         .expect("writing to writer failed!");
-
-    //         continue;
-    //     }
-
-    //     print_to(line_number, line, indent, &mut self.stderr, None)
-    //         .expect("writing to writer failed!");
-    // }
-
-    // self.err_amount += 1;
-
-    // writeln!(self.stderr).unwrap();
-
-    // // later remove
-    // self.stderr.flush()?;
-
-    // Ok(())
-    // }
-
-    #[allow(clippy::needless_pass_by_value)]
     fn emit_err(&mut self, err: impl TheresError, span: Span) {
         let diag = Diagnostic::error()
             .with_message(err.message())

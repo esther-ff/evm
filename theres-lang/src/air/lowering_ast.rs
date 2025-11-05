@@ -3,13 +3,11 @@ use std::collections::HashMap;
 use std::panic::Location;
 
 use crate::arena::Arena;
-#[allow(clippy::wildcard_imports)]
 use crate::ast::*;
 
 use crate::air;
 use crate::air::def::{BodyId, BodyVec, DefId, DefMap, DefPath, DefType, DefVec, Resolved};
 use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
-use crate::errors::{Phase, TheresError};
 use crate::id::IdxVec;
 use crate::parser::{AstId, AstIdMap};
 use crate::span::Span;
@@ -17,20 +15,6 @@ use crate::symbols::SymbolId;
 
 crate::newtyped_index!(AirId, AirIdMap, AirVec);
 crate::newtyped_index!(LocalId, LocalMap, LocalVec);
-
-pub enum AstLowerError {
-    WrongAssign,
-}
-
-impl TheresError for AstLowerError {
-    fn phase() -> Phase {
-        Phase::LoweringAst
-    }
-
-    fn message(&self) -> std::borrow::Cow<'static, str> {
-        "cannot assign into this expression".into()
-    }
-}
 
 pub struct Mappings {
     instance_to_field_list: AstIdMap<Vec<DefId>>,

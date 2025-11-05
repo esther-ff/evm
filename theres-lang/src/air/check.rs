@@ -6,14 +6,14 @@ use crate::{
         node::{Block, Thing, ThingKind, Universe},
         visitor::AirVisitor,
     },
-    errors::{Phase, TheresError},
+    errors::TheresError,
     session::Session,
     types::ty::{FnSig, Ty},
 };
 
 use crate::symbols::SymbolId;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum MainError<'cx> {
     WrongRetType { ty: Ty<'cx> },
     WrongSignature { sig: FnSig<'cx> },
@@ -63,10 +63,6 @@ pub fn check_for_main<'cx>(cx: &'cx Session<'cx>, universe: &Universe<'cx>) -> O
 }
 
 impl TheresError for MainError<'_> {
-    fn phase() -> Phase {
-        Phase::TypeCk
-    }
-
     fn message(&self) -> Cow<'static, str> {
         match self {
             Self::WrongRetType { ty } => {

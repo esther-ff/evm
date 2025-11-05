@@ -33,7 +33,7 @@ use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use sap::Argument;
+use sap::{Argument, ParsingError};
 
 use crate::driver::{Compiler, Flags, HirDump};
 use crate::sources::FileManager;
@@ -76,14 +76,12 @@ fn opts() -> sap::Result<(Flags, PathBuf)> {
                     "error" => log::Level::Error,
 
                     _ => {
-                        let err = sap::ParsingError::UnexpectedArg {
-                            offender: String::from("logging"),
+                        return Err(ParsingError::UnexpectedArg {
+                            offender: "logging".into(),
                             value: Some(value),
-                            format: "",
-                            prefix: "--",
-                        };
-
-                        return Err(err);
+                            format: "--",
+                            prefix: "",
+                        });
                     }
                 }
             }

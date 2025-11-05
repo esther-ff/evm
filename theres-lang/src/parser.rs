@@ -1,6 +1,6 @@
 #[allow(clippy::wildcard_imports)]
 use crate::ast::*;
-use crate::errors::{DiagEmitter, Phase, TheresError};
+use crate::errors::{DiagEmitter, TheresError};
 use crate::lexer::{Lexemes, Token, TokenKind};
 use crate::span::Span;
 use crate::symbols::SymbolId;
@@ -9,10 +9,6 @@ use std::borrow::Cow;
 use std::panic::Location;
 
 impl TheresError for ParseError {
-    fn phase() -> Phase {
-        Phase::Parsing
-    }
-
     fn message(&self) -> Cow<'static, str> {
         match self {
             ParseError::Expected { what, got } => {

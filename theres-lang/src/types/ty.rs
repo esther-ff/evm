@@ -1,6 +1,6 @@
 use crate::air::def::{DefId, IntTy};
 use crate::air::node::Constant;
-use crate::errors::{Phase, TheresError};
+use crate::errors::TheresError;
 use crate::pooled::Pooled;
 use crate::session::{Session, cx};
 use crate::span::Span;
@@ -221,7 +221,7 @@ pub struct FieldDef {
     pub def_id: DefId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TypingError<'ty> {
     TypeMismatch(Ty<'ty>, Ty<'ty>),
 
@@ -264,17 +264,13 @@ pub enum TypingError<'ty> {
 
     MethodNotFound {
         on_ty: Ty<'ty>,
-        method_name: Cow<'static, str>,
+        method_name: SymbolId,
     },
 
     InferFail,
 }
 
 impl TheresError for TypingError<'_> {
-    fn phase() -> Phase {
-        Phase::TypeCk
-    }
-
     fn message(&self) -> Cow<'static, str> {
         match self {
             TypingError::TypeMismatch(expected, got) => {

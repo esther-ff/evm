@@ -1,4 +1,4 @@
-use crate::errors::{DiagEmitter, Phase, TheresError};
+use crate::errors::{DiagEmitter, TheresError};
 use crate::sources::SourceId;
 use crate::span::Span;
 use crate::symbols::SymbolId;
@@ -6,10 +6,6 @@ use std::borrow::Cow;
 use std::fmt::Display;
 
 impl TheresError for LexError {
-    fn phase() -> Phase {
-        Phase::Lexing
-    }
-
     fn message(&self) -> Cow<'static, str> {
         match self {
             LexError::InvalidFloatLiteral => "the float literal is invalid",

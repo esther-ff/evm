@@ -612,7 +612,7 @@ impl<'ty> FunCx<'ty> {
     fn typeck_expr_meth_call(
         &mut self,
         receiver: &Expr<'_>,
-        method: SymbolId,
+        method_name: SymbolId,
         args: &[Expr<'_>],
         expr_air_id: AirId,
     ) -> Ty<'ty> {
@@ -634,12 +634,12 @@ impl<'ty> FunCx<'ty> {
 
                     Some((item.def_id, name, item.span))
                 })
-                .find(|(_, name, _)| name == &method)
+                .find(|(_, name, _)| name == &method_name)
             else {
                 self.s.diag().emit_err(
                     TypingError::MethodNotFound {
                         on_ty: (recv_ty),
-                        method_name: method.get_interned().to_string().into(),
+                        method_name,
                     },
                     receiver.span,
                 );
