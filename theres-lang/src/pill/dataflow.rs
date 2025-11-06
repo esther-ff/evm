@@ -3,7 +3,10 @@ use crate::{
     pill::{
         body::Local,
         cfg::{BasicBlock, Cfg, Operand, Rvalue, StmtKind},
+        errors::PillError,
     },
+    session::cx,
+    span::Span,
 };
 
 use std::collections::HashSet;
@@ -74,33 +77,33 @@ impl MaybeInitVariables {
 
 pub struct Dead;
 
-fn analyze_operand(op: &Operand<'_>, alive: &HashSet<Local>) {
+fn analyze_operand(op: &Operand<'_>, alive: &HashSet<Local>, span: Span) {
     match op.maybe_use() {
         None => (),
         Some(loc) if alive.contains(&loc.get_base()) => (),
-        Some(..) => {
-            todo!("uninit var")
-        }
+        Some(..) => cx(|cx| {
+            cx.diag().emit_err(PillError::LocalNotInitialized, span);
+        }),
     }
 }
 
-fn analyze_rvalue(rvalue: &Rvalue<'_>, alive: &HashSet<Local>) {
+fn analyze_rvalue(rvalue: &Rvalue<'_>, alive: &HashSet<Local>, span: Span) {
     match rvalue {
         Rvalue::Binary { lhs, rhs, .. } => {
-            analyze_operand(lhs, alive);
-            analyze_operand(rhs, alive);
+            analyze_operand(lhs, alive, span);
+            analyze_operand(rhs, alive, span);
         }
 
-        Rvalue::Unary { val, .. } => analyze_operand(val, alive),
+        Rvalue::Unary { val, .. } => analyze_operand(val, alive, span),
         Rvalue::Adt { args, .. } => {
             for elm in args {
-                analyze_operand(elm, alive);
+                analyze_operand(elm, alive, span);
             }
         }
 
         Rvalue::List(elems) => {
             for elm in elems {
-                analyze_operand(elm, alive);
+                analyze_operand(elm, alive, span);
             }
         }
 
@@ -111,7 +114,7 @@ fn analyze_rvalue(rvalue: &Rvalue<'_>, alive: &HashSet<Local>) {
                 todo!("uninit var")
             }
         }
-        Rvalue::Regular(op) => analyze_operand(op, alive),
+        Rvalue::Regular(op) => analyze_operand(op, alive, span),
     }
 }
 
@@ -136,6 +139,7 @@ pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
         alive.clone_from(&state.in_);
 
         for stmt in data.stmts() {
+            let span = stmt.span();
             match stmt.kind() {
                 StmtKind::Assign { dest, src } => {
                     if let Some(base) = dest.only_local() {
@@ -145,22 +149,24 @@ pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
 
                     let base = dest.get_base();
                     if !alive.contains(&base) {
-                        todo!("uninit use of variable")
+                        cx(|cx| {
+                            cx.diag().emit_err(PillError::LocalNotInitialized, span);
+                        });
                     }
 
-                    analyze_rvalue(src, &alive);
+                    analyze_rvalue(src, &alive, span);
                 }
 
                 StmtKind::Call { fun, ret: _, args } => {
-                    analyze_operand(fun, &alive);
+                    analyze_operand(fun, &alive, span);
 
                     for arg in args {
-                        analyze_operand(arg, &alive);
+                        analyze_operand(arg, &alive, span);
                     }
                 }
 
                 StmtKind::CheckCond(cond) => {
-                    analyze_operand(cond, &alive);
+                    analyze_operand(cond, &alive, span);
                 }
 
                 StmtKind::Nop | StmtKind::LocalLive(..) => (),
