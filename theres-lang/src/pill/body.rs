@@ -36,6 +36,7 @@ use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{
     AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, StmtKind,
 };
+use crate::pill::errors::PillError;
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
 use crate::session::{Session, cx};
@@ -391,6 +392,10 @@ impl<'il> PillBuilder<'il> {
                 // USE THIS!
                 from_lowering: _,
             } => {
+                if !lhs.is_assignable_to() {
+                    self.cx.diag().emit_err(PillError::InvalidAssign, expr.span);
+                }
+
                 if let ExprKind::Local(loc) = lhs.kind
                     && let ExprKind::Call { callee, args } = rhs.kind
                 {

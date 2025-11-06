@@ -76,6 +76,20 @@ pub struct Expr<'ir> {
     pub span: Span,
 }
 
+impl Expr<'_> {
+    pub(crate) fn is_assignable_to(&self) -> bool {
+        matches!(
+            self.kind,
+            ExprKind::Deref(..)
+                | ExprKind::Field { .. }
+                | ExprKind::Local(..)
+                | ExprKind::Upvar { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Param(..)
+        )
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum LogicalOp {
     And,
