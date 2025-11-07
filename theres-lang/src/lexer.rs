@@ -106,6 +106,8 @@ pub enum TokenKind {
     Break,
     With,
     In,
+    Native,
+    Mut,
 
     Eof,
 }
@@ -136,6 +138,8 @@ impl Display for TokenKind {
             Underscore => "_",
             ShiftLeft => "<<",
             ShiftRight => ">>",
+            Native => "native",
+            Mut => "mut",
 
             Equals => "==",
             NotEqual => "!=",
@@ -775,8 +779,8 @@ impl<'a> Lexer<'a> {
 
 fn check_for_keyword(ident: &str) -> Option<TokenKind> {
     use TokenKind::{
-        Bind, Break, Const, Else, False, For, Function, If, Instance, Let, Loop, Realm, Return,
-        SelfArg, Then, True, Until, While, With,
+        Bind, Break, Const, Else, False, For, Function, If, Instance, Let, Loop, Mut, Native,
+        Realm, Return, SelfArg, Then, True, Until, While, With,
     };
 
     match ident {
@@ -799,6 +803,8 @@ fn check_for_keyword(ident: &str) -> Option<TokenKind> {
         "realm" => Realm,
         "bind" => Bind,
         "break" => Break,
+        "mut" => Mut,
+        "native" => Native,
 
         _ => return None,
     }

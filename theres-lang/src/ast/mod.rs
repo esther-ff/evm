@@ -365,8 +365,8 @@ impl Arg {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VarMode {
-    Let,
-    Const,
+    Mut,
+    Immut,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]

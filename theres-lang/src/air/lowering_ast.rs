@@ -679,8 +679,8 @@ impl<'air> AirBuilder<'air> {
 
     fn lower_variable_stmt(&mut self, var: &VariableStmt) -> &'air node::Local<'air> {
         let mutability = match var.mode {
-            VarMode::Let => Constant::No,
-            VarMode::Const => Constant::Yes,
+            VarMode::Immut => Constant::No,
+            VarMode::Mut => Constant::Yes,
         };
 
         let init = var.init.as_ref().map(|expr| self.lower_expr(expr));

@@ -82,7 +82,7 @@ impl<'il> LocalData<'il> {
 #[derive(Debug)]
 pub struct Pill<'il> {
     arg_count: usize,
-    cfg: Cfg<'il>,
+    pub(crate) cfg: Cfg<'il>,
     locals: Locals<'il>,
 }
 

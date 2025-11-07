@@ -484,7 +484,7 @@ impl Parser<'_> {
     fn instance_fields(&mut self) -> Result<Vec<Field>> {
         fn one_field(me: &mut Parser) -> Result<Field> {
             let span_start = me.lexemes.peek_token().span;
-            let is_const = me.consume_if(TokenKind::Const);
+            let is_mut = me.consume_if(TokenKind::Mut);
             let field_name = me.expect_ident_as_name()?;
 
             me.expect_token(TokenKind::Colon)?;
@@ -492,13 +492,7 @@ impl Parser<'_> {
             let ty = me.ty()?;
             let field_span = Span::between(span_start, ty.span);
 
-            Ok(Field::new(
-                is_const,
-                field_name,
-                ty,
-                field_span,
-                me.new_id(),
-            ))
+            Ok(Field::new(!is_mut, field_name, ty, field_span, me.new_id()))
         }
 
         let peeked = self.lexemes.peek_token();
@@ -516,51 +510,28 @@ impl Parser<'_> {
         Ok(fields)
     }
 
-    fn local_variable_stmt(&mut self, req: VariableReq) -> Result<VariableStmt> {
-        let tok = self.lexemes.next_token();
-        let mode = match tok.kind {
-            TokenKind::Const => VarMode::Const,
-            TokenKind::Let => {
-                if req == VariableReq::ConstAndInit {
-                    self.diag.emit_err(ParseError::ExpectedConstVar, tok.span);
-                }
-
-                VarMode::Let
-            }
-
-            TokenKind::Eof => {
-                self.diag.emit_err(ParseError::EndOfFile, tok.span);
-                return Err(ParseError::EndOfFile);
-            }
-
-            _ => {
-                return self.error_out(
-                    ParseError::Expected {
-                        what: TokenKind::Let,
-                        got: tok.kind,
-                    },
-                    tok.span,
-                );
-            }
+    fn local_variable_stmt(&mut self) -> Result<VariableStmt> {
+        self.expect(t!(Let));
+        let mutt = match self.consume_if(t!(Mut)) {
+            true => VarMode::Mut,
+            false => VarMode::Immut,
         };
 
         let name = self.expect_ident_as_name()?;
         let ty = self.consume_if(t!(Colon)).then(|| self.ty()).transpose()?;
 
-        let mut init = None;
-        if !self.consume_if(TokenKind::Semicolon) {
-            self.expect(t!(Assign));
-            let expr = self.expression()?;
-            self.expect(t!(Semicolon));
-            init = Some(expr);
-        }
-
-        if req == VariableReq::ConstAndInit && init.is_none() {
-            return self.error_out(ParseError::ExpectedExpr, tok.span);
-        }
+        let consumed = !self.consume_if(t!(Semicolon));
+        let init = consumed
+            .then(|| {
+                self.expect(t!(Assign));
+                let expr = self.expression()?;
+                self.expect(t!(Semicolon));
+                Ok(expr)
+            })
+            .transpose()?;
 
         Ok(VariableStmt {
-            mode,
+            mode: mutt,
             name,
             init,
             ty,
@@ -572,9 +543,7 @@ impl Parser<'_> {
         let tok = self.lexemes.peek_token();
         let id = self.new_id();
         let stmt = match tok.kind {
-            TokenKind::Let | TokenKind::Const => {
-                StmtKind::LocalVar(self.local_variable_stmt(VariableReq::None)?)
-            }
+            TokenKind::Let | TokenKind::Const => StmtKind::LocalVar(self.local_variable_stmt()?),
 
             TokenKind::Function => StmtKind::Thing(Thing::new(self.declaration()?, id)),
 

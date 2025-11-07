@@ -2,6 +2,7 @@
 pub mod access;
 pub mod body;
 mod cfg;
+pub(crate) mod collect_build;
 pub(crate) mod dataflow;
 mod errors;
 pub mod op;

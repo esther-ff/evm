@@ -40,7 +40,7 @@ impl<'il> AccessBuilder<'il> {
 }
 
 #[derive(Debug, Copy, Clone)]
-enum AccessKind<'il> {
+pub enum AccessKind<'il> {
     Index(Operand<'il>),
     Field(FieldId),
     Deref,
@@ -49,10 +49,10 @@ enum AccessKind<'il> {
 #[derive(Copy, Clone)]
 pub struct Access<'il> {
     base: Local,
-    modifs: &'il [AccessKind<'il>],
+    pub(super) modifs: &'il [AccessKind<'il>],
 }
 
-impl Access<'_> {
+impl<'il> Access<'il> {
     pub fn base(base: Local) -> Self {
         Self { base, modifs: &[] }
     }
@@ -67,6 +67,10 @@ impl Access<'_> {
         }
 
         None
+    }
+
+    pub fn modifs(&self) -> &[AccessKind<'il>] {
+        self.modifs
     }
 }
 

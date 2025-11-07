@@ -241,6 +241,10 @@ impl<'il> Stmt<'il> {
         &self.kind
     }
 
+    pub fn kind_mut(&mut self) -> &mut StmtKind<'il> {
+        &mut self.kind
+    }
+
     pub fn span(&self) -> Span {
         self.span
     }
@@ -262,8 +266,16 @@ impl<'il> BbData<'il> {
         &self.stmts
     }
 
+    pub fn stmts_mut(&mut self) -> &mut [Stmt<'il>] {
+        &mut self.stmts
+    }
+
     pub fn exit(&self) -> Option<&BlockExit<'il>> {
         self.exit.as_ref()
+    }
+
+    pub fn exit_mut(&mut self) -> &mut BlockExit<'il> {
+        self.exit.as_mut().unwrap()
     }
 
     pub fn predecessors(&self) -> &[BasicBlock] {
