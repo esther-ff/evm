@@ -471,16 +471,6 @@ pub enum ThingKind {
 }
 
 impl ThingKind {
-    pub fn function(block: Block, span: Span, sig: FnSig, id: AstId) -> Self {
-        Self::Function(FnDecl {
-            sig,
-
-            block,
-            span,
-            id,
-        })
-    }
-
     pub fn instance(name: Name, span: Span, fields: Vec<Field>, id: AstId, ctor_id: AstId) -> Self {
         Self::Instance(Instance::new(name, span, fields, id, ctor_id))
     }

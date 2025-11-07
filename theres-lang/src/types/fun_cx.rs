@@ -22,12 +22,6 @@ crate::newtyped_index!(FieldId, FieldMap, FieldVec, FieldSlice);
 crate::newtyped_index!(InferId, InferMap, InferVec, InferSlice);
 
 #[derive(Debug, Clone, Copy)]
-pub enum CallKind<'ty> {
-    Method(Ty<'ty>),
-    Regular,
-}
-
-#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Obligation {
     /// Type must be able to be negated via `!`
@@ -249,7 +243,7 @@ impl<'ty> FunCx<'ty> {
             ExprKind::Field { src, field } => self.typeck_expr_field(src, field),
             ExprKind::List(exprs) => self.typeck_expr_list(exprs, expr.span),
             ExprKind::Break => self.s.types.diverges,
-            ExprKind::Loop { body, reason: _ } => {
+            ExprKind::Loop { body } => {
                 self.typeck_block(body);
                 self.s.types.nil
             }
@@ -301,13 +295,9 @@ impl<'ty> FunCx<'ty> {
                     TyKind::Error => self.s.types.err,
 
                     _ => {
-                        dbg!(Location::caller());
-                        self.s.diag().emit_err(
-                            TypingError::CallingNotFn {
-                                offender: (callable), // not sure?
-                            },
-                            expr.span,
-                        );
+                        self.s
+                            .diag()
+                            .emit_err(TypingError::CallingNotFn { offender: callable }, expr.span);
 
                         self.s.types.err
                     }
@@ -537,8 +527,8 @@ impl<'ty> FunCx<'ty> {
         }
 
         let err = if let TyKind::Instance(def) = *src_ty {
-            if let Some(found) = def.fields.iter().find(|f| f.name == field_name) {
-                return self.s.def_type_of(found.def_id);
+            if let Some(found) = def.fields.iter().find(|(_, f)| f.name == field_name) {
+                return self.s.def_type_of(found.1.def_id);
             }
 
             TypingError::NoField {
@@ -573,8 +563,6 @@ impl<'ty> FunCx<'ty> {
                 // }
                 *self.node_type.get(&air_id).unwrap()
             }
-
-            Resolved::Def(def_id, DefType::Const) => self.s.def_type_of(def_id),
 
             Resolved::Err => self.s.types.err,
 
@@ -698,6 +686,7 @@ impl<'ty> FunCx<'ty> {
             );
         }
 
+        let mut ix = 0;
         loop {
             match (
                 sig_tys.next(),
@@ -705,12 +694,20 @@ impl<'ty> FunCx<'ty> {
             ) {
                 (Some(sig_ty), Some(call_ty)) => {
                     if self.unify(sig_ty, call_ty).is_err() {
-                        self.type_mismatch_err(sig_ty, call_ty, span);
+                        self.s.diag().emit_err(
+                            TypingError::WrongArgumentTy {
+                                expected: sig_ty,
+                                got: call_ty,
+                                arg_idx: ix,
+                            },
+                            span,
+                        );
                     }
                 }
                 (Some(..), None) | (None, Some(..)) => {}
                 (None, None) => break,
             }
+            ix += 1;
         }
     }
 
@@ -737,6 +734,7 @@ impl<'ty> FunCx<'ty> {
             );
         }
 
+        let mut ix = 0;
         loop {
             match (
                 sig_tys.next(),
@@ -744,12 +742,20 @@ impl<'ty> FunCx<'ty> {
             ) {
                 (Some(sig_ty), Some(call_ty)) => {
                     if self.unify(sig_ty, call_ty).is_err() {
-                        self.type_mismatch_err(sig_ty, call_ty, span);
+                        self.s.diag().emit_err(
+                            TypingError::WrongArgumentTy {
+                                expected: sig_ty,
+                                got: call_ty,
+                                arg_idx: ix,
+                            },
+                            span,
+                        );
                     }
                 }
                 (Some(..), None) | (None, Some(..)) => {}
                 (None, None) => break,
             }
+            ix += 1;
         }
 
         sig.output
@@ -760,7 +766,7 @@ impl<'ty> FunCx<'ty> {
 pub struct TypeTable<'ty> {
     air_node_tys: HashMap<AirId, Ty<'ty>>,
     resolved_method_calls: HashMap<AirId, DefId>,
-    local_variables: HashMap<AirId, Ty<'ty>>,
+    // local_variables: HashMap<AirId, Ty<'ty>>,
 }
 
 impl<'ty> TypeTable<'ty> {
@@ -768,7 +774,7 @@ impl<'ty> TypeTable<'ty> {
         Self {
             air_node_tys: HashMap::new(),
             resolved_method_calls: HashMap::new(),
-            local_variables: HashMap::new(),
+            // local_variables: HashMap::new(),
         }
     }
 
@@ -784,13 +790,6 @@ impl<'ty> TypeTable<'ty> {
         self.air_node_tys.get(&air_id).copied().unwrap()
     }
 
-    pub fn local_var_ty(&self, id: AirId) -> Ty<'ty> {
-        self.local_variables
-            .get(&id)
-            .copied()
-            .expect("hir id given to `local_var_ty` has no type assoc'd with it")
-    }
-
     pub fn resolve_method(&self, id: AirId) -> DefId {
         self.resolved_method_calls
             .get(&id)
@@ -799,22 +798,14 @@ impl<'ty> TypeTable<'ty> {
     }
 }
 
-pub struct TyCollector<'ty> {
+struct TyCollector<'ty> {
     table: TypeTable<'ty>,
     sess: &'ty Session<'ty>,
     cx: FunCx<'ty>,
 }
 
 impl<'ty> TyCollector<'ty> {
-    pub fn new(cx: FunCx<'ty>, sess: &'ty Session<'ty>) -> Self {
-        Self {
-            table: TypeTable::new(),
-            cx,
-            sess,
-        }
-    }
-
-    pub fn visit(mut self, expr: &Expr<'_>) -> TypeTable<'ty> {
+    fn visit(mut self, expr: &Expr<'_>) -> TypeTable<'ty> {
         self.visit_expr(expr);
 
         let _ = core::mem::replace(
@@ -822,7 +813,7 @@ impl<'ty> TyCollector<'ty> {
             self.cx.resolved_method_calls,
         );
 
-        let _ = core::mem::replace(&mut self.table.local_variables, self.cx.local_tys);
+        // let _ = core::mem::replace(&mut self.table.local_variables, self.cx.local_tys);
 
         self.table
     }
@@ -859,7 +850,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
         // mhm?
         self.table.air_node_tys.insert(local.air_id, ty);
-        self.table.local_variables.insert(local.air_id, ty);
+        // self.table.local_variables.insert(local.air_id, ty);
     }
 
     fn visit_stmt(&mut self, stmt: &'vis Stmt<'vis>) -> Self::Result {

@@ -7,7 +7,7 @@ use crate::ast::*;
 
 use crate::air;
 use crate::air::def::{BodyId, BodyVec, DefId, DefMap, DefPath, DefType, DefVec, Resolved};
-use crate::air::node::{self, Constant, ExprKind, Lambda, Node, Param};
+use crate::air::node::{self, Constant, Lambda, Node, Param};
 use crate::id::IdxVec;
 use crate::parser::{AstId, AstIdMap};
 use crate::span::Span;
@@ -21,7 +21,6 @@ pub struct Mappings {
     // field_id_to_instance: AstIdMap<DefId>,
     resolution_map: AstIdMap<Resolved<AstId>>,
     ast_id_to_def_id: AstIdMap<DefId>,
-    def_id_to_ast_id: DefMap<AstId>,
     instance_to_bind: DefMap<Vec<AstId>>,
     // binds_to_resolved_ty_id: AstIdMap<AstId>,
     // binds_to_items: AstIdMap<Vec<AstId>>,
@@ -31,17 +30,12 @@ pub struct Mappings {
 }
 
 impl Mappings {
-    pub fn new(
-        ast_id_to_def_id: AstIdMap<DefId>,
-        def_id_to_ast_id: DefMap<AstId>,
-        def_types: DefVec<(DefType, DefPath)>,
-    ) -> Self {
+    pub fn new(ast_id_to_def_id: AstIdMap<DefId>, def_types: DefVec<(DefType, DefPath)>) -> Self {
         Self {
             instance_to_field_list: HashMap::new(),
             // field_id_to_instance: HashMap::new(),
             resolution_map: HashMap::new(),
             ast_id_to_def_id,
-            def_id_to_ast_id,
             instance_to_bind: HashMap::new(),
             // binds_to_resolved_ty_id: HashMap::new(),
             // binds_to_items: HashMap::new(),
@@ -129,10 +123,6 @@ impl<'air> AirMap<'air> {
         );
     }
 
-    fn map_field_to_instance(&mut self, instance: DefId, field: DefId) {
-        self.field_to_instance.insert(field, instance);
-    }
-
     fn insert_body_of(&mut self, body: &'air node::Expr<'air>, body_owner: DefId) -> BodyId {
         let body_id = self.bodies.push(body);
         self.node_to_body.insert(body_owner, body_id);
@@ -144,13 +134,6 @@ impl<'air> AirMap<'air> {
             .child_to_parent
             .get(&did)
             .unwrap_or_else(|| panic!("{did} doesn't have a parent"))
-    }
-
-    pub fn get_instance_of_field(&self, field: DefId) -> DefId {
-        self.field_to_instance
-            .get(&field)
-            .copied()
-            .expect("Field's DefId wasn't mapped to any instance")
     }
 
     pub fn get_def(&'air self, def_id: DefId) -> &'air Node<'air> {
@@ -183,14 +166,6 @@ impl<'air> AirMap<'air> {
         thing
     }
 
-    pub fn get_local(&'air self, air_id: AirId) -> &'air node::Local<'air> {
-        let node::Node::Local(local) = self.get_node(air_id) else {
-            panic!("air id doesn't point to a stmt",)
-        };
-
-        local
-    }
-
     pub fn insert_node(&mut self, node: node::Node<'air>, air_id: AirId) {
         self.nodes.insert(air_id, node);
     }
@@ -216,7 +191,7 @@ impl<'air> AirMap<'air> {
     }
 
     pub fn bodies(&self) -> &[&node::Expr<'air>] {
-        self.bodies.as_slice()
+        self.bodies.inner()
     }
 
     pub fn get_body(&self, body: BodyId) -> &'air node::Expr<'air> {
@@ -285,11 +260,6 @@ impl<'air> AirMap<'air> {
         }
 
         panic!("{def_id} isn't bound to a lambda!")
-    }
-
-    #[inline]
-    pub fn is_ctor(&self, id: DefId) -> bool {
-        self.ctor_to_instance.contains_key(&id)
     }
 
     pub fn get_instance_of_ctor(&self, ctor_def_id: DefId) -> DefId {
@@ -475,17 +445,14 @@ impl<'air> AirBuilder<'air> {
 
             ExprType::While { cond, body } => node::ExprKind::Loop {
                 body: self.lower_while_or_until_loop(cond, body, DesugarLoop::While),
-                reason: node::LoopDesugarKind::While,
             },
 
             ExprType::Until { cond, body } => node::ExprKind::Loop {
                 body: self.lower_while_or_until_loop(cond, body, DesugarLoop::Until),
-                reason: node::LoopDesugarKind::Until,
             },
 
             ExprType::Loop { body } => node::ExprKind::Loop {
                 body: self.lower_block(body),
-                reason: node::LoopDesugarKind::None,
             },
 
             ExprType::Group(expr) => return self.lower_expr_noalloc(expr),
@@ -952,15 +919,5 @@ impl<'air> AirBuilder<'air> {
         );
 
         (self.arena.alloc(universe), self.air_map)
-    }
-}
-
-fn is_assignable_expr(expr: &node::Expr<'_>) -> bool {
-    match expr.kind {
-        ExprKind::Index { .. } | ExprKind::Field { .. } => true,
-        // `Resolved::Err` case isn't technically valid but we *don't* know
-        // what is behind it, so to not report extra errors it's included
-        ExprKind::Path(path) => matches!(path.res, Resolved::Local(..) | Resolved::Err),
-        _ => false,
     }
 }

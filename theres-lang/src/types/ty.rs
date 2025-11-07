@@ -184,10 +184,6 @@ pub struct InferTy {
 }
 
 impl InferTy {
-    pub fn is_regular(self) -> bool {
-        self.kind == InferKind::Regular
-    }
-
     pub fn is_float(self) -> bool {
         self.kind == InferKind::Float
     }
@@ -453,7 +449,7 @@ pub fn fn_sig_for<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> FnSig<'cx> {
                     instance_def
                         .fields
                         .iter()
-                        .map(|field| cx.def_type_of(field.def_id)),
+                        .map(|field| cx.def_type_of(field.1.def_id)),
                 ),
 
                 output: cx.def_type_of(instance),

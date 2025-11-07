@@ -303,7 +303,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
 
         ExprKind::Field { src, field: _ } => return v.visit_expr(src),
 
-        ExprKind::Loop { body, reason: _ } => return v.visit_block(body),
+        ExprKind::Loop { body } => return v.visit_block(body),
 
         ExprKind::Index {
             index,

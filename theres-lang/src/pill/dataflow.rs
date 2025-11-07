@@ -75,8 +75,6 @@ impl MaybeInitVariables {
     }
 }
 
-pub struct Dead;
-
 fn analyze_operand(op: &Operand<'_>, alive: &HashSet<Local>, span: Span) {
     match op.maybe_use() {
         None => (),
@@ -141,7 +139,7 @@ pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
         for stmt in data.stmts() {
             let span = stmt.span();
             match stmt.kind() {
-                StmtKind::Assign { dest, src } => {
+                StmtKind::Assign { dest, src, .. } => {
                     if let Some(base) = dest.only_local() {
                         alive.insert(base);
                         continue;
@@ -169,7 +167,7 @@ pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
                     analyze_operand(cond, &alive, span);
                 }
 
-                StmtKind::Nop | StmtKind::LocalLive(..) => (),
+                StmtKind::LocalLive(..) => (),
             }
         }
     }

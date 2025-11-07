@@ -7,7 +7,8 @@
 #![warn(clippy::suspicious)]
 #![warn(clippy::correctness)]
 #![warn(clippy::pedantic)]
-#![allow(dead_code)]
+#![allow(clippy::enum_glob_use)]
+#![allow(clippy::wildcard_imports)]
 
 mod air;
 mod arena;

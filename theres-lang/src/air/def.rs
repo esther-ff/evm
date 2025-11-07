@@ -3,11 +3,6 @@ use crate::{air::name_res::Namespace, symbols::SymbolId};
 crate::newtyped_index!(DefId, DefMap, DefVec);
 crate::newtyped_index!(BodyId, BodyMap, BodyVec);
 
-// debug dogshit
-pub fn def_id(i: u32) -> DefId {
-    DefId { private: i }
-}
-
 #[derive(Clone, Copy)]
 pub enum DefPathSeg {
     TypeNs(SymbolId),
@@ -61,17 +56,11 @@ pub enum DefType {
     /// Realm.
     Realm,
 
-    /// Associated constant, might get removed.
-    Const,
-
     /// Field of an instance.
     Field,
 
     /// Bind
     Bind,
-
-    /// Associated item of a bind
-    BindItem,
 
     /// Constructor of an `instance`
     AdtCtor,

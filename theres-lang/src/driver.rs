@@ -15,30 +15,6 @@ use std::sync::Mutex;
 
 use log::{Level, Log};
 
-pub const LOG_AMOUNT_TO_RELEASE: usize = 10;
-
-pub struct LogBuffer {
-    buffer: Vec<u8>,
-    indices: Vec<(usize, usize)>,
-    buffered_logs: usize,
-}
-
-impl Write for LogBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let start = self.indices.last().map_or(0, |(_, end)| *end);
-        let end = start + buf.len();
-
-        self.indices.push((start, end));
-        self.buffer.extend_from_slice(buf);
-
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 struct TheresLog {
     stderr: Stderr,
     log_level: Level,
@@ -149,8 +125,17 @@ impl Compiler {
             typeck_universe(session, uni);
             let main_did = check::check_for_main(session, uni).expect("todo: no main lmao!");
 
+            if diags.errors_emitted() {
+                return;
+            }
+
             let pill = session.build_pill(main_did);
             crate::pill::dataflow::analyze_maybe_init_variables(pill.cfg());
+
+            #[allow(clippy::needless_return)]
+            if diags.errors_emitted() {
+                return;
+            }
         });
     }
 

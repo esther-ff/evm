@@ -251,7 +251,6 @@ pub struct Eair<'ir> {
     pub locals: Locals<'ir>,
     pub params: Params<'ir>,
     pub entry: Option<Expr<'ir>>,
-    pub span: Span,
     pub kind: BodyKind,
 }
 
@@ -458,7 +457,7 @@ impl<'ir> EairBuilder<'ir> {
                 span,
             },
 
-            Loop { body, reason: _ } => Expr {
+            Loop { body } => Expr {
                 kind: ExprKind::Loop(self.lower_block(body)),
                 ty,
                 span,
@@ -531,16 +530,11 @@ impl<'ir> EairBuilder<'ir> {
             Field { src, field } => {
                 let base = self.lower_expr_alloc(src);
                 let instance = base.ty.expect_instance();
-
-                let Some(field_idx) = instance
+                let (field_idx, _) = instance
                     .fields
                     .iter()
-                    .enumerate()
                     .find(|(_, f)| f.name == field)
-                    .map(|(idx, _)| FieldId::new_usize(idx))
-                else {
-                    unreachable!("typeck didn't catch a missing field!")
-                };
+                    .expect("typeck should have caught this!");
 
                 Expr {
                     kind: ExprKind::Field { base, field_idx },
@@ -549,7 +543,7 @@ impl<'ir> EairBuilder<'ir> {
                 }
             }
 
-            Lambda(_lambda) => Expr {
+            Lambda(..) => Expr {
                 kind: ExprKind::Lambda,
                 ty,
                 span,
@@ -637,10 +631,8 @@ impl<'ir> EairBuilder<'ir> {
                     | DefType::AdtCtor
                     | DefType::Field
                     | DefType::Bind
-                    | DefType::BindItem
                     | DefType::Lambda
-                    | DefType::Realm
-                    | DefType::Const => unreachable!("non-sense"),
+                    | DefType::Realm => unreachable!("non-sense"),
                 },
 
                 Resolved::Prim(..) => unreachable!("`Resolved::Prim` in path expr?"),
@@ -742,7 +734,6 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
         locals,
         params,
         entry: None,
-        span: body.span,
         kind,
     };
 

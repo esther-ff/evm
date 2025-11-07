@@ -24,7 +24,7 @@ impl<'il> AccessBuilder<'il> {
     }
 
     pub fn deref(&mut self) {
-        self.modifs.push(AccessKind::Deref)
+        self.modifs.push(AccessKind::Deref);
     }
 
     pub fn field(&mut self, field: FieldId) {

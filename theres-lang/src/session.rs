@@ -34,6 +34,7 @@ where
     f(unsafe { &*(ptr.cast()) })
 }
 
+#[allow(dead_code)]
 pub struct Types<'ty> {
     pub nil: Ty<'ty>,
     pub bool: Ty<'ty>,
@@ -164,20 +165,8 @@ impl<'cx> Session<'cx> {
         &self.air_map
     }
 
-    pub fn sources(&self) -> &Sources {
-        self.sources
-    }
-
     pub fn flags(&self) -> &Flags {
         &self.flags
-    }
-
-    pub fn dump_air_mode(&self) -> crate::driver::HirDump {
-        self.flags.dump_hir
-    }
-
-    pub fn should_dump_ast(&self) -> bool {
-        self.flags.dump_ast
     }
 
     pub fn file_name(&self, id: SourceId) -> &str {
@@ -240,9 +229,9 @@ impl<'cx> Session<'cx> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
-    pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
-        self.air_map.is_ctor(def_id)
-    }
+    // pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
+    //     self.air_map.is_ctor(def_id)
+    // }
 
     /// This is so fucking stupid
     pub fn binds_for_ty<F, R>(&'cx self, ty: Ty<'cx>, work: F) -> R

@@ -131,7 +131,8 @@ impl Scopes {
     }
 }
 
-struct FirstPass {
+struct FirstPass<'cx> {
+    diag: &'cx DiagEmitter<'cx>,
     scopes: ScopeVec<ScopeData>,
     path: Scopes,
     current_scope: Scope,
@@ -146,12 +147,13 @@ struct FirstPass {
     defs: DefPath,
 }
 
-impl FirstPass {
-    fn new() -> Self {
+impl<'cx> FirstPass<'cx> {
+    fn new(diag: &'cx DiagEmitter<'cx>) -> Self {
         let mut scopes = IdxVec::new();
         let current_scope = scopes.push(ScopeData::new(None));
 
         Self {
+            diag,
             thing_ast_id: None,
             path: Scopes::new(vec![current_scope]),
             scopes,
@@ -173,14 +175,23 @@ impl FirstPass {
         assert!(self.ast_id_did.insert(ast_id, did).is_none());
         assert!(self.did_ast_id.insert(did, ast_id).is_none());
 
-        // if self.sym_defs.insert(name.interned, did).is_some() {
-        //     self.cx.diag().emit_err(
-        //         ResError::DefinedAlready {
-        //             name: name.interned,
-        //         },
-        //         name.span,
-        //     );
-        // }
+        if self
+            .path
+            .storage
+            .last()
+            .is_some_and(|&id| id == Scope::ZERO)
+            && self
+                .scopes
+                .get(Scope::ZERO)
+                .is_some_and(|data| data.get(ns, name.interned).is_some())
+        {
+            self.diag.emit_err(
+                ResError::DefinedAlready {
+                    name: name.interned,
+                },
+                name.span,
+            );
+        }
 
         did
     }
@@ -230,7 +241,7 @@ impl FirstPass {
     }
 }
 
-impl<'vis> Visitor<'vis> for FirstPass {
+impl<'vis> Visitor<'vis> for FirstPass<'_> {
     type Result = ();
 
     fn visit_thing(&mut self, val: &'vis Thing) -> Self::Result {
@@ -379,6 +390,7 @@ impl<'vis> Visitor<'vis> for FirstPass {
     fn visit_expr(&mut self, val: &'vis Expr) -> Self::Result {
         if let ExprType::Lambda { body, .. } = &val.ty {
             self.define(val.id, DefType::Lambda, Name::DUMMY, Namespace::Values);
+            self.defs.push_lambda();
             return match body {
                 LambdaBody::Block(bl) => self.visit_block(bl),
                 LambdaBody::Expr(expr) => self.with_new_scope(|this| this.visit_expr(expr)),
@@ -409,15 +421,16 @@ struct SecondPass<'res> {
 }
 
 impl<'res> SecondPass<'res> {
-    fn new(resolver: FirstPass, diag: &'res DiagEmitter<'res>) -> Self {
+    fn new(resolver: FirstPass<'res>) -> Self {
         let FirstPass {
+            diag,
             scopes,
             mut path,
             current_scope,
             did_defs,
             mut realm_scopes,
             ast_id_did,
-            did_ast_id,
+            did_ast_id: _,
             thing_ast_id: _,
             defs: _,
         } = resolver;
@@ -443,7 +456,7 @@ impl<'res> SecondPass<'res> {
 
         Self {
             diag,
-            maps: Mappings::new(ast_id_did, did_ast_id, did_defs),
+            maps: Mappings::new(ast_id_did, did_defs),
             current_instance: None,
             current_bind_ty: None,
             current_bind_item: None,
@@ -994,12 +1007,12 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 }
 
 pub fn resolve<'cx>(diag: &'cx DiagEmitter<'cx>, universe: &Universe) -> Mappings {
-    let mut first = FirstPass::new();
+    let mut first = FirstPass::new(diag);
     for thing in &universe.thingies {
         first.visit_thing(thing);
     }
 
-    let mut second = SecondPass::new(first, diag);
+    let mut second = SecondPass::new(first);
     for thing in &universe.thingies {
         second.visit_thing(thing);
     }

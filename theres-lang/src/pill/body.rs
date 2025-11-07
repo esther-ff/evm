@@ -34,7 +34,7 @@ use crate::eair::types::{
 };
 use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{
-    AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, StmtKind,
+    AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, Stmt, StmtKind,
 };
 use crate::pill::errors::PillError;
 use crate::pill::op::{BinOp, UnOp};
@@ -81,7 +81,6 @@ impl<'il> LocalData<'il> {
 
 #[derive(Debug)]
 pub struct Pill<'il> {
-    span: Span,
     arg_count: usize,
     cfg: Cfg<'il>,
     locals: Locals<'il>,
@@ -90,13 +89,6 @@ pub struct Pill<'il> {
 impl<'il> Pill<'il> {
     pub(crate) fn cfg(&self) -> &Cfg<'il> {
         &self.cfg
-    }
-
-    pub(crate) fn locals(&self) -> impl Iterator<Item = (Local, &LocalData<'il>)> {
-        self.locals
-            .iter()
-            .enumerate()
-            .map(|(ix, val)| (Local::new_usize(ix), val))
     }
 }
 
@@ -156,7 +148,10 @@ impl<'il> PillBuilder<'il> {
             }
 
             ExprKind::Local(loc) => (bb, Operand::Use(self.map[loc].into())),
-
+            ExprKind::Param(param) => {
+                let param_local = self.params[param];
+                (bb, Operand::Use(param_local.into()))
+            }
             ExprKind::Upvar { upvar } => (bb, Operand::Use(self.captures[upvar])),
             ExprKind::Index { base, idx } => {
                 let mut acc;
@@ -188,8 +183,7 @@ impl<'il> PillBuilder<'il> {
     #[allow(clippy::too_many_lines)]
     #[track_caller]
     fn lower_expr_into(&mut self, expr: &Expr<'il>, mut bb: BasicBlock, into: Local) -> BasicBlock {
-        match &expr.kind {
-            ExprKind::Param(..) => todo!(),
+        let bb = match &expr.kind {
             ExprKind::Lambda => {
                 let ty = expr.ty;
                 let lambda = ty.expect_lambda();
@@ -389,8 +383,7 @@ impl<'il> PillBuilder<'il> {
             ExprKind::Assign {
                 lvalue: lhs,
                 rvalue: rhs,
-                // USE THIS!
-                from_lowering: _,
+                from_lowering,
             } => {
                 if !lhs.is_assignable_to() {
                     self.cx.diag().emit_err(PillError::InvalidAssign, expr.span);
@@ -420,7 +413,12 @@ impl<'il> PillBuilder<'il> {
                 (bb, rvalue) = self.as_rvalue(rhs, bb);
                 (bb, lvalue) = self.as_access_full(lhs, bb);
 
-                self.cfg.assign(bb, lvalue, rvalue, expr.span);
+                let kind = StmtKind::Assign {
+                    dest: lvalue,
+                    src: rvalue,
+                    bypass_const: *from_lowering,
+                };
+                self.cfg.push_stmt(bb, Stmt::new(kind, expr.span));
 
                 if let ExprKind::Local(loc) = lhs.kind {
                     self.live(bb, self.map[&loc], expr.span);
@@ -504,7 +502,11 @@ impl<'il> PillBuilder<'il> {
                 self.live(bb, into, expr.span);
                 bb
             }
-        }
+        };
+
+        self.live(bb, into, expr.span);
+
+        bb
     }
 
     fn process_if_expr(
@@ -548,28 +550,6 @@ impl<'il> PillBuilder<'il> {
         self.cfg.goto(bb_false_end, bb_end, Span::DUMMY);
 
         bb_end
-    }
-
-    fn process_bin_op(
-        &mut self,
-        lhs: &Expr<'il>,
-        rhs: &Expr<'il>,
-        op: BinOp,
-        mut bb: BasicBlock,
-        local: Local,
-    ) -> BasicBlock {
-        let span = Span::between(lhs.span, rhs.span);
-        let (new_bb, lhs) = self.as_operand(lhs, bb);
-        bb = new_bb;
-        let (new_bb, rhs) = self.as_operand(rhs, bb);
-        bb = new_bb;
-
-        let dest = local.into();
-
-        self.cfg
-            .assign(bb, dest, Rvalue::Binary { op, lhs, rhs }, span);
-
-        bb
     }
 
     fn process_logical_op(
@@ -893,6 +873,10 @@ impl<'il> PillBuilder<'il> {
                 (bb, derefed)
             }
 
+            ExprKind::Param(param) => {
+                (bb, AccessBuilder::new(self.cx.arena(), self.params[&param]))
+            }
+
             _ => {
                 let tmp = self.temporary(expr.ty);
                 let (bb, src) = self.as_operand(expr, bb);
@@ -961,7 +945,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         arg_count += 1;
     }
 
-    for (ix, param) in body.params.iter().enumerate() {
+    for (ix, param) in body.params.iter() {
         let param_local = locals.push(LocalData {
             mutbl: Constant::No,
             ty: param.ty(),
@@ -969,15 +953,15 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         });
         cfg.live(block, Span::DUMMY, param_local);
         alive.insert(param_local);
-        params.insert(ParamId::new_usize(ix), param_local);
+        params.insert(ix, param_local);
     }
 
     locals.reserve(body.locals.len());
     let mut map = HashMap::with_capacity(body.locals.len());
-    for (local, data) in body.locals.iter().enumerate() {
+    for (local, data) in body.locals.iter() {
         assert!(data.ty().maybe_infer().is_none());
         let id = locals.push((*data).into());
-        map.insert(EairLocal::new_usize(local), id);
+        map.insert(local, id);
     }
 
     let mut builder = PillBuilder {
@@ -994,8 +978,8 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     let ret_bb = builder.lower_expr_into(body_entry, block, ret_place);
     let entry_span = body_entry.span;
     let span = Span::new(
-        entry_span.end() - 1,
-        entry_span.end(),
+        entry_span.end - 1,
+        entry_span.end,
         entry_span.line,
         entry_span.sourceid,
     );
@@ -1018,7 +1002,6 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     }
 
     let body = Pill {
-        span: body.span,
         arg_count,
         cfg: builder.cfg,
         locals: builder.locals,
@@ -1143,9 +1126,15 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
                     }?;
                 }
 
-                StmtKind::Nop => writeln!(w, "{INDENT}Nop")?,
-
-                StmtKind::Assign { dest, src } => writeln!(w, "{INDENT}{dest:?} = {src:?}")?,
+                StmtKind::Assign {
+                    dest,
+                    src,
+                    bypass_const,
+                } => writeln!(
+                    w,
+                    "{INDENT}{dest:?} {force}= {src:?}",
+                    force = if *bypass_const { ":" } else { "" }
+                )?,
 
                 StmtKind::CheckCond(cond) => writeln!(w, "{INDENT}CheckCond({cond:?})")?,
 

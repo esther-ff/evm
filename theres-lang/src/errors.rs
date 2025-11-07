@@ -1,40 +1,16 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp;
-use std::io::{self, BufWriter, Stderr};
 use std::panic::Location;
 
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
-use crate::sources::{SourceId, Sources};
+use crate::sources::Sources;
 use crate::span::Span;
 
 pub trait TheresError: Copy {
     /// Message describing the error
     fn message(&self) -> Cow<'static, str>;
-}
-
-pub struct Message {
-    msg: Cow<'static, str>,
-    attached_to: Span,
-}
-
-impl Message {
-    pub fn print_to<O>(&self, indent: usize, writer: &mut O) -> io::Result<()>
-    where
-        O: io::Write,
-    {
-        let msg_indent = self
-            .attached_to
-            .end()
-            .saturating_sub(self.attached_to.start()) as usize;
-        writeln!(writer, "{:<indent$}| ", " ")?;
-        write!(writer, "{:<indent$}| ", " ")?;
-        writeln!(writer, "{msg:>msg_indent$}", msg = self.msg)?;
-
-        writeln!(writer, "{:<indent$}| ", " ")
-    }
 }
 
 pub struct DiagEmitter<'a> {
@@ -58,25 +34,21 @@ impl<'a> DiagEmitter<'a> {
         self.inner.borrow().err_amount > 0
     }
 
-    pub fn wipe_errors(&self) {
-        self.inner.borrow_mut().err_amount = 0;
-    }
+    // pub fn wipe_errors(&self) {
+    //     self.inner.borrow_mut().err_amount = 0;
+    // }
 }
 
 pub struct DiagEmitterInner<'a> {
-    stderr: BufWriter<Stderr>,
-    err_amount: usize,
     srcs: &'a Sources,
+    err_amount: usize,
 }
-
-const EXTRA_LINES: usize = 2;
 
 impl<'a> DiagEmitterInner<'a> {
     fn new(srcs: &'a Sources) -> Self {
         Self {
-            stderr: BufWriter::new(std::io::stderr()),
-            err_amount: 0,
             srcs,
+            err_amount: 0,
         }
     }
 
@@ -98,46 +70,25 @@ impl<'a> DiagEmitterInner<'a> {
         )
         .unwrap();
     }
-
-    fn get_lines(&self, id: SourceId, line_origin: usize, extra: usize) -> Vec<&'a str> {
-        self.srcs
-            .get_by_source_id(id)
-            .get_lines_above_below(line_origin, extra)
-            .expect("Given line number isn't present in the source file")
-    }
 }
 
-fn longest_line_number_from_origin(origin: usize, jump: usize) -> u32 {
-    let mut up = origin;
+// fn _longest_line_number_from_origin(origin: usize, jump: usize) -> u32 {
+//     let mut up = origin;
 
-    for _ in 0..jump {
-        let tmp = up.saturating_sub(1);
-        up = cmp::max(up, tmp);
-    }
+//     for _ in 0..jump {
+//         let tmp = up.saturating_sub(1);
+//         up = cmp::max(up, tmp);
+//     }
 
-    let mut down = origin;
+//     let mut down = origin;
 
-    for _ in 0..jump {
-        let tmp = down.saturating_add(1);
-        down = cmp::max(up, tmp);
-    }
+//     for _ in 0..jump {
+//         let tmp = down.saturating_add(1);
+//         down = cmp::max(up, tmp);
+//     }
 
-    let len_upper = up.checked_ilog10().unwrap_or(2) + 1;
-    let down_upper = down.checked_ilog10().unwrap_or(2) + 1;
+//     let len_upper = up.checked_ilog10().unwrap_or(2) + 1;
+//     let down_upper = down.checked_ilog10().unwrap_or(2) + 1;
 
-    cmp::max(len_upper, down_upper)
-}
-
-fn print_to<O>(
-    line_nr: usize,
-    content: &str,
-    indent: usize,
-    writer: &mut O,
-    msg: Option<Message>,
-) -> io::Result<()>
-where
-    O: io::Write,
-{
-    writeln!(writer, "{line_nr:<indent$}| {content}",)?;
-    msg.map_or(Ok(()), |m| m.print_to(indent, writer))
-}
+//     cmp::max(len_upper, down_upper)
+// }

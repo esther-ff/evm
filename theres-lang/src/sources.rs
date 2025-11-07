@@ -60,10 +60,6 @@ impl SourceFile {
         }
     }
 
-    pub fn source_id(&self) -> SourceId {
-        self.id
-    }
-
     pub fn name(&self) -> &str {
         &self.access_name
     }
@@ -81,28 +77,6 @@ impl SourceFile {
                 storage.push(LineSpan { start, end: ix + 1 });
             }
         }
-    }
-
-    pub fn get_line(&self, idx: usize) -> Option<LineSpan> {
-        self.lines.get(idx + 1).copied()
-    }
-
-    pub fn get_lines_from_to(&self, from: usize, to: usize) -> Option<Vec<&str>> {
-        let slice = self.lines.get(from + 1..to)?;
-
-        slice
-            .iter()
-            .map(|span| {
-                self.data
-                    .get(span.start..span.end)
-                    .expect("invalid line span")
-            })
-            .collect::<Vec<_>>()
-            .into()
-    }
-
-    pub fn get_lines_above_below(&self, origin: usize, each: usize) -> Option<Vec<&str>> {
-        self.get_lines_from_to(origin.saturating_sub(each), origin + each)
     }
 
     pub fn data(&self) -> &[u8] {
@@ -159,27 +133,5 @@ impl Sources {
 
     pub fn files(&self) -> &SimpleFiles<Arc<str>, Arc<str>> {
         &self.simple
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::sources::SourceFile;
-    use crate::sources::SourceId;
-
-    #[test]
-    fn source_file_lines() {
-        const DATA: &str = concat!("line 1\n", "line 2\n", "line 3\n", "line 4\n", "line 5");
-        let file = SourceFile::new(
-            SourceId::ZERO,
-            String::from("test").into(),
-            DATA.to_string(),
-        );
-
-        let lines = file.get_lines_from_to(1, 3);
-        dbg!(lines);
-
-        let lines = file.get_lines_above_below(2, 2);
-        dbg!(lines);
     }
 }

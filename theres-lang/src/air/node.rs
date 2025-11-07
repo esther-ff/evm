@@ -5,6 +5,7 @@ use crate::span::Span;
 use crate::symbols::SymbolId;
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // for later
 pub enum Node<'h> {
     Local(&'h Local<'h>),
     BindItem(&'h BindItem<'h>),
@@ -20,10 +21,6 @@ pub enum Node<'h> {
 }
 
 impl<'h> Node<'h> {
-    pub fn is_thing(&self) -> bool {
-        matches!(self, Self::Thing(..))
-    }
-
     pub fn get_thing(&'h self) -> Option<&'h Thing<'h>> {
         if let Node::Thing(t) = self {
             return Some(t);
@@ -108,15 +105,6 @@ impl AssignOp {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum LoopDesugarKind {
-    For,
-    While,
-    Until,
-
-    None,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct Lambda<'h> {
     pub did: DefId,
     pub inputs: &'h [Param<'h>],
@@ -185,7 +173,6 @@ pub enum ExprKind<'h> {
 
     Loop {
         body: &'h Block<'h>,
-        reason: LoopDesugarKind,
     },
 
     Literal(AirLiteral),

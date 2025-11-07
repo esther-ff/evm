@@ -26,7 +26,7 @@ pub enum ImmKind {
 pub struct Imm<'il> {
     kind: ImmKind,
     ty: Ty<'il>,
-    span: Span,
+    _span: Span,
 }
 
 impl<'il> Imm<'il> {
@@ -34,7 +34,7 @@ impl<'il> Imm<'il> {
         let this = Self {
             kind: ImmKind::Empty,
             ty,
-            span,
+            _span: span,
         };
 
         cx.arena().alloc(this)
@@ -44,7 +44,7 @@ impl<'il> Imm<'il> {
         let this = Self {
             kind: ImmKind::Scalar(scalar),
             ty,
-            span,
+            _span: span,
         };
 
         cx.arena().alloc(this)
@@ -216,6 +216,7 @@ pub enum StmtKind<'il> {
     Assign {
         dest: Access<'il>,
         src: Rvalue<'il>,
+        bypass_const: bool,
     },
 
     Call {
@@ -225,8 +226,6 @@ pub enum StmtKind<'il> {
     },
 
     CheckCond(Operand<'il>),
-
-    Nop,
 
     LocalLive(Local),
 }
@@ -244,6 +243,10 @@ impl<'il> Stmt<'il> {
 
     pub fn span(&self) -> Span {
         self.span
+    }
+
+    pub(crate) fn new(kind: StmtKind<'il>, span: Span) -> Self {
+        Self { kind, span }
     }
 }
 
@@ -265,10 +268,6 @@ impl<'il> BbData<'il> {
 
     pub fn predecessors(&self) -> &[BasicBlock] {
         &self.predecessors
-    }
-
-    pub fn add_predecessor(&mut self, bb: BasicBlock) {
-        self.predecessors.push(bb);
     }
 }
 
@@ -298,7 +297,11 @@ impl<'il> Cfg<'il> {
         self.push_stmt(
             bb,
             Stmt {
-                kind: StmtKind::Assign { dest, src },
+                kind: StmtKind::Assign {
+                    dest,
+                    src,
+                    bypass_const: false,
+                },
                 span,
             },
         );
@@ -379,18 +382,11 @@ impl<'il> Cfg<'il> {
     }
 
     pub fn blocks(&'il self) -> impl Iterator<Item = (BasicBlock, &'il BbData<'il>)> {
-        self.bbs
-            .iter()
-            .enumerate()
-            .map(|(ix, bb)| (BasicBlock::new_usize(ix), bb))
+        self.bbs.iter()
     }
 
     pub fn blocks_mut(&mut self) -> impl Iterator<Item = (BasicBlock, &mut BbData<'il>)> {
-        self.bbs
-            .to_slice_mut()
-            .iter_mut()
-            .enumerate()
-            .map(move |(ix, bb)| (BasicBlock::new_usize(ix), bb))
+        self.bbs.iter_mut()
     }
 
     pub fn len(&self) -> usize {
