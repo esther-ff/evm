@@ -503,9 +503,10 @@ impl Parser<'_> {
 
     fn local_variable_stmt(&mut self) -> Result<VariableStmt> {
         self.expect(t!(Let));
-        let mutt = match self.consume_if(t!(Mut)) {
-            true => VarMode::Mut,
-            false => VarMode::Immut,
+        let mutt = if self.consume_if(t!(Mut)) {
+            VarMode::Mut
+        } else {
+            VarMode::Immut
         };
 
         let name = self.expect_ident_as_name()?;

@@ -9,7 +9,7 @@ use crate::air::{AirId, AirMap};
 use crate::arena::Arena;
 use crate::ast::Name;
 use crate::driver::Flags;
-use crate::eair::types::{Eair, build_eair};
+use crate::eair::{Eair, build_eair};
 use crate::errors::DiagEmitter;
 use crate::pill::body::{Pill, build_pill};
 use crate::pooled::Pool;

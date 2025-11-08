@@ -29,9 +29,7 @@ use crate::air::AirId;
 use crate::air::def::DefId;
 use crate::air::node::{AirLiteral, Constant};
 use crate::ast;
-use crate::eair::types::{
-    Block, BodyKind, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId,
-};
+use crate::eair::{Block, BodyKind, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId};
 use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{
     AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, Stmt, StmtKind,
