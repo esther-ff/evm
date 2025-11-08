@@ -405,7 +405,7 @@ impl Display for Ty<'_> {
             TyKind::Lambda(lambda) => {
                 return cx(|cx| {
                     let lambda = cx.air_get_lambda(lambda.did);
-                    write!(f, "{{lambda <=> {span}}}", span = lambda.span)
+                    write!(f, "{{lambda@{span}}}", span = lambda.span)
                 });
             }
         };

@@ -92,7 +92,7 @@ impl<'il> Access<'il> {
 
 impl Debug for Access<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "_{}", self.base.to_usize())?;
+        write!(f, "l{}", self.base.to_usize())?;
 
         for kind in self.modifs {
             match kind {

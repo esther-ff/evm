@@ -88,6 +88,8 @@ impl<'il> LocalData<'il> {
 
 #[derive(Debug)]
 pub struct Pill<'il> {
+    #[allow(dead_code)] /* will be useful */ argument_count: usize,
+
     pub(crate) cfg: Cfg<'il>,
     locals: Locals<'il>,
 }
@@ -900,8 +902,6 @@ impl<'il> PillBuilder<'il> {
         }
     }
 
-    #[track_caller]
-    #[inline]
     fn temporary(&mut self, ty: Ty<'il>) -> Local {
         self.locals.push(LocalData {
             mutbl: Constant::Yes,
@@ -916,7 +916,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     let mut captures = HashMap::new();
     let mut cfg = Cfg::new();
     let mut alive = HashSet::with_capacity(body.params.len());
-    let arg_count = body.params.len();
+    let mut arg_count = body.params.len();
     let mut locals = Locals::new_from_vec(Vec::with_capacity(arg_count + 1));
     let mut params = HashMap::with_capacity(body.params.len() + 1);
 
@@ -942,9 +942,10 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         let env = locals.push(LocalData {
             mutbl: Constant::No,
             ty: types.node_ty(cx.air_get_lambda(did).expr_air_id),
-            origin: LocalOrigin::Temporary,
+            origin: LocalOrigin::Param(None),
         });
 
+        arg_count += 1;
         cfg.live(block, Span::DUMMY, env);
 
         captures.reserve(upvars.len());
@@ -989,12 +990,11 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
     let ret_bb = builder.lower_expr_into(body_entry, block, ret_place);
     let entry_span = body_entry.span;
-    let span = Span::new(
-        entry_span.end - 1,
-        entry_span.end,
-        entry_span.line,
-        entry_span.sourceid,
-    );
+    let span = {
+        let mut tmp = entry_span;
+        tmp.start = tmp.end - 1;
+        tmp
+    };
 
     builder.cfg.bb_return(ret_bb, span);
 
@@ -1013,6 +1013,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     }
 
     let body = Pill {
+        argument_count: arg_count,
         cfg: builder.cfg,
         locals: builder.locals,
     };
@@ -1029,19 +1030,19 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 }
 
 const INDENT: &str = "      ";
-#[allow(clippy::too_many_lines)]
 fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
     writeln!(
         w,
-        "fun {} :: {ty}",
+        "fun {}({arg_count}) :: {ty}",
         cx(|cx| cx.name_of(did)),
+        arg_count = pill.argument_count,
         ty = pill.locals[Local::ZERO].ty
     )?;
 
     for (ix, local) in pill.locals.inner().iter().enumerate() {
         write!(
             w,
-            "    let {mutbl} _{ix}: {ty}",
+            "    let {mutbl} l{ix} :: {ty}",
             ty = local.ty,
             mutbl = match local.mutbl {
                 Constant::Yes => "mut",
@@ -1052,8 +1053,8 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
         match local.origin {
             LocalOrigin::User(v) => write!(w, " ({})", v.get_interned()),
             LocalOrigin::Param(sym) => match sym {
-                None => write!(w, " <{{lambda env}}>"),
-                Some(name) => write!(w, " <{}>", name.get_interned()),
+                None => write!(w, " :: param<{{lambda env}}>"),
+                Some(name) => write!(w, " :: param<{}>", name.get_interned()),
             },
 
             LocalOrigin::Temporary => Ok(()),
@@ -1103,7 +1104,7 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
 
                 StmtKind::CheckCond(cond) => writeln!(w, "{INDENT}CheckCond({cond:?})")?,
 
-                StmtKind::LocalLive(local) => writeln!(w, "{INDENT}Live(_{})", local.to_usize())?,
+                StmtKind::LocalLive(local) => writeln!(w, "{INDENT}Live({})", local.to_usize())?,
             }
         }
 
@@ -1130,5 +1131,5 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
         }
     }
 
-    writeln!(w, "}}")
+    writeln!(w, "}}\n")
 }
