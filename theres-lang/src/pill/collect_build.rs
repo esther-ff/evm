@@ -92,6 +92,8 @@ pub fn collect_build_items<'cx>(cx: &'cx Session<'cx>, did: DefId) {
             let body = cx.build_pill(ele.did);
             collector.visit_body(body);
         }
+
+        collector.queue.extend(collector.visit.iter().copied());
     }
 
     dbg!(&collector.queue);

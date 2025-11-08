@@ -42,6 +42,7 @@ use crate::pill::scalar::Scalar;
 use crate::session::{Session, cx};
 use crate::span::Span;
 use crate::symbols::SymbolId;
+use crate::types::fun_cx::FieldId;
 use crate::types::ty::{Ty, TyKind};
 
 pub use private::Local;
@@ -82,9 +83,9 @@ impl<'il> LocalData<'il> {
         self.ty
     }
 
-    pub fn is_mutbl(&self) -> bool {
-        matches!(self.mutbl, Constant::Yes)
-    }
+    // pub fn is_mutbl(&self) -> bool {
+    //     matches!(self.mutbl, Constant::Yes)
+    // }
 }
 
 #[derive(Debug)]
@@ -788,13 +789,11 @@ impl<'il> PillBuilder<'il> {
                 let lambda = ty.expect_lambda();
                 let upvars = self.cx.upvars_of(lambda.did);
 
-                dbg!(&self.captures);
                 let rvalue = Rvalue::Adt {
                     def: AdtKind::Lambda(lambda),
                     args: upvars
                         .iter()
                         .map(|air_id| {
-                            dbg!(air_id, self.eair_locals);
                             let eair_local = self.eair_locals[air_id];
                             let local = self.map[&eair_local];
                             Operand::Use(local.into())
@@ -936,28 +935,26 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
     let block = cfg.new_block();
 
-    dbg!(&body.kind);
-    dbg!(cx.name_of(did));
     if let BodyKind::Lambda = body.kind {
-        let ty = cx.types.nil;
+        let parent = cx.air_get_parent(did);
+        let types = cx.typeck(parent);
+
         let upvars = cx.upvars_of(did);
-        dbg!("pill upvars", &upvars);
+
         let env = locals.push(LocalData {
             mutbl: Constant::No,
-            ty,
+            ty: types.node_ty(cx.air_get_lambda(did).expr_air_id),
             origin: LocalOrigin::Temporary,
         });
 
         cfg.live(block, Span::DUMMY, env);
 
-        // let parent = cx.air_get_parent(did);
-        // let types = cx.typeck(parent);
-
         captures.reserve(upvars.len());
-        for var in upvars {
+        for (ix, var) in upvars.iter().enumerate() {
             // let ty = types.node_ty(*var);
-            let acc = Access::base(env);
-            captures.insert(*var, acc);
+            let mut acc = AccessBuilder::new(cx.arena(), env);
+            acc.field(FieldId::new_usize(ix));
+            captures.insert(*var, acc.finish(cx));
         }
     }
 

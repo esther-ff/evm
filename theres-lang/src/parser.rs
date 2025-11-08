@@ -29,8 +29,6 @@ impl TheresError for ParseError {
                 format!("expected the start of a declaration, got: {got}").into()
             }
 
-            ParseError::ExpectedConstVar => "expected a constant here".into(),
-
             ParseError::InvalidPattern => "this pattern is invalid syntatically".into(),
 
             ParseError::ExpectedExpr => "expected an expression here".into(),
@@ -57,7 +55,6 @@ enum ParseError {
     WrongUnaryOp { offender: Token },
     MalformedType,
     FunctionWithoutBody,
-    ExpectedConstVar,
     InvalidPattern,
 }
 
@@ -75,12 +72,6 @@ enum ExprOrStmt {
 enum NeedTy {
     Yes,
     No,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum VariableReq {
-    None,
-    ConstAndInit,
 }
 
 struct Parser<'a> {

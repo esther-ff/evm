@@ -31,7 +31,6 @@ impl<'vis> AirVisitor<'vis> for UpvarCollector<'_> {
     type Result = ();
 
     fn visit_path(&mut self, path: &'vis Path<'vis>) -> Self::Result {
-        dbg!(path);
         if let Resolved::Local(air_id) = path.res
             && !self.all_locals.contains(&air_id)
         {
@@ -78,6 +77,5 @@ pub fn analyze_upvars<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx HashSet<Ai
 
     upvars.visit_expr(body);
 
-    dbg!(&upvars.upvars);
     cx.arena().alloc(upvars.upvars)
 }

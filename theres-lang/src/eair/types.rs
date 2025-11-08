@@ -11,22 +11,21 @@ use std::iter::once;
 use std::mem;
 
 use crate::air::def::{DefId, DefType, Resolved};
-use crate::air::node::{self, Node, StmtKind};
+use crate::air::node::{self, StmtKind};
 
 use crate::air::AirId;
+use crate::air::node::{AirLiteral, Constant, Expr as AirExpr, Local};
+use crate::arena::Arena;
 use crate::ast::{self, UnaryOp};
 use crate::id::IdxVec;
 use crate::pill;
 use crate::symbols::SymbolId;
 use crate::types::fun_cx::FieldId;
 use crate::types::ty::{Instance, TyKind};
-use crate::{
-    air::node::{AirLiteral, Constant, Expr as AirExpr, Local},
-    arena::Arena,
-    session::Session,
-    span::Span,
-    types::{fun_cx::TypeTable, ty::Ty},
-};
+
+use crate::session::Session;
+use crate::span::Span;
+use crate::types::{fun_cx::TypeTable, ty::Ty};
 
 pub use private::{LocalId, Locals, ParamId, Params};
 
@@ -605,7 +604,6 @@ impl<'ir> EairBuilder<'ir> {
                 Resolved::Err => unreachable!("shouldn't put `Resolved::Err`s in EAIR"),
 
                 Resolved::Local(ref local_id) => {
-                    dbg!(local_id);
                     let kind = if self.upvars.contains(local_id) {
                         ExprKind::Upvar { upvar: *local_id }
                     } else {
@@ -697,16 +695,9 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
     let upvars = if let DefType::Lambda = cx.def_type(did) {
         let parent = cx.air_get_parent(did);
         let upvars = cx.upvars_of(did);
-        dbg!(&upvars);
         types = cx.typeck(parent);
-        let def = cx.air_get_def(did);
-
-        if let Node::Lambda(lambda) = def {
-            inputs = lambda.inputs;
-        } else {
-            unreachable!()
-        }
-
+        let def = cx.air_get_lambda(did);
+        inputs = def.inputs;
         upvars
     } else {
         types = cx.typeck(did);

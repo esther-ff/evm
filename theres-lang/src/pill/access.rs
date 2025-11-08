@@ -78,7 +78,10 @@ impl<'il> Access<'il> {
         for ele in self.modifs {
             base = match ele {
                 AccessKind::Index(..) => base.index(),
-                AccessKind::Field(f) => base.field(cx, *f),
+                AccessKind::Field(f) => match base.maybe_lambda() {
+                    None => base.field(cx, *f),
+                    Some(lambda) => lambda.all_inputs[f.to_usize()],
+                },
                 AccessKind::Deref => base.peel_ref(),
             }
         }

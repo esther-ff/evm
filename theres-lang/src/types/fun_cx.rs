@@ -686,7 +686,6 @@ impl<'ty> FunCx<'ty> {
             );
         }
 
-        dbg!(inputs, args);
         let mut ix = 0;
         loop {
             match (
@@ -694,7 +693,6 @@ impl<'ty> FunCx<'ty> {
                 call_tys.next().map(|expr| self.type_of(expr)),
             ) {
                 (Some(sig_ty), Some(call_ty)) => {
-                    dbg!(sig_ty, call_ty);
                     if self.unify(sig_ty, call_ty).is_err() {
                         self.s.diag().emit_err(
                             TypingError::WrongArgumentTy {
@@ -789,7 +787,10 @@ impl<'ty> TypeTable<'ty> {
     }
 
     pub fn node_ty(&self, air_id: AirId) -> Ty<'ty> {
-        self.air_node_tys.get(&air_id).copied().unwrap()
+        match self.air_node_tys.get(&air_id) {
+            None => panic!("{air_id} has no type associated with it!"),
+            Some(ty) => *ty,
+        }
     }
 
     pub fn resolve_method(&self, id: AirId) -> DefId {
@@ -809,20 +810,13 @@ struct TyCollector<'ty> {
 impl<'ty> TyCollector<'ty> {
     fn visit(mut self, expr: &Expr<'_>) -> TypeTable<'ty> {
         self.visit_expr(expr);
-
-        let _ = core::mem::replace(
-            &mut self.table.resolved_method_calls,
-            self.cx.resolved_method_calls,
-        );
-
-        // let _ = core::mem::replace(&mut self.table.local_variables, self.cx.local_tys);
-
+        self.table.resolved_method_calls = self.cx.resolved_method_calls;
         self.table
     }
 
     fn resolve_type_variable(&self, ty: Ty<'ty>) -> Ty<'ty> {
         match *ty {
-            TyKind::InferTy(new) => match *self.cx.ty_var_ty(ty) {
+            TyKind::InferTy(..) => match *self.cx.ty_var_ty(ty) {
                 TyKind::InferTy(inner) => match inner.kind {
                     InferKind::Float => self.sess.types.f64,
                     InferKind::Integer => self.sess.types.i64,
@@ -846,7 +840,6 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
     type Result = ();
 
     fn visit_local(&mut self, local: &'vis Local<'vis>) -> Self::Result {
-        // dbg!(&self.cx.local_tys);
         let val = self
             .cx
             .local_tys
@@ -871,9 +864,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
             _ => *val,
         };
 
-        // mhm?
         self.table.air_node_tys.insert(local.air_id, ty);
-        // self.table.local_variables.insert(local.air_id, ty);
     }
 
     fn visit_stmt(&mut self, stmt: &'vis Stmt<'vis>) -> Self::Result {
@@ -892,11 +883,8 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
     fn visit_expr(&mut self, expr: &'vis Expr<'vis>) -> Self::Result {
         let ty = self.cx.type_of(expr);
-
-        if let ExprKind::Lambda(lambda) = expr.kind {
+        let expr_id = if let ExprKind::Lambda(lambda) = expr.kind {
             for ele in lambda.inputs {
-                dbg!(ele.ty);
-
                 let param_ty = self.cx.node_type[&ele.air_id];
 
                 self.table
@@ -906,32 +894,62 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
             let body = self.sess.air_body_via_id(lambda.body);
             self.visit_expr(body);
-        }
 
-        match *ty {
-            TyKind::InferTy(..) => {
-                let resolved = match *self.cx.ty_var_ty(ty) {
-                    TyKind::InferTy(inner) => match inner.kind {
-                        InferKind::Float => self.sess.types.f64,
-                        InferKind::Integer => self.sess.types.i64,
-                        InferKind::Regular => {
-                            let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
-                            self.sess.diag().emit_err(TypingError::InferFail, loc);
-                            self.sess.types.err
-                        }
-                    },
+            Some(lambda.expr_air_id)
+        } else {
+            None
+        };
 
-                    any => self.sess.intern_ty(any),
+        let ty = match *ty {
+            TyKind::InferTy(..) => match *self.cx.ty_var_ty(ty) {
+                TyKind::InferTy(inner) => match inner.kind {
+                    InferKind::Float => self.sess.types.f64,
+                    InferKind::Integer => self.sess.types.i64,
+                    InferKind::Regular => {
+                        let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
+                        self.sess.diag().emit_err(TypingError::InferFail, loc);
+                        self.sess.types.err
+                    }
+                },
+
+                any => self.sess.intern_ty(any),
+            },
+
+            TyKind::Lambda(lambda) => {
+                let ty = if lambda
+                    .all_inputs
+                    .iter()
+                    .any(|ty| ty.maybe_infer().is_some())
+                {
+                    let all_inputs = self.sess.arena().alloc_from_iter(
+                        lambda
+                            .all_inputs
+                            .iter()
+                            .map(|ty| self.resolve_type_variable(*ty)),
+                    );
+                    let env = self.sess.arena().alloc(LambdaEnv {
+                        all_inputs,
+                        output: self.resolve_type_variable(lambda.output),
+                        did: lambda.did,
+                        span: lambda.span,
+                    });
+
+                    self.sess.intern_ty(TyKind::Lambda(env))
+                } else {
+                    ty
                 };
 
-                self.table.air_node_tys.insert(expr.air_id, resolved);
+                if let Some(air_id) = expr_id {
+                    self.table.air_node_tys.insert(air_id, ty);
+                }
+
+                ty
             }
 
-            _ => {
-                self.table.air_node_tys.insert(expr.air_id, ty);
-            }
-        }
+            _ => ty,
+        };
 
+        self.table.air_node_tys.insert(expr.air_id, ty);
         crate::air::visitor::walk_expr(self, expr);
     }
 }
@@ -981,8 +999,6 @@ pub fn typeck<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx TypeTable<'cx> {
 }
 
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {
-    // ItemGatherer::new(session).visit_universe(universe);
-
     for thing in universe.things {
         match thing.kind {
             ThingKind::Fn { name: _, sig: _ } => {
