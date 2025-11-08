@@ -5,6 +5,7 @@ use crate::pill::body::Local;
 use crate::pill::cfg::Operand;
 use crate::session::Session;
 use crate::types::fun_cx::FieldId;
+use crate::types::ty::Ty;
 
 pub struct AccessBuilder<'il> {
     base: Local,
@@ -71,6 +72,18 @@ impl<'il> Access<'il> {
 
     pub fn modifs(&self) -> &[AccessKind<'il>] {
         self.modifs
+    }
+
+    pub fn deduct_type(&self, cx: &'il crate::session::Session<'il>, mut base: Ty<'il>) -> Ty<'il> {
+        for ele in self.modifs {
+            base = match ele {
+                AccessKind::Index(..) => base.index(),
+                AccessKind::Field(f) => base.field(cx, *f),
+                AccessKind::Deref => base.peel_ref(),
+            }
+        }
+
+        base
     }
 }
 

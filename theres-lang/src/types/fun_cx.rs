@@ -92,7 +92,7 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn unify(&mut self, expected: Ty<'ty>, got: Ty<'ty>) -> Result<(), UnifyError> {
-        // log::trace!("entered `unify` expected={expected:?} got={got:?}");
+        log::trace!("entered `unify` expected={expected:?} got={got:?}");
         match (*expected, *got) {
             (TyKind::Bool, TyKind::Bool)
             | (TyKind::Float, TyKind::Float)
@@ -129,7 +129,7 @@ impl<'ty> FunCx<'ty> {
                     return self.unify(*ty, concrete_ref)
                 }
 
-                // log::debug!("unified ty var {infer:#?} and concrete {concrete:#?}");
+                log::debug!("unified ty var {infer:#?} and concrete {concrete:#?}");
 
                 self.ty_var_types.insert(infer.vid, concrete_ref);
             }
@@ -686,6 +686,7 @@ impl<'ty> FunCx<'ty> {
             );
         }
 
+        dbg!(inputs, args);
         let mut ix = 0;
         loop {
             match (
@@ -693,6 +694,7 @@ impl<'ty> FunCx<'ty> {
                 call_tys.next().map(|expr| self.type_of(expr)),
             ) {
                 (Some(sig_ty), Some(call_ty)) => {
+                    dbg!(sig_ty, call_ty);
                     if self.unify(sig_ty, call_ty).is_err() {
                         self.s.diag().emit_err(
                             TypingError::WrongArgumentTy {
@@ -817,6 +819,27 @@ impl<'ty> TyCollector<'ty> {
 
         self.table
     }
+
+    fn resolve_type_variable(&self, ty: Ty<'ty>) -> Ty<'ty> {
+        match *ty {
+            TyKind::InferTy(new) => match *self.cx.ty_var_ty(ty) {
+                TyKind::InferTy(inner) => match inner.kind {
+                    InferKind::Float => self.sess.types.f64,
+                    InferKind::Integer => self.sess.types.i64,
+                    InferKind::Regular => {
+                        dbg!(ty, inner);
+                        let loc = self.cx.ty_var_origins.get(&inner.vid).copied().unwrap();
+                        self.sess.diag().emit_err(TypingError::InferFail, loc);
+                        self.sess.types.err
+                    }
+                },
+
+                any => self.sess.intern_ty(any),
+            },
+
+            _ => ty,
+        }
+    }
 }
 
 impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
@@ -869,6 +892,21 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
     fn visit_expr(&mut self, expr: &'vis Expr<'vis>) -> Self::Result {
         let ty = self.cx.type_of(expr);
+
+        if let ExprKind::Lambda(lambda) = expr.kind {
+            for ele in lambda.inputs {
+                dbg!(ele.ty);
+
+                let param_ty = self.cx.node_type[&ele.air_id];
+
+                self.table
+                    .air_node_tys
+                    .insert(ele.air_id, self.resolve_type_variable(param_ty));
+            }
+
+            let body = self.sess.air_body_via_id(lambda.body);
+            self.visit_expr(body);
+        }
 
         match *ty {
             TyKind::InferTy(..) => {

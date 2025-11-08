@@ -132,6 +132,7 @@ impl Compiler {
             let pill = session.build_pill(main_did);
             crate::pill::dataflow::analyze_maybe_init_variables(pill.cfg());
 
+            crate::pill::collect_build::collect_build_items(session, main_did);
             #[allow(clippy::needless_return)]
             if diags.errors_emitted() {
                 return;

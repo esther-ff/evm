@@ -77,11 +77,18 @@ impl<'il> LocalData<'il> {
             origin: LocalOrigin::User(name),
         }
     }
+
+    pub fn ty(&self) -> Ty<'il> {
+        self.ty
+    }
+
+    pub fn is_mutbl(&self) -> bool {
+        matches!(self.mutbl, Constant::Yes)
+    }
 }
 
 #[derive(Debug)]
 pub struct Pill<'il> {
-    arg_count: usize,
     pub(crate) cfg: Cfg<'il>,
     locals: Locals<'il>,
 }
@@ -89,6 +96,10 @@ pub struct Pill<'il> {
 impl<'il> Pill<'il> {
     pub(crate) fn cfg(&self) -> &Cfg<'il> {
         &self.cfg
+    }
+
+    pub(crate) fn local_data(&self, local: Local) -> &LocalData<'il> {
+        &self.locals[local]
     }
 }
 
@@ -98,6 +109,7 @@ struct PillBuilder<'il> {
     locals: Locals<'il>,
     map: HashMap<EairLocal, Local>,
     captures: HashMap<AirId, Access<'il>>,
+    eair_locals: &'il HashMap<AirId, EairLocal>,
     current_loop_end: Option<BasicBlock>,
     params: HashMap<ParamId, Local>,
     alive: HashSet<Local>,
@@ -776,13 +788,16 @@ impl<'il> PillBuilder<'il> {
                 let lambda = ty.expect_lambda();
                 let upvars = self.cx.upvars_of(lambda.did);
 
+                dbg!(&self.captures);
                 let rvalue = Rvalue::Adt {
                     def: AdtKind::Lambda(lambda),
                     args: upvars
                         .iter()
                         .map(|air_id| {
-                            let local = *self.captures.get(air_id).unwrap();
-                            Operand::Use(local)
+                            dbg!(air_id, self.eair_locals);
+                            let eair_local = self.eair_locals[air_id];
+                            let local = self.map[&eair_local];
+                            Operand::Use(local.into())
                         })
                         .collect(),
                 };
@@ -904,7 +919,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     let mut captures = HashMap::new();
     let mut cfg = Cfg::new();
     let mut alive = HashSet::with_capacity(body.params.len());
-    let mut arg_count = body.params.len();
+    let arg_count = body.params.len();
     let mut locals = Locals::new_from_vec(Vec::with_capacity(arg_count + 1));
     let mut params = HashMap::with_capacity(body.params.len() + 1);
 
@@ -921,9 +936,12 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
     let block = cfg.new_block();
 
+    dbg!(&body.kind);
+    dbg!(cx.name_of(did));
     if let BodyKind::Lambda = body.kind {
-        let ty = cx.def_type_of(did);
+        let ty = cx.types.nil;
         let upvars = cx.upvars_of(did);
+        dbg!("pill upvars", &upvars);
         let env = locals.push(LocalData {
             mutbl: Constant::No,
             ty,
@@ -941,8 +959,6 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
             let acc = Access::base(env);
             captures.insert(*var, acc);
         }
-
-        arg_count += 1;
     }
 
     for (ix, param) in body.params.iter() {
@@ -973,6 +989,7 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         current_loop_end: None,
         params,
         alive,
+        eair_locals: &body.air_id_map,
     };
 
     let ret_bb = builder.lower_expr_into(body_entry, block, ret_place);
@@ -984,7 +1001,6 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
         entry_span.sourceid,
     );
 
-    builder.cfg.live(ret_bb, span, ret_place);
     builder.cfg.bb_return(ret_bb, span);
 
     for (_, block) in builder.cfg.blocks_mut() {
@@ -1002,7 +1018,6 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     }
 
     let body = Pill {
-        arg_count,
         cfg: builder.cfg,
         locals: builder.locals,
     };
@@ -1018,83 +1033,38 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     alloc
 }
 
+const INDENT: &str = "      ";
 #[allow(clippy::too_many_lines)]
 fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
-    const INDENT: &str = "      ";
-    enum State {
-        Params,
-        Locals,
-    }
+    writeln!(
+        w,
+        "fun {} :: {ty}",
+        cx(|cx| cx.name_of(did)),
+        ty = pill.locals[Local::ZERO].ty
+    )?;
 
-    write!(w, "fun {}(", cx(|cx| cx.name_of(did)))?;
-    let mut state = State::Params;
-    let mut arg_count = pill.arg_count;
-    for (ix, local) in pill
-        .locals
-        .inner()
-        .get(1..)
-        .unwrap_or(&[])
-        .iter()
-        .enumerate()
-    {
-        match state {
-            State::Params => {
-                if arg_count == 1 {
-                    state = State::Locals;
-                }
+    for (ix, local) in pill.locals.inner().iter().enumerate() {
+        write!(
+            w,
+            "    let {mutbl} _{ix}: {ty}",
+            ty = local.ty,
+            mutbl = match local.mutbl {
+                Constant::Yes => "mut",
+                Constant::No => "const",
+            },
+        )?;
 
-                write!(
-                    w,
-                    "{mutbl} _{num}: {ty}",
-                    ty = local.ty,
-                    mutbl = match local.mutbl {
-                        Constant::Yes => "mut",
-                        Constant::No => "const",
-                    },
-                    num = ix + 1
-                )?;
+        match local.origin {
+            LocalOrigin::User(v) => write!(w, " ({})", v.get_interned()),
+            LocalOrigin::Param(sym) => match sym {
+                None => write!(w, " <{{lambda env}}>"),
+                Some(name) => write!(w, " <{}>", name.get_interned()),
+            },
 
-                if let LocalOrigin::Param(name) = local.origin {
-                    match name {
-                        None => write!(w, "<lambda env>"),
-                        Some(sym) => write!(w, " ({})", sym.get_interned()),
-                    }?;
-                }
+            LocalOrigin::Temporary => Ok(()),
+        }?;
 
-                if arg_count != 1 {
-                    write!(w, " ,")?;
-                } else if arg_count == 1 {
-                    writeln!(w, ") => {ty} {{", ty = pill.locals[Local::ZERO].ty)?;
-
-                    writeln!(
-                        w,
-                        "    let mut _0: {ty}",
-                        ty = pill.locals.first().unwrap().ty,
-                    )?;
-                }
-
-                arg_count -= 1;
-            }
-
-            State::Locals => {
-                write!(
-                    w,
-                    "    let {mutbl} _{ix}: {ty}",
-                    ty = local.ty,
-                    mutbl = match local.mutbl {
-                        Constant::Yes => "mut",
-                        Constant::No => "const",
-                    },
-                    ix = if ix == 0 { 0 } else { ix + pill.arg_count }
-                )?;
-
-                if let LocalOrigin::User(v) = local.origin {
-                    write!(w, " ({})", v.get_interned())?;
-                }
-
-                writeln!(w)?;
-            }
-        }
+        writeln!(w)?;
     }
 
     writeln!(w)?;

@@ -252,6 +252,7 @@ pub struct Eair<'ir> {
     pub params: Params<'ir>,
     pub entry: Option<Expr<'ir>>,
     pub kind: BodyKind,
+    pub air_id_map: HashMap<AirId, LocalId>,
 }
 
 #[derive(Debug)]
@@ -604,6 +605,7 @@ impl<'ir> EairBuilder<'ir> {
                 Resolved::Err => unreachable!("shouldn't put `Resolved::Err`s in EAIR"),
 
                 Resolved::Local(ref local_id) => {
+                    dbg!(local_id);
                     let kind = if self.upvars.contains(local_id) {
                         ExprKind::Upvar { upvar: *local_id }
                     } else {
@@ -695,12 +697,11 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
     let upvars = if let DefType::Lambda = cx.def_type(did) {
         let parent = cx.air_get_parent(did);
         let upvars = cx.upvars_of(did);
+        dbg!(&upvars);
         types = cx.typeck(parent);
         let def = cx.air_get_def(did);
 
-        if let Node::Expr(expr) = def
-            && let node::ExprKind::Lambda(lambda) = expr.kind
-        {
+        if let Node::Lambda(lambda) = def {
             inputs = lambda.inputs;
         } else {
             unreachable!()
@@ -735,6 +736,7 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
         params,
         entry: None,
         kind,
+        air_id_map: HashMap::new(),
     };
 
     let mut builder = EairBuilder {
@@ -759,5 +761,7 @@ pub fn build_eair<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Eair<'cx> {
         writeln!(&mut lock, "{:#?}", &builder.eair).expect("writing to stdout failed!");
     }
 
+    let map = mem::take(&mut builder.lowered_locals);
+    builder.eair.air_id_map = map;
     cx.arena().alloc(builder.eair)
 }

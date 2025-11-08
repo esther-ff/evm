@@ -5,7 +5,7 @@ use crate::pooled::Pooled;
 use crate::session::{Session, cx};
 use crate::span::Span;
 use crate::symbols::SymbolId;
-use crate::types::fun_cx::{FieldSlice, InferId};
+use crate::types::fun_cx::{FieldId, FieldSlice, InferId};
 use core::panic;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -26,6 +26,26 @@ impl<'ty> Deref for Ty<'ty> {
     type Target = TyKind<'ty>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<'ty> Ty<'ty> {
+    pub fn index(self) -> Ty<'ty> {
+        match *self {
+            TyKind::Array(inner) => inner,
+            _ => panic!("`Ty::index` on a non-list type {self}"),
+        }
+    }
+
+    pub fn field(self, cx: &'ty Session<'ty>, f: FieldId) -> Ty<'ty> {
+        match *self {
+            TyKind::Instance(def) => def
+                .fields
+                .get(f)
+                .map(|field| cx.def_type_of(field.def_id))
+                .unwrap(),
+            _ => panic!("`Ty::field` on not an instance type! {self}"),
+        }
     }
 }
 
@@ -167,13 +187,16 @@ impl<'ty> TyKind<'ty> {
         def
     }
 
+    pub fn maybe_lambda(&self) -> Option<LambdaEnv<'ty>> {
+        match self {
+            TyKind::Lambda(me) => Some(**me),
+            _ => None,
+        }
+    }
+
     #[track_caller]
     pub fn expect_lambda(&self) -> LambdaEnv<'ty> {
-        let TyKind::Lambda(env) = *self else {
-            panic!("expected lambda but got different ty!")
-        };
-
-        *env
+        self.maybe_lambda().unwrap()
     }
 }
 

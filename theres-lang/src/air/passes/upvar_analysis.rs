@@ -31,6 +31,7 @@ impl<'vis> AirVisitor<'vis> for UpvarCollector<'_> {
     type Result = ();
 
     fn visit_path(&mut self, path: &'vis Path<'vis>) -> Self::Result {
+        dbg!(path);
         if let Resolved::Local(air_id) = path.res
             && !self.all_locals.contains(&air_id)
         {
@@ -46,6 +47,8 @@ impl<'vis> AirVisitor<'vis> for UpvarCollector<'_> {
                 }
             }
         }
+
+        crate::air::visitor::walk_expr(self, expr);
     }
 }
 
@@ -56,10 +59,15 @@ pub fn analyze_upvars<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx HashSet<Ai
     );
 
     let body = cx.air_body(did);
+    let params = cx.air_get_lambda(did).inputs;
 
     let mut locals = LocalCollector {
         set: HashSet::new(),
     };
+
+    for ele in params {
+        locals.set.insert(ele.air_id);
+    }
     locals.visit_expr(body);
 
     let mut upvars = UpvarCollector {
@@ -69,5 +77,7 @@ pub fn analyze_upvars<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx HashSet<Ai
     };
 
     upvars.visit_expr(body);
+
+    dbg!(&upvars.upvars);
     cx.arena().alloc(upvars.upvars)
 }

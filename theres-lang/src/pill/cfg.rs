@@ -30,6 +30,10 @@ pub struct Imm<'il> {
 }
 
 impl<'il> Imm<'il> {
+    pub fn ty(&self) -> Ty<'il> {
+        self.ty
+    }
+
     pub fn empty(cx: &'il Session<'il>, ty: Ty<'il>, span: Span) -> &'il Self {
         let this = Self {
             kind: ImmKind::Empty,

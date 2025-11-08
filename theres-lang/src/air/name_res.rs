@@ -172,6 +172,13 @@ impl<'cx> FirstPass<'cx> {
         path.push_ns(name.interned, ns);
         let did = self.did_defs.push((ty, path));
 
+        let dbg = if name.interned != SymbolId::DUMMY {
+            name.interned.get_interned()
+        } else {
+            "<dumbass>"
+        };
+        dbg!(dbg, ns, ty, ast_id);
+
         assert!(self.ast_id_did.insert(ast_id, did).is_none());
         assert!(self.did_ast_id.insert(did, ast_id).is_none());
 

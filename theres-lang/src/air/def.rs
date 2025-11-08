@@ -120,6 +120,10 @@ pub fn name_of<'cx>(cx: &'cx crate::session::Session<'cx>, did: DefId) -> &'cx s
 
         match seg {
             DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => {
+                if *sym == SymbolId::DUMMY {
+                    string.push_str("<dummy>");
+                    continue;
+                }
                 string.push_str(sym.get_interned());
             }
             DefPathSeg::Lambda => string.push_str("{lambda}"),
