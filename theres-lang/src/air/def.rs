@@ -121,12 +121,17 @@ pub fn name_of<'cx>(cx: &'cx crate::session::Session<'cx>, did: DefId) -> &'cx s
         match seg {
             DefPathSeg::TypeNs(sym) | DefPathSeg::ValueNs(sym) => {
                 if *sym == SymbolId::DUMMY {
-                    string.push_str("<dummy>");
+                    string.truncate(string.len() - 2);
                     continue;
                 }
                 string.push_str(sym.get_interned());
             }
-            DefPathSeg::Lambda => string.push_str("{lambda}"),
+            DefPathSeg::Lambda => {
+                let parent = cx.air_get_parent(did);
+                let span = cx.air_get_lambda(did).span;
+                string.push_str(cx.name_of(parent));
+                write!(&mut string, "::{{lambda@{span}}}").unwrap();
+            }
             DefPathSeg::BindBlock => {
                 let parent = cx.air_get_parent(did);
                 let parent_def = cx.air_get_bind(parent);

@@ -390,12 +390,13 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
 
     fn visit_expr(&mut self, val: &'vis Expr) -> Self::Result {
         if let ExprType::Lambda { body, .. } = &val.ty {
-            self.define(val.id, DefType::Lambda, Name::DUMMY, Namespace::Values);
             self.defs.push_lambda();
-            return match body {
+            self.define(val.id, DefType::Lambda, Name::DUMMY, Namespace::Values);
+            match body {
                 LambdaBody::Block(bl) => self.visit_block(bl),
                 LambdaBody::Expr(expr) => self.with_new_scope(|this| this.visit_expr(expr)),
-            };
+            }
+            self.defs.pop();
         }
 
         crate::ast::walk_expr(self, val);

@@ -88,7 +88,7 @@ impl<'il> LocalData<'il> {
 
 #[derive(Debug)]
 pub struct Pill<'il> {
-    #[allow(dead_code)] /* will be useful */ argument_count: usize,
+    #[allow(dead_code)] /* will be useful */ pub(crate) argument_count: usize,
 
     pub(crate) cfg: Cfg<'il>,
     locals: Locals<'il>,
@@ -207,8 +207,9 @@ impl<'il> PillBuilder<'il> {
                     args: upvars
                         .iter()
                         .map(|air_id| {
-                            let local = *self.captures.get(air_id).unwrap();
-                            Operand::Use(local)
+                            let local = *self.eair_locals.get(air_id).unwrap();
+                            let place = self.map[&local];
+                            Operand::Use(place.into())
                         })
                         .collect(),
                 };
@@ -939,21 +940,22 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
         let upvars = cx.upvars_of(did);
 
-        let env = locals.push(LocalData {
-            mutbl: Constant::No,
-            ty: types.node_ty(cx.air_get_lambda(did).expr_air_id),
-            origin: LocalOrigin::Param(None),
-        });
+        if !upvars.is_empty() {
+            let env = locals.push(LocalData {
+                mutbl: Constant::No,
+                ty: types.node_ty(cx.air_get_lambda(did).expr_air_id),
+                origin: LocalOrigin::Param(None),
+            });
 
-        arg_count += 1;
-        cfg.live(block, Span::DUMMY, env);
+            captures.reserve(upvars.len());
+            for (ix, var) in upvars.iter().enumerate() {
+                let mut acc = AccessBuilder::new(cx.arena(), env);
+                acc.field(FieldId::new_usize(ix));
+                captures.insert(*var, acc.finish(cx));
+            }
 
-        captures.reserve(upvars.len());
-        for (ix, var) in upvars.iter().enumerate() {
-            // let ty = types.node_ty(*var);
-            let mut acc = AccessBuilder::new(cx.arena(), env);
-            acc.field(FieldId::new_usize(ix));
-            captures.insert(*var, acc.finish(cx));
+            arg_count += 1;
+            cfg.live(block, Span::DUMMY, env);
         }
     }
 
@@ -1104,7 +1106,7 @@ fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
 
                 StmtKind::CheckCond(cond) => writeln!(w, "{INDENT}CheckCond({cond:?})")?,
 
-                StmtKind::LocalLive(local) => writeln!(w, "{INDENT}Live({})", local.to_usize())?,
+                StmtKind::LocalLive(local) => writeln!(w, "{INDENT}Live(l{})", local.to_usize())?,
             }
         }
 

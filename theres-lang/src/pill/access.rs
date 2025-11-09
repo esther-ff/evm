@@ -75,12 +75,16 @@ impl<'il> Access<'il> {
     }
 
     pub fn deduct_type(&self, cx: &'il crate::session::Session<'il>, mut base: Ty<'il>) -> Ty<'il> {
+        if base.maybe_lambda().is_some() {
+            return base;
+        }
+
         for ele in self.modifs {
             base = match ele {
                 AccessKind::Index(..) => base.index(),
                 AccessKind::Field(f) => match base.maybe_lambda() {
                     None => base.field(cx, *f),
-                    Some(lambda) => lambda.all_inputs[f.to_usize()],
+                    Some(lambda) => cx.types.nil,
                 },
                 AccessKind::Deref => base.peel_ref(),
             }

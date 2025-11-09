@@ -18,6 +18,7 @@ struct BuildCollector<'il> {
     visit: HashSet<BuildItem<'il>>,
     cx: &'il Session<'il>,
     body: Option<&'il Pill<'il>>,
+    did: DefId,
 }
 
 impl<'il> BuildCollector<'il> {
@@ -42,7 +43,6 @@ impl<'il> PillVisitor<'il> for BuildCollector<'il> {
     fn visit_operand(&mut self, op: &Operand<'il>) {
         match op {
             Operand::Imm(imm) => {
-                log::debug!("BuildCollector: function called <{imm:?}>");
                 if let TyKind::FnDef(did) = *imm.ty() {
                     self.visit.insert(BuildItem { did, params: &[] });
                 }
@@ -55,13 +55,13 @@ impl<'il> PillVisitor<'il> for BuildCollector<'il> {
                     TyKind::FnDef(did) => {
                         self.visit.insert(BuildItem { did, params: &[] });
                     }
-                    TyKind::Lambda(env) => {
+
+                    TyKind::Lambda(env) if self.did != env.did => {
                         self.visit.insert(BuildItem {
                             did: env.did,
                             params: &[],
                         });
                     }
-
                     _ => (),
                 }
             }
@@ -75,6 +75,7 @@ pub fn collect_build_items<'cx>(cx: &'cx Session<'cx>, did: DefId) {
         visit: HashSet::new(),
         cx,
         body: None,
+        did,
     };
 
     collector.visit.insert(BuildItem { did, params: &[] });
@@ -90,6 +91,7 @@ pub fn collect_build_items<'cx>(cx: &'cx Session<'cx>, did: DefId) {
 
         for ele in &scratch {
             let body = cx.build_pill(ele.did);
+            collector.did = ele.did;
             collector.visit_body(body);
         }
 
