@@ -4,6 +4,7 @@ mod private {
 
 use std::fmt::Debug;
 
+use crate::pill::body::LocalsRef;
 pub use private::BasicBlock;
 
 use crate::air::def::IntTy;
@@ -97,6 +98,13 @@ impl<'il> Operand<'il> {
         match self {
             Self::Imm { .. } => None,
             Self::Use(inner) => Some(*inner),
+        }
+    }
+
+    pub fn ty(&self, data: &LocalsRef<'il>, cx: &'il Session<'il>) -> Ty<'il> {
+        match self {
+            Operand::Imm(imm) => imm.ty,
+            Operand::Use(acc) => acc.deduct_type(cx, data.get(acc.get_base()).unwrap().ty()),
         }
     }
 }

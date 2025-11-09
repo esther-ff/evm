@@ -84,7 +84,7 @@ impl<'il> Access<'il> {
                 AccessKind::Index(..) => base.index(),
                 AccessKind::Field(f) => match base.maybe_lambda() {
                     None => base.field(cx, *f),
-                    Some(lambda) => cx.types.nil,
+                    Some(lambda) => cx.lambda_env_fields(lambda.did).get(*f).unwrap().0,
                 },
                 AccessKind::Deref => base.peel_ref(),
             }

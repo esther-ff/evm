@@ -15,8 +15,9 @@ use crate::pill::body::{Pill, build_pill};
 use crate::pooled::Pool;
 use crate::sources::{SourceId, Sources};
 use crate::symbols::SymbolId;
+use crate::types::fun_cx::FieldSlice;
 use crate::types::fun_cx::{TypeTable, typeck};
-use crate::types::ty::{FnSig, Instance, InstanceDef, Ty, TyKind, instance_def};
+use crate::types::ty::{FnSig, Instance, InstanceDef, ParamTy, Ty, TyKind, instance_def};
 
 thread_local! {
     pub static GLOBAL_CTXT: Cell<*const ()> = const {
@@ -92,6 +93,11 @@ crate::cache! {
     /// Builds a PILL body for the specified `DefId`
     pub fn build_pill(&'cx! self, did: DefId) -> &'cx Pill<'cx> {
         build_pill
+    }
+
+    /// Gathers the fields of a lambda's environment
+    pub fn lambda_env_fields(&'cx! self, did: DefId) -> &'cx FieldSlice<(Ty<'cx>, AirId)> {
+        crate::types::ty::lambda_env_fields
     }
 }
 
@@ -254,11 +260,14 @@ impl<'cx> Session<'cx> {
         'cx: 'a,
     {
         let tykind = match ty.kind {
-            node::TyKind::Fun { inputs, output } => TyKind::Fn {
-                inputs: self
-                    .arena
-                    .alloc_from_iter(inputs.iter().map(|this| self.lower_ty(this))),
-                output: output.map_or(self.types.nil, |this| self.lower_ty(this)),
+            node::TyKind::Fun { inputs, output } => TyKind::Param {
+                span: ty.span,
+                kind: ParamTy::Fun {
+                    inputs: self
+                        .arena
+                        .alloc_from_iter(inputs.iter().map(|this| self.lower_ty(this))),
+                    output: output.map_or(self.types.nil, |this| self.lower_ty(this)),
+                },
             },
             node::TyKind::Infer => panic!("lowered an Infer ty"),
             node::TyKind::Err => TyKind::Error,

@@ -12,7 +12,7 @@ use crate::ast::{BinOp, UnaryOp};
 use crate::session::Session;
 use crate::span::Span;
 use crate::symbols::SymbolId;
-use crate::types::ty::{InferKind, InferTy, LambdaEnv, Ty, TyKind, TypingError};
+use crate::types::ty::{InferKind, InferTy, LambdaEnv, ParamTy, Ty, TyKind, TypingError};
 
 use std::collections::HashMap;
 use std::mem;
@@ -134,7 +134,7 @@ impl<'ty> FunCx<'ty> {
                 self.ty_var_types.insert(infer.vid, concrete_ref);
             }
 
-            (TyKind::Fn { inputs, output }, TyKind::Lambda(env)) | (TyKind::Lambda(env), TyKind::Fn { inputs, output }) => {
+            (TyKind::Param { kind: ParamTy::Fun { inputs, output }, .. }, TyKind::Lambda(env)) | (TyKind::Lambda(env), TyKind::Param { kind: ParamTy::Fun { inputs, output }, .. }) => {
                 self.unify(output, env.output)?;
 
                 if inputs.len() != env.all_inputs.len() {
@@ -287,7 +287,10 @@ impl<'ty> FunCx<'ty> {
                         env.output
                     }
 
-                    TyKind::Fn { inputs, output } => {
+                    TyKind::Param {
+                        kind: ParamTy::Fun { inputs, output },
+                        ..
+                    } => {
                         self.verify_arguments_for_call(inputs, args, expr.span);
                         output
                     }
@@ -766,7 +769,7 @@ impl<'ty> FunCx<'ty> {
 pub struct TypeTable<'ty> {
     air_node_tys: HashMap<AirId, Ty<'ty>>,
     resolved_method_calls: HashMap<AirId, DefId>,
-    // local_variables: HashMap<AirId, Ty<'ty>>,
+    lambda_types: HashMap<DefId, Ty<'ty>>,
 }
 
 impl<'ty> TypeTable<'ty> {
@@ -774,7 +777,7 @@ impl<'ty> TypeTable<'ty> {
         Self {
             air_node_tys: HashMap::new(),
             resolved_method_calls: HashMap::new(),
-            // local_variables: HashMap::new(),
+            lambda_types: HashMap::new(),
         }
     }
 
@@ -798,6 +801,10 @@ impl<'ty> TypeTable<'ty> {
             .get(&id)
             .copied()
             .expect("hir id given to `resolve_method` was invalid")
+    }
+
+    pub fn lambda_type(&self, did: DefId) -> Ty<'ty> {
+        self.lambda_types[&did]
     }
 }
 
@@ -927,6 +934,8 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
                             .iter()
                             .map(|ty| self.resolve_type_variable(*ty)),
                     );
+
+                    // dbg!(self.sess.fn_sig_for(lambda.did));
                     let env = self.sess.arena().alloc(LambdaEnv {
                         all_inputs,
                         output: self.resolve_type_variable(lambda.output),
@@ -939,6 +948,7 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
                     ty
                 };
 
+                self.table.lambda_types.insert(lambda.did, ty);
                 if let Some(air_id) = expr_id {
                     self.table.air_node_tys.insert(air_id, ty);
                 }

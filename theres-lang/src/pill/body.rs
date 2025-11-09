@@ -1,9 +1,10 @@
 mod private {
     use crate::pill::access::Access;
 
-    crate::newtyped_index!(Local, LocalMap, LocalVec, LocalsRef);
+    crate::newtyped_index!(Local, LocalMap, LocalVec, LocalsSlice);
 
     pub type Locals<'il> = LocalVec<super::LocalData<'il>>;
+    pub type LocalsRef<'il> = LocalsSlice<super::LocalData<'il>>;
 
     impl Local {
         pub(super) fn ret_place() -> Local {
@@ -43,8 +44,8 @@ use crate::symbols::SymbolId;
 use crate::types::fun_cx::FieldId;
 use crate::types::ty::{Ty, TyKind};
 
-pub use private::Local;
 use private::Locals;
+pub use private::{Local, LocalsRef};
 
 #[derive(Debug)]
 pub struct LocalData<'il> {
@@ -99,8 +100,8 @@ impl<'il> Pill<'il> {
         &self.cfg
     }
 
-    pub(crate) fn local_data(&self, local: Local) -> &LocalData<'il> {
-        &self.locals[local]
+    pub(crate) fn local_data(&self) -> &private::LocalsRef<'il> {
+        &self.locals
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::air::AirId;
 use crate::air::def::{DefId, IntTy};
 use crate::air::node::Constant;
 use crate::errors::TheresError;
@@ -12,7 +13,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
 
 /// Interned type for a particular something.
-
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ty<'ty>(pub Pooled<'ty, TyKind<'ty>>);
 
@@ -80,6 +80,18 @@ pub struct LambdaEnv<'ty> {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ParamTy<'ty> {
+    Regular {
+        name: SymbolId,
+    },
+
+    Fun {
+        inputs: &'ty [Ty<'ty>],
+        output: Ty<'ty>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TyKind<'ty> {
     Bool,
@@ -92,10 +104,10 @@ pub enum TyKind<'ty> {
     /// Instances somehow idk lol !
     Instance(Instance<'ty>),
 
-    /// fun(ty) -> ty
-    Fn {
-        inputs: &'ty [Ty<'ty>],
-        output: Ty<'ty>,
+    /// `T` or `fun() => i32`
+    Param {
+        span: Span,
+        kind: ParamTy<'ty>,
     },
 
     /// Anon type of function def
@@ -164,6 +176,10 @@ impl<'ty> TyKind<'ty> {
 
     pub fn is_signed_int(self) -> bool {
         matches!(self, TyKind::Int(..))
+    }
+
+    pub fn is_param(self) -> bool {
+        matches!(self, TyKind::Param { .. })
     }
 
     pub fn maybe_infer(self) -> Option<InferTy> {
@@ -354,16 +370,20 @@ impl Display for Ty<'_> {
 
             TyKind::Diverges => "diverges",
 
-            TyKind::Fn { inputs, output } => {
-                write!(f, "fun(")?;
-                for (ix, ty) in inputs.iter().enumerate() {
-                    write!(f, "{ty}")?;
-                    if ix != inputs.len() - 1 {
-                        write!(f, ", ")?;
+            TyKind::Param { kind, .. } => match kind {
+                ParamTy::Fun { inputs, output } => {
+                    write!(f, "fun(")?;
+                    for (ix, ty) in inputs.iter().enumerate() {
+                        write!(f, "{ty}")?;
+                        if ix != inputs.len() - 1 {
+                            write!(f, ", ")?;
+                        }
                     }
+                    return write!(f, ") => {output}");
                 }
-                return write!(f, ") => {output}");
-            }
+
+                ParamTy::Regular { name } => return write!(f, "{}", name.get_interned()),
+            },
 
             TyKind::Instance(def) => {
                 return write!(f, "{}", def.name.get_interned());
@@ -481,4 +501,23 @@ pub fn fn_sig_for<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> FnSig<'cx> {
 
         any => panic!("can't express a signature for {any:#?}"),
     }
+}
+
+pub fn lambda_env_fields<'cx>(
+    cx: &'cx Session<'cx>,
+    did: DefId,
+) -> &'cx FieldSlice<(Ty<'cx>, AirId)> {
+    let upvars = cx.upvars_of(did);
+    if upvars.is_empty() {
+        return FieldSlice::new(&[]);
+    }
+
+    let parent = cx.air_get_parent(did);
+    let types = cx.typeck(parent);
+
+    let list = cx
+        .arena()
+        .alloc_from_iter(upvars.iter().map(|field| (types.node_ty(*field), *field)));
+
+    FieldSlice::new(list)
 }
