@@ -278,6 +278,7 @@ impl<'ty> FunCx<'ty> {
                 match *callable {
                     TyKind::FnDef(did) => {
                         let sig = self.s.fn_sig_for(did);
+                        dbg!(sig);
                         self.verify_arguments_for_call(sig.inputs, args, expr.span);
                         sig.output
                     }
@@ -838,6 +839,11 @@ impl<'ty> TyCollector<'ty> {
                 any => self.sess.intern_ty(any),
             },
 
+            // get rid maybe?
+            TyKind::Array(inner) if inner.maybe_infer().is_some() => self
+                .sess
+                .intern_ty(TyKind::Array(self.resolve_type_variable(inner))),
+
             _ => ty,
         }
     }
@@ -955,6 +961,10 @@ impl<'vis> AirVisitor<'vis> for TyCollector<'_> {
 
                 ty
             }
+
+            TyKind::Array(inner) => self
+                .sess
+                .intern_ty(TyKind::Array(self.resolve_type_variable(inner))),
 
             _ => ty,
         };

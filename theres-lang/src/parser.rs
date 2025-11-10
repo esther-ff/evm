@@ -387,11 +387,17 @@ impl Parser<'_> {
         let name = self.expect_ident_as_name()?;
 
         let ty = match req {
-            NeedTy::No => Ty {
-                kind: TyKind::Infer,
-                id: self.new_id(),
-                span: Span::DUMMY,
-            },
+            NeedTy::No => {
+                if self.consume_if(t!(Colon)) {
+                    self.ty()?
+                } else {
+                    Ty {
+                        kind: TyKind::Infer,
+                        id: self.new_id(),
+                        span: Span::DUMMY,
+                    }
+                }
+            }
             NeedTy::Yes => {
                 self.expect_token(TokenKind::Colon)?;
                 self.ty()?

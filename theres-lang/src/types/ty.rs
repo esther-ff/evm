@@ -1,6 +1,6 @@
 use crate::air::AirId;
 use crate::air::def::{DefId, IntTy};
-use crate::air::node::Constant;
+use crate::air::node::{Constant, Node};
 use crate::errors::TheresError;
 use crate::pooled::Pooled;
 use crate::session::{Session, cx};
@@ -483,7 +483,23 @@ pub fn fn_sig_for<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> FnSig<'cx> {
             }
         }
 
-        DefType::NativeFn => todo!(),
+        DefType::NativeFn => {
+            dbg!(def_id);
+            let def = cx.air_get_def(def_id);
+            let Node::NativeItem(item) = def else {
+                panic!()
+            };
+
+            match item.kind {
+                crate::air::node::NativeItemKind::Fun { args, ret } => FnSig {
+                    inputs: cx
+                        .arena()
+                        .alloc_from_iter(args.iter().map(|param| cx.lower_ty(param.ty))),
+
+                    output: cx.lower_ty(ret),
+                },
+            }
+        }
 
         DefType::AdtCtor => {
             let instance = cx.air_get_instance_of_ctor(def_id);
