@@ -14,6 +14,7 @@ pub struct BuildItem<'il> {
 }
 
 struct BuildCollector<'il> {
+    externs: HashSet<DefId>,
     queue: Vec<BuildItem<'il>>,
     visit: HashSet<BuildItem<'il>>,
     body: Option<&'il Pill<'il>>,
@@ -47,7 +48,11 @@ impl<'il> PillVisitor<'il> for BuildCollector<'il> {
             let ty = fun.ty(self.body().local_data(), self.cx);
 
             let (mut item, did) = match *ty {
-                TyKind::FnDef(did) if self.cx.is_native_fn(did) => return,
+                TyKind::FnDef(did) if self.cx.is_native_fn(did) => {
+                    self.externs.insert(did);
+                    return;
+                }
+
                 TyKind::FnDef(did) => (BuildItem { did, params: &[] }, did),
 
                 TyKind::Lambda(env) if self.did != env.did => (
@@ -74,7 +79,7 @@ impl<'il> PillVisitor<'il> for BuildCollector<'il> {
                 self.cx.fn_sig_for(did).inputs
             };
 
-            if self.cache.capacity() < args.len() {
+            if self.cache.capacity().saturating_sub(args.len()) < args.len() {
                 self.cache.reserve(args.len());
             }
 
@@ -97,40 +102,32 @@ impl<'il> PillVisitor<'il> for BuildCollector<'il> {
     }
 
     fn visit_operand(&mut self, op: &Operand<'il>) {
-        match op {
-            Operand::Imm(imm) => {
-                if let TyKind::FnDef(did) = *imm.ty() {
-                    if !self.cx.is_native_fn(did) {
-                        self.visit.insert(BuildItem { did, params: &[] });
-                    }
-                }
+        match *op.ty(self.body().local_data(), self.cx) {
+            TyKind::FnDef(did) if self.cx.is_native_fn(did) => {
+                self.externs.insert(did);
             }
 
-            Operand::Use(acc) => {
-                let base = self.body().local_data().get(acc.get_base()).unwrap().ty();
-                let ty = acc.deduct_type(self.cx, base);
-                match *ty {
-                    TyKind::FnDef(did) => {
-                        if !self.cx.is_native_fn(did) {
-                            self.visit.insert(BuildItem { did, params: &[] });
-                        }
-                    }
-
-                    TyKind::Lambda(env) if self.did != env.did => {
-                        self.visit.insert(BuildItem {
-                            did: env.did,
-                            params: &[],
-                        });
-                    }
-                    _ => (),
-                }
+            TyKind::FnDef(did) => {
+                self.visit.insert(BuildItem { did, params: &[] });
             }
+
+            TyKind::Lambda(env) if self.did != env.did => {
+                self.visit.insert(BuildItem {
+                    did: env.did,
+                    params: &[],
+                });
+            }
+            _ => (),
         }
     }
 }
 
-pub fn collect_build_items<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Vec<BuildItem<'cx>> {
+pub fn collect_build_items<'cx>(
+    cx: &'cx Session<'cx>,
+    did: DefId,
+) -> (Vec<BuildItem<'cx>>, HashSet<DefId>) {
     let mut collector = BuildCollector {
+        externs: HashSet::new(),
         queue: vec![],
         cache: vec![],
         visit: HashSet::new(),
@@ -159,5 +156,5 @@ pub fn collect_build_items<'cx>(cx: &'cx Session<'cx>, did: DefId) -> Vec<BuildI
         collector.queue.extend(collector.visit.iter().copied());
     }
 
-    collector.queue
+    (collector.queue, collector.externs)
 }
