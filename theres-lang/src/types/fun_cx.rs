@@ -3,7 +3,7 @@
 
 use crate::air::def::{DefId, DefType, Resolved};
 use crate::air::node::{
-    AirLiteral, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Path, Stmt, StmtKind,
+    AirLiteral, BindItem, BindItemKind, Block, Expr, ExprKind, Lambda, Local, Path, Stmt, StmtKind,
     ThingKind, Universe,
 };
 use crate::air::visitor::AirVisitor;
@@ -278,7 +278,6 @@ impl<'ty> FunCx<'ty> {
                 match *callable {
                     TyKind::FnDef(did) => {
                         let sig = self.s.fn_sig_for(did);
-                        dbg!(sig);
                         self.verify_arguments_for_call(sig.inputs, args, expr.span);
                         sig.output
                     }
@@ -557,16 +556,7 @@ impl<'ty> FunCx<'ty> {
                 self.s.intern_ty(TyKind::FnDef(ctor_def_id))
             }
 
-            Resolved::Local(air_id) => {
-                // Si me quieres escribir?
-                // match hir.get_node(air_id) {
-                //     Node::Local(local) => self.typeck_local(local),
-                //     Node::FnParam(param) => self.s.lower_ty(param.ty),
-
-                //     _ => todo!("huh"),
-                // }
-                *self.node_type.get(&air_id).unwrap()
-            }
+            Resolved::Local(air_id) => *self.node_type.get(&air_id).unwrap(),
 
             Resolved::Err => self.s.types.err,
 
@@ -613,47 +603,41 @@ impl<'ty> FunCx<'ty> {
             return self.s.types.err;
         }
 
-        let mut ret_ty = self.s.types.err;
+        let binds = self.s.binds_for_type(recv_ty);
 
-        self.s.binds_for_ty(recv_ty, |binds| {
-            let Some((def_id, _, span)) = binds
-                .iter()
-                .flat_map(|x| x.items.iter())
-                .filter_map(|item| {
-                    let BindItemKind::Fun { sig: _, name } = item.kind else {
-                        return None;
-                    };
+        let Some((def_id, _, span)) = binds
+            .iter()
+            .filter_map(|item| {
+                let BindItemKind::Fun { sig: _, name } = item.kind else {
+                    return None;
+                };
 
-                    Some((item.def_id, name, item.span))
-                })
-                .find(|(_, name, _)| name == &method_name)
-            else {
-                self.s.diag().emit_err(
-                    TypingError::MethodNotFound {
-                        on_ty: (recv_ty),
-                        method_name,
-                    },
-                    receiver.span,
-                );
-                return;
-            };
-
-            self.resolved_method_calls.insert(expr_air_id, def_id);
-
-            ret_ty = self.verify_arguments_for_method_call(
-                def_id,
-                core::iter::once(receiver).chain(args.iter()),
-                args.len() + 1,
-                span,
+                Some((item.def_id, name, item.span))
+            })
+            .find(|(_, name, _)| name == &method_name)
+        else {
+            self.s.diag().emit_err(
+                TypingError::MethodNotFound {
+                    on_ty: (recv_ty),
+                    method_name,
+                },
+                receiver.span,
             );
-        });
 
-        ret_ty
+            return self.s.types.err;
+        };
+
+        self.resolved_method_calls.insert(expr_air_id, def_id);
+
+        self.verify_arguments_for_method_call(
+            def_id,
+            core::iter::once(receiver).chain(args.iter()),
+            args.len() + 1,
+            span,
+        )
     }
 
     fn typeck_block(&mut self, block: &Block<'_>) -> Ty<'ty> {
-        log::trace!("typeck_block");
-
         for stmt in block.stmts {
             self.typeck_stmt(stmt);
         }
@@ -1016,6 +1000,36 @@ pub fn typeck<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx TypeTable<'cx> {
     .visit(body);
 
     cx.arena().alloc(table)
+}
+
+pub fn binds_for_type<'cx>(cx: &'cx Session<'cx>, ty: Ty<'cx>) -> &'cx [BindItem<'cx>] {
+    use crate::air::node;
+
+    cx.arena().alloc_from_iter(
+        cx.air_map()
+            .nodes()
+            .into_iter()
+            .filter_map(node::Node::get_thing)
+            .filter_map(node::Thing::get_bind)
+            .filter_map(|bind| {
+                let bind_ty = cx.lower_ty(bind.with);
+                dbg!(ty, bind_ty);
+                if ty == bind_ty {
+                    Some(bind.items)
+                } else {
+                    // attempt rough equality
+
+                    match (*ty, *bind_ty) {
+                        // add instances with generics later :3
+                        (TyKind::Array(l), TyKind::Array(r)) if r.is_param() => Some(bind.items),
+                        (TyKind::Array(l), TyKind::Array(r)) if l == r => Some(bind.items),
+                        _ => None,
+                    }
+                }
+            })
+            .flatten()
+            .copied(),
+    )
 }
 
 pub fn typeck_universe<'a>(session: &'a Session<'a>, universe: &'a Universe<'a>) {

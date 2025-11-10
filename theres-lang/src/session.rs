@@ -99,6 +99,11 @@ crate::cache! {
     pub fn lambda_env_fields(&'cx! self, did: DefId) -> &'cx FieldSlice<(Ty<'cx>, AirId)> {
         crate::types::ty::lambda_env_fields
     }
+
+    /// Gathers `bind`s for a type.
+    pub fn binds_for_type(&'cx! self, ty: Ty<'cx>) -> &'cx [node::BindItem<'cx>] {
+        crate::types::fun_cx::binds_for_type
+    }
 }
 
 pub struct Session<'sess> {
@@ -237,26 +242,6 @@ impl<'cx> Session<'cx> {
 
     pub fn is_native_fn(&'cx self, did: DefId) -> bool {
         self.def_type(did) == DefType::NativeFn
-    }
-
-    // pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
-    //     self.air_map.is_ctor(def_id)
-    // }
-
-    /// This is so fucking stupid
-    pub fn binds_for_ty<F, R>(&'cx self, ty: Ty<'cx>, work: F) -> R
-    where
-        F: FnOnce(Vec<node::Bind<'_>>) -> R,
-    {
-        work(
-            self.air_map
-                .nodes()
-                .into_iter()
-                .filter_map(node::Node::get_thing)
-                .filter_map(node::Thing::get_bind)
-                .filter(|b| self.lower_ty(b.with) == ty)
-                .collect(),
-        )
     }
 
     pub fn lower_ty<'a>(&'cx self, ty: &node::Ty<'a>) -> Ty<'cx>

@@ -74,12 +74,19 @@ impl Arena {
 
     #[inline]
     pub fn alloc_from_iter<T>(&self, iterable: impl IntoIterator<Item = T>) -> &[T] {
-        let iter = iterable.into_iter();
-
+        let mut iter = iterable.into_iter();
         let size_hint = iter.size_hint();
 
         match size_hint {
-            (0, None | Some(0)) => &mut [],
+            (0, None | Some(0)) => match iter.next() {
+                None => &[],
+                Some(val) => {
+                    let mut list = vec![val];
+                    list.extend(iter);
+                    let len = list.len();
+                    self.write_from_iter(list.into_iter(), len)
+                }
+            },
             (lower, None) => self.write_from_iter(iter, lower),
             (_, Some(higher)) => self.write_from_iter(iter, higher),
         }

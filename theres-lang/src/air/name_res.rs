@@ -694,7 +694,6 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
 
     fn visit_bind(&mut self, bind: &'vis Bind) -> Self::Result {
         self.current_bind_ty = Some(bind.victim.id);
-
         self.visit_ty(&bind.victim);
 
         if let TyKind::Path(path) = &bind.victim.kind {
@@ -705,11 +704,6 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                     .insert_instance_to_bind(def_id, self.current_item());
             }
         }
-
-        let res = self.maps.resolve(bind.victim.id);
-
-        self.current_scope_mut()
-            .add(Namespace::Values, SymbolId::self_(), res);
 
         self.path_forward();
         for item in &bind.items {
