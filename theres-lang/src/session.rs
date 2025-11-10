@@ -235,6 +235,10 @@ impl<'cx> Session<'cx> {
         crate::air::passes::upvar_analysis::analyze_upvars(self, did)
     }
 
+    pub fn is_native_fn(&'cx self, did: DefId) -> bool {
+        self.def_type(did) == DefType::NativeFn
+    }
+
     // pub fn is_ctor_fn(&self, def_id: DefId) -> bool {
     //     self.air_map.is_ctor(def_id)
     // }

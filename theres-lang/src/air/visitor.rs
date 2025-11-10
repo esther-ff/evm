@@ -1,8 +1,8 @@
 use crate::air::AirId;
 use crate::air::def::Resolved;
 use crate::air::node::{
-    self, BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Lambda, Local, Param, Path,
-    Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
+    self, BindItem, BindItemKind, Block, Expr, ExprKind, Field, FnSig, Lambda, Local, NativeItem,
+    Param, Path, Stmt, StmtKind, Thing, ThingKind, Ty, TyKind, Universe,
 };
 use crate::visitor_common::VisitorResult;
 use crate::{maybe_visit, try_visit, visit_iter};
@@ -60,6 +60,10 @@ pub trait AirVisitor<'air>: Sized {
 
     fn visit_expr(&mut self, expr: &'air Expr<'air>) -> Self::Result {
         walk_expr(self, expr)
+    }
+
+    fn visit_native_item(&mut self, nat: &'air NativeItem<'air>) -> Self::Result {
+        walk_native_item(self, nat)
     }
 }
 
@@ -162,6 +166,25 @@ pub fn walk_bind_item<'vis, V: AirVisitor<'vis>>(
     }
 }
 
+pub fn walk_native_item<'vis, V: AirVisitor<'vis>>(
+    v: &mut V,
+    nat: &'vis NativeItem<'vis>,
+) -> V::Result {
+    let NativeItem {
+        name: _,
+        air_id: _,
+        span: _,
+        kind,
+    } = nat;
+
+    match kind {
+        node::NativeItemKind::Fun { args, ret } => {
+            visit_iter!(v:v, m:visit_param, *args);
+            v.visit_ty(ret)
+        }
+    }
+}
+
 pub fn walk_thing<'vis, V: AirVisitor<'vis>>(v: &mut V, thing: &'vis Thing<'vis>) -> V::Result {
     let Thing {
         kind,
@@ -189,6 +212,7 @@ pub fn walk_thing<'vis, V: AirVisitor<'vis>>(v: &mut V, thing: &'vis Thing<'vis>
             try_visit!(v.visit_ty(with));
             visit_iter!(v: v, m: visit_bind_item, *items);
         }
+        ThingKind::Native { items } => visit_iter!(v: v, m: visit_native_item, *items),
     }
 
     V::Result::normal()

@@ -86,6 +86,10 @@ impl<'air> AirVisitor<'air> for MapBuilder<'_, 'air> {
         self.m.insert_node(Node::Path(path), path.air_id);
     }
 
+    fn visit_native_item(&mut self, nat: &'air node::NativeItem<'air>) -> Self::Result {
+        self.m.insert_node(Node::NativeItem(nat), nat.air_id);
+    }
+
     fn visit_expr(&mut self, expr: &'air Expr<'air>) -> Self::Result {
         if let ExprKind::Lambda(lambda) = expr.kind {
             self.m.insert_node(Node::Expr(expr), expr.air_id);

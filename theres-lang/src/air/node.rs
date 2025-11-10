@@ -18,6 +18,7 @@ pub enum Node<'h> {
     Path(&'h Path<'h>),
     FnParam(&'h Param<'h>),
     Lambda(&'h Lambda<'h>),
+    NativeItem(&'h NativeItem<'h>),
 }
 
 impl<'h> Node<'h> {
@@ -225,6 +226,22 @@ impl<'h> Block<'h> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct NativeItem<'h> {
+    pub name: Name,
+    pub span: Span,
+    pub kind: NativeItemKind<'h>,
+    pub air_id: AirId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NativeItemKind<'h> {
+    Fun {
+        args: &'h [Param<'h>],
+        ret: &'h Ty<'h>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Stmt<'h> {
     pub span: Span,
     pub kind: StmtKind<'h>,
@@ -323,6 +340,10 @@ pub enum ThingKind<'h> {
     Realm {
         name: Name,
         things: &'h [Thing<'h>],
+    },
+
+    Native {
+        items: &'h [NativeItem<'h>],
     },
 
     Bind(Bind<'h>),

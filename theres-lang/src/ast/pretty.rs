@@ -168,6 +168,7 @@ where
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
             ThingKind::Realm(r) => self.visit_realm(r),
+            ThingKind::NativeBlock(n) => self.visit_native_block(n),
         }
     }
 

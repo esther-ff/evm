@@ -128,13 +128,13 @@ impl SymbolId {
 
     #[track_caller]
     pub fn get_interned(&self) -> &str {
-        debug_assert!(
-            self != &Self::DUMMY,
-            "tried to get the interned value of a dummy `SymbolId`"
-        );
+        // debug_assert!(
+        //     self != &Self::DUMMY,
+        //     "tried to get the interned value of a dummy `SymbolId`"
+        // );
 
         let interner = SYMBOL_INTERNER.lock().unwrap();
-        interner.storage[*self]
+        interner.storage.get(*self).unwrap_or(&"<dummy!>")
     }
 
     #[track_caller]

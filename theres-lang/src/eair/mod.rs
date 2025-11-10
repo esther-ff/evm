@@ -621,7 +621,7 @@ impl<'ir> EairBuilder<'ir> {
                 }
 
                 Resolved::Def(did, def_ty) => match def_ty {
-                    DefType::Fun => Expr {
+                    DefType::Fun | DefType::NativeFn => Expr {
                         kind: ExprKind::Empty,
                         ty: self.cx.intern_ty(TyKind::FnDef(did)),
                         span,

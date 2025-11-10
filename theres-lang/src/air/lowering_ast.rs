@@ -745,9 +745,30 @@ impl<'air> AirBuilder<'air> {
             ThingKind::Instance(inst) => self.lower_instance(inst, def_id),
             ThingKind::Bind(bind) => self.lower_bind(bind),
             ThingKind::Realm(realm) => self.lower_realm(realm),
+            ThingKind::NativeBlock(nat) => self.lower_native_block(nat),
         };
 
         node::Thing::new(kind, thing.kind.span(), air_id, def_id)
+    }
+
+    fn lower_native_block(&mut self, nat: &NativeBlock) -> node::ThingKind<'air> {
+        let items = self
+            .arena
+            .alloc_from_iter(nat.item.iter().map(|ast_native| node::NativeItem {
+                air_id: self.next_air_id(ast_native.ast_id),
+                name: ast_native.name,
+                span: ast_native.span,
+                kind: match &ast_native.kind {
+                    NativeImportKind::Fun { args, ret_ty } => node::NativeItemKind::Fun {
+                        args: self.arena.alloc_from_iter(args.iter().map(|arg| {
+                            Param::new(arg.ident, self.lower_ty(&arg.ty), self.next_air_id(arg.id))
+                        })),
+                        ret: self.lower_ty(ret_ty),
+                    },
+                },
+            }));
+
+        node::ThingKind::Native { items }
     }
 
     fn lower_bind(&mut self, bind: &Bind) -> node::ThingKind<'air> {

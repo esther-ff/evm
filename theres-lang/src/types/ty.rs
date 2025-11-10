@@ -483,6 +483,8 @@ pub fn fn_sig_for<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> FnSig<'cx> {
             }
         }
 
+        DefType::NativeFn => todo!(),
+
         DefType::AdtCtor => {
             let instance = cx.air_get_instance_of_ctor(def_id);
             let instance_def = cx.instance_def(instance);

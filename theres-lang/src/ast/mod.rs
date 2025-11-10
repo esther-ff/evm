@@ -468,6 +468,7 @@ pub enum ThingKind {
     Instance(Instance),
     Realm(Realm),
     Bind(Bind),
+    NativeBlock(NativeBlock),
 }
 
 impl ThingKind {
@@ -481,8 +482,29 @@ impl ThingKind {
             Self::Instance(i) => i.span,
             Self::Bind(a) => a.span,
             Self::Realm(r) => r.span,
+            Self::NativeBlock(n) => n.span,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct NativeBlock {
+    pub span: Span,
+    pub item: Vec<NativeImport>,
+    pub ast_id: AstId,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct NativeImport {
+    pub span: Span,
+    pub name: Name,
+    pub kind: NativeImportKind,
+    pub ast_id: AstId,
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub enum NativeImportKind {
+    Fun { args: Vec<Arg>, ret_ty: Ty },
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
@@ -562,6 +584,34 @@ pub trait Visitor<'a>: Sized {
             ThingKind::Realm(r) => self.visit_realm(r),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
+            ThingKind::NativeBlock(nat) => self.visit_native_block(nat),
+        }
+    }
+
+    fn visit_native_block(&mut self, val: &'a NativeBlock) -> Self::Result {
+        let NativeBlock {
+            span: _,
+            ast_id: _,
+            item,
+        } = val;
+
+        visit_iter!(v:self, m: visit_native_import, item);
+        Self::Result::normal()
+    }
+
+    fn visit_native_import(&mut self, val: &'a NativeImport) -> Self::Result {
+        let NativeImport {
+            ast_id: _,
+            span: _,
+            name: _,
+            kind,
+        } = val;
+
+        match kind {
+            NativeImportKind::Fun { args, ret_ty } => {
+                visit_iter!(v: self, m: visit_arg, args);
+                self.visit_ty(ret_ty)
+            }
         }
     }
 

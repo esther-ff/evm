@@ -143,6 +143,7 @@ impl Parser<'_> {
 
                 return Err(ParseError::EndOfFile);
             }
+            TokenKind::Native => self.native_block()?,
 
             got => {
                 return self.error_out(ParseError::ExpectedDecl { got }, tok.span);
@@ -150,6 +151,39 @@ impl Parser<'_> {
         };
 
         Ok(decl)
+    }
+
+    fn native_block(&mut self) -> Result<ThingKind> {
+        let kw = self.expect(t!(Native));
+        self.expect(t!(LeftCurlyBracket));
+
+        let mut imports = vec![];
+        while self.lexemes.peek_token().kind != TokenKind::RightCurlyBracket {
+            let import = self.native_import()?;
+            imports.push(import);
+        }
+
+        let lbrace = self.expect(t!(RightCurlyBracket));
+
+        Ok(ThingKind::NativeBlock(NativeBlock {
+            ast_id: self.new_id(),
+            span: Span::between(kw.span, lbrace.span),
+            item: imports,
+        }))
+    }
+
+    fn native_import(&mut self) -> Result<NativeImport> {
+        let sig = self.function_signature()?;
+
+        Ok(NativeImport {
+            ast_id: sig.id,
+            span: sig.span,
+            kind: NativeImportKind::Fun {
+                args: sig.args,
+                ret_ty: sig.ret_type,
+            },
+            name: sig.name,
+        })
     }
 
     fn realm_decl(&mut self) -> Result<ThingKind> {

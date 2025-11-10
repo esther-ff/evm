@@ -67,6 +67,9 @@ pub enum DefType {
 
     /// Enviroment of a lambda
     Lambda,
+
+    /// Native function
+    NativeFn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
@@ -108,6 +111,16 @@ impl<Id> Resolved<Id> {
 
 pub fn name_of<'cx>(cx: &'cx crate::session::Session<'cx>, did: DefId) -> &'cx std::sync::Arc<str> {
     use std::fmt::Write as _;
+    if cx.is_native_fn(did) {
+        let crate::air::node::Node::NativeItem(fun) = cx.air_get_def(did) else {
+            unreachable!()
+        };
+
+        return cx
+            .arena()
+            .alloc(fun.name.interned.get_interned().to_string().into());
+    }
+
     let path = cx.air_map().def_path(did);
 
     // Heuristic: ~8 characters average per segment.
@@ -162,6 +175,7 @@ pub fn def_type_of<'cx>(
 
             ThingKind::Realm { .. } => panic!("A realm doesn't have a type!"),
             ThingKind::Bind { .. } => panic!("A bind doesn't have a type!"),
+            ThingKind::Native { .. } => panic!("A native block doesn't have a type!"),
         },
 
         Node::Field(field) => cx.lower_ty(field.ty),

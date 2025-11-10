@@ -185,6 +185,7 @@ impl<'cx> FirstPass<'cx> {
                 .scopes
                 .get(Scope::ZERO)
                 .is_some_and(|data| data.get(ns, name.interned).is_some())
+            && name != Name::DUMMY
         {
             self.diag.emit_err(
                 ResError::DefinedAlready {
@@ -257,6 +258,7 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
             ThingKind::Instance(instance) => self.visit_instance(instance),
 
             ThingKind::Bind(bind) => self.visit_bind(bind),
+            ThingKind::NativeBlock(nat) => self.visit_native_block(nat),
         }
         self.thing_ast_id.take();
     }
@@ -283,6 +285,28 @@ impl<'vis> Visitor<'vis> for FirstPass<'_> {
             },
             id,
             val.name.interned,
+        );
+    }
+
+    fn visit_native_block(&mut self, val: &'vis NativeBlock) -> Self::Result {
+        let _ = self.define(
+            self.thing_ast_id.as_ref().copied().unwrap(),
+            DefType::Realm,
+            Name::DUMMY,
+            Namespace::Types,
+        );
+
+        for ele in &val.item {
+            self.visit_native_import(ele);
+        }
+    }
+
+    fn visit_native_import(&mut self, val: &'vis NativeImport) -> Self::Result {
+        let id = self.define(val.ast_id, DefType::NativeFn, val.name, Namespace::Values);
+        self.add_to_scope(
+            Namespace::Values,
+            val.name.interned,
+            Resolved::Def(id, DefType::Fun),
         );
     }
 
@@ -626,9 +650,29 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
             ThingKind::Realm(r) => self.visit_realm(r),
             ThingKind::Instance(i) => self.visit_instance(i),
             ThingKind::Bind(a) => self.visit_bind(a),
+            ThingKind::NativeBlock(nat) => self.visit_native_block(nat),
         }
 
         self.current_item = old;
+    }
+
+    fn visit_native_import(&mut self, val: &'vis NativeImport) -> Self::Result {
+        match &val.kind {
+            NativeImportKind::Fun { args, ret_ty } => {
+                for arg in args {
+                    self.visit_ty(&arg.ty);
+                }
+
+                self.visit_ty(ret_ty);
+            }
+        }
+
+        let def_id = self.get_def_id(val.ast_id);
+        self.current_scope_mut().add(
+            Namespace::Values,
+            val.name.interned,
+            Resolved::Def(def_id, DefType::Fun),
+        );
     }
 
     fn visit_realm(&mut self, val: &'vis Realm) -> Self::Result {
