@@ -41,6 +41,7 @@ pub struct FunCx<'ty> {
     local_tys: HashMap<AirId, Ty<'ty>>,
 
     obligations: HashMap<InferId, Vec<Obligation>>,
+    resolved_paths: HashMap<AirId, Resolved<AirId>>,
 }
 
 pub struct UnifyError;
@@ -337,16 +338,6 @@ impl<'ty> FunCx<'ty> {
                 self.s.types.nil
             }
 
-            // ExprKind::CommaSep(exprs) => exprs
-            //     .iter()
-            //     .fold(None, |state, expr| {
-            //         if state.is_none() {
-            //             return Some(self.type_of(expr));
-            //         }
-            //         self.type_of(expr);
-            //         state
-            //     })
-            //     .expect("cannot fail as comma'd exprs have >1 exprs!"),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -550,44 +541,53 @@ impl<'ty> FunCx<'ty> {
     fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
         dbg!(path.segments.iter().filter(|x| !x.res.is_err()).count());
         dbg!(path.segments.len());
-        if path.segments.iter().filter(|x| !x.res.is_err()).count() == path.segments.len() {
-            self.type_res(path.res)
-        } else {
-            let seg = path.segments[path.resolved - 1];
 
-            match path.res {
-                Resolved::Def(.., DefType::Instance) => {
-                    let method_name = path.segments[path.resolved].sym;
-                    let recv_ty = self.type_res(seg.res);
-                    let binds = self.s.binds_for_type(recv_ty);
-                    let Some((def_id, _, _)) = binds
-                        .iter()
-                        .filter_map(|item| {
-                            let BindItemKind::Fun { sig: _, name } = item.kind else {
-                                return None;
-                            };
+        let (res, ty) =
+            if path.segments.iter().filter(|x| !x.res.is_err()).count() == path.segments.len() {
+                (path.res, self.type_res(path.res))
+            } else {
+                let seg = path.segments[path.resolved - 1];
 
-                            Some((item.def_id, name, item.span))
-                        })
-                        .find(|(_, name, _)| name == &method_name)
-                    else {
-                        self.s.diag().emit_err(
-                            TypingError::MethodNotFound {
-                                on_ty: (recv_ty),
-                                method_name,
-                            },
-                            path.span,
-                        );
-                        return self.s.types.err;
-                    };
-                    self.s.intern_ty(TyKind::FnDef(def_id))
+                match path.res {
+                    Resolved::Def(.., DefType::Instance) => {
+                        let method_name = path.segments[path.resolved].sym;
+                        let recv_ty = self.type_res(seg.res);
+                        let binds = self.s.binds_for_type(recv_ty);
+                        if let Some((def_id, _, _)) = binds
+                            .iter()
+                            .filter_map(|item| {
+                                let BindItemKind::Fun { sig: _, name } = item.kind else {
+                                    return None;
+                                };
+
+                                Some((item.def_id, name, item.span))
+                            })
+                            .find(|(_, name, _)| name == &method_name)
+                        {
+                            (
+                                Resolved::Def(def_id, DefType::Fun),
+                                self.s.intern_ty(TyKind::FnDef(def_id)),
+                            )
+                        } else {
+                            self.s.diag().emit_err(
+                                TypingError::MethodNotFound {
+                                    on_ty: (recv_ty),
+                                    method_name,
+                                },
+                                path.span,
+                            );
+                            (Resolved::Err, self.s.types.err)
+                        }
+                    }
+
+                    Resolved::Err => (Resolved::Err, self.s.types.err),
+
+                    _ => todo!(),
                 }
+            };
 
-                Resolved::Err => self.s.types.err,
-
-                _ => todo!(),
-            }
-        }
+        self.resolved_paths.insert(path.air_id, res);
+        ty
     }
 
     fn type_res(&mut self, res: Resolved<AirId>) -> Ty<'ty> {
@@ -801,11 +801,13 @@ pub struct TypeTable<'ty> {
     air_node_tys: HashMap<AirId, Ty<'ty>>,
     resolved_method_calls: HashMap<AirId, DefId>,
     lambda_types: HashMap<DefId, Ty<'ty>>,
+    resolved_paths: HashMap<AirId, Resolved<AirId>>,
 }
 
 impl<'ty> TypeTable<'ty> {
     pub fn new() -> Self {
         Self {
+            resolved_paths: HashMap::new(),
             air_node_tys: HashMap::new(),
             resolved_method_calls: HashMap::new(),
             lambda_types: HashMap::new(),
@@ -834,6 +836,10 @@ impl<'ty> TypeTable<'ty> {
             .expect("hir id given to `resolve_method` was invalid")
     }
 
+    pub fn resolve_path(&self, path: &Path<'_>) -> Resolved<AirId> {
+        self.resolved_paths[&path.air_id]
+    }
+
     pub fn lambda_type(&self, did: DefId) -> Ty<'ty> {
         self.lambda_types[&did]
     }
@@ -846,12 +852,6 @@ struct TyCollector<'ty> {
 }
 
 impl<'ty> TyCollector<'ty> {
-    fn visit(mut self, expr: &Expr<'_>) -> TypeTable<'ty> {
-        self.visit_expr(expr);
-        self.table.resolved_method_calls = self.cx.resolved_method_calls;
-        self.table
-    }
-
     fn resolve_type_variable(&self, ty: Ty<'ty>) -> Ty<'ty> {
         match *ty {
             TyKind::InferTy(..) => match *self.cx.ty_var_ty(ty) {
@@ -1030,6 +1030,7 @@ pub fn typeck<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx TypeTable<'cx> {
         resolved_method_calls: HashMap::new(),
         local_tys: HashMap::new(),
         obligations: HashMap::new(),
+        resolved_paths: HashMap::new(),
     };
 
     let actual_ret_ty = fcx.typeck_expr(body);
@@ -1038,12 +1039,22 @@ pub fn typeck<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx TypeTable<'cx> {
         fcx.type_mismatch_err(ty_sig.output, actual_ret_ty, air_sig.span);
     }
 
-    let table = TyCollector {
+    let mut coll = TyCollector {
         cx: fcx,
         table,
         sess: cx,
-    }
-    .visit(body);
+    };
+
+    coll.visit_expr(body);
+
+    let TyCollector {
+        mut table,
+        sess: _,
+        cx: fcx,
+    } = coll;
+
+    table.resolved_method_calls = fcx.resolved_method_calls;
+    table.resolved_paths = fcx.resolved_paths;
 
     cx.arena().alloc(table)
 }

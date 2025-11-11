@@ -600,7 +600,7 @@ impl<'ir> EairBuilder<'ir> {
                 span,
             },
 
-            Path(path) => match path.res {
+            Path(path) => match self.types.resolve_path(path) {
                 Resolved::Err => unreachable!("shouldn't put `Resolved::Err`s in EAIR"),
 
                 Resolved::Local(ref local_id) => {
