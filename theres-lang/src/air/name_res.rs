@@ -498,9 +498,9 @@ impl<'res> SecondPass<'res> {
         &mut self.scopes[self.current_scope]
     }
 
-    fn current_scope(&self) -> &ScopeData {
-        &self.scopes[self.current_scope]
-    }
+    // fn current_scope(&self) -> &ScopeData {
+    //     &self.scopes[self.current_scope]
+    // }
 
     fn make_local_binding(&mut self, name: Name, res: AstId) {
         let local = Resolved::Local(res);
@@ -548,7 +548,7 @@ impl<'res> SecondPass<'res> {
         }
 
         let mut ret = Resolved::Err;
-        let mut finish = 0;
+        let mut finish = None;
 
         /*
             None => we are in the default realm
@@ -578,7 +578,7 @@ impl<'res> SecondPass<'res> {
                 return found;
             }
 
-            let res = lookup(self, name, ns, current_or_diff_realm);
+            let res = lookup(self, name, Namespace::Types, current_or_diff_realm);
             self.maps.map_to_resolved(segment.id, res);
 
             match res {
@@ -595,20 +595,22 @@ impl<'res> SecondPass<'res> {
                         segment.span,
                     );
 
-                    finish = ix;
+                    finish = Some(ix);
                     break;
                 }
 
                 _ => {
                     ret = res;
-                    finish = ix;
+                    finish = Some(ix);
                     break;
                 }
             }
         }
 
-        for seg in &path.path[finish..] {
-            self.maps.map_to_resolved(seg.id, Resolved::Err);
+        if let Some(finish) = finish {
+            for seg in &path.path[finish + 1..] {
+                self.maps.map_to_resolved(seg.id, Resolved::Err);
+            }
         }
 
         ret

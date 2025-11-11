@@ -548,24 +548,65 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
+        dbg!(path.segments.iter().filter(|x| !x.res.is_err()).count());
+        dbg!(path.segments.len());
         if path.segments.iter().filter(|x| !x.res.is_err()).count() == path.segments.len() {
-            let res = path.res;
+            self.type_res(path.res)
+        } else {
+            let seg = path.segments[path.resolved - 1];
 
-            match res {
-                Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
+            match path.res {
+                Resolved::Def(.., DefType::Instance) => {
+                    let method_name = path.segments[path.resolved].sym;
+                    let recv_ty = self.type_res(seg.res);
+                    let binds = self.s.binds_for_type(recv_ty);
+                    let Some((def_id, _, _)) = binds
+                        .iter()
+                        .filter_map(|item| {
+                            let BindItemKind::Fun { sig: _, name } = item.kind else {
+                                return None;
+                            };
 
-                Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
-                    self.s.intern_ty(TyKind::FnDef(ctor_def_id))
+                            Some((item.def_id, name, item.span))
+                        })
+                        .find(|(_, name, _)| name == &method_name)
+                    else {
+                        self.s.diag().emit_err(
+                            TypingError::MethodNotFound {
+                                on_ty: (recv_ty),
+                                method_name,
+                            },
+                            path.span,
+                        );
+                        return self.s.types.err;
+                    };
+                    self.s.intern_ty(TyKind::FnDef(def_id))
                 }
-
-                Resolved::Local(air_id) => *self.node_type.get(&air_id).unwrap(),
 
                 Resolved::Err => self.s.types.err,
 
-                _ => unreachable!("what the fuck?"),
+                _ => todo!(),
             }
-        } else {
-            todo!()
+        }
+    }
+
+    fn type_res(&mut self, res: Resolved<AirId>) -> Ty<'ty> {
+        match dbg!(res) {
+            Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
+
+            Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
+                self.s.intern_ty(TyKind::FnDef(ctor_def_id))
+            }
+
+            Resolved::Def(did, DefType::Instance) => {
+                self.s.intern_ty(TyKind::Instance(self.s.instance_def(did)))
+            }
+
+            Resolved::Local(air_id) => *self.node_type.get(&air_id).unwrap(),
+
+            Resolved::Err => self.s.types.err,
+
+            any => unreachable!("what the fuck? {any:#?}"),
         }
     }
 
