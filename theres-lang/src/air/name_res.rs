@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::mem;
-use std::ops::Sub;
 
 use crate::air::Mappings;
 use crate::air::def::{DefId, DefMap, DefPath, DefType, DefVec, IntTy, PrimTy, Resolved};
@@ -512,7 +511,11 @@ impl<'res> SecondPass<'res> {
 
     #[track_caller]
     fn get_name(&self, symbol: SymbolId, ns: Namespace) -> Resolved<AstId> {
-        let scope = self.current_scope();
+        self.get_name_from(self.current_scope, symbol, ns)
+    }
+
+    fn get_name_from(&self, scope: Scope, symbol: SymbolId, ns: Namespace) -> Resolved<AstId> {
+        let scope = &self.scopes[scope];
         let result = if let Some(found) = scope.get(ns, symbol) {
             found
         } else {
@@ -538,64 +541,89 @@ impl<'res> SecondPass<'res> {
         }
     }
 
-    fn process_path(&mut self, ast_path: &Path, last: Namespace) -> Resolved<AstId> {
-        debug_assert!(!ast_path.path.is_empty());
-
-        let segments = &ast_path.path;
-        let mut scope = self.current_scope;
-        let mut explored = &self.scopes;
-        let mut ret = Resolved::Err;
-
-        if segments.len() == 1 {
-            let ret = self.get_name(segments[0].name.interned, last);
-            if ret.is_err() {
-                self.emit_not_found(ast_path, 0, last);
-            }
-            return ret;
+    fn process_path(&mut self, path: &Path, ns: Namespace) -> Resolved<AstId> {
+        if path.path.len() == 1 {
+            let found = self.get_name(path.path[0].name.interned, ns);
+            self.maps.map_to_resolved(path.path[0].id, found);
         }
 
-        for (segment_ix, segment) in segments.iter().enumerate() {
-            let seg_name = segment.name.interned;
+        let mut ret = Resolved::Err;
+        let mut finish = 0;
 
-            if segment_ix == segments.len().sub(1) {
-                ret = explored[scope].get(last, seg_name).unwrap_or(Resolved::Err);
+        /*
+            None => we are in the default realm
+            Some(def_id) => we are in another realm!
+        */
+        let mut current_or_diff_realm = None;
+        let mut iter = path
+            .path
+            .iter()
+            .map(|seg| (seg, seg.name.interned))
+            .enumerate()
+            .peekable();
 
-                if ret.is_err() {
-                    self.emit_not_found(ast_path, segment_ix, last);
+        let lookup = |this: &mut Self, symbol, ns, state| match state {
+            None => this.get_name(symbol, ns),
+            Some(did) => this.lookup_in_realm(did, symbol, ns),
+        };
+
+        while let Some((ix, (segment, name))) = iter.next() {
+            if iter.peek().is_none() {
+                let found = lookup(self, name, ns, current_or_diff_realm);
+                if found.is_err() {
+                    self.emit_not_found(path, ix, ns);
                 }
 
-                break;
+                self.maps.map_to_resolved(segment.id, found);
+                return found;
             }
 
-            match explored[scope]
-                .get(Namespace::Types, seg_name)
-                .unwrap_or(Resolved::Err)
-            {
-                Resolved::Def(did, DefType::Realm) => {
-                    explored = &self.realm_scopes[&did].0;
-                    scope = Scope::ZERO;
-                }
+            let res = lookup(self, name, ns, current_or_diff_realm);
+            self.maps.map_to_resolved(segment.id, res);
+
+            match res {
+                Resolved::Def(did, DefType::Realm) => current_or_diff_realm = Some(did),
 
                 Resolved::Local(..) => unreachable!("locals shouldn't be referenced by paths"),
 
                 Resolved::Err => {
                     self.diag.emit_err(
                         ResError::NotFound {
-                            name: seg_name,
+                            name,
                             namespace: Namespace::Types,
                         },
                         segment.span,
                     );
 
+                    finish = ix;
                     break;
                 }
 
-                any => {
-                    ret = any;
+                _ => {
+                    ret = res;
+                    finish = ix;
                     break;
                 }
             }
         }
+
+        for seg in &path.path[finish..] {
+            self.maps.map_to_resolved(seg.id, Resolved::Err);
+        }
+
+        ret
+    }
+
+    fn lookup_in_realm(
+        &mut self,
+        realm_did: DefId,
+        name: SymbolId,
+        ns: Namespace,
+    ) -> Resolved<AstId> {
+        let mut ret = Resolved::Err;
+        self.switch_scope_paths(realm_did, |this| {
+            ret = this.get_name(name, ns);
+        });
 
         ret
     }

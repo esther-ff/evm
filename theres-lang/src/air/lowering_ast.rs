@@ -720,9 +720,20 @@ impl<'air> AirBuilder<'air> {
     }
 
     fn lower_path(&mut self, path: &Path) -> &'air node::Path<'air> {
-        let segments = self
-            .arena
-            .alloc_from_iter(path.path.iter().map(|seg| seg.name.interned));
+        let mut res_count = 0;
+        let segments = self.arena.alloc_from_iter(path.path.iter().map(|seg| {
+            let res = self.map.resolve(seg.id);
+
+            if !res.is_err() {
+                res_count += 1;
+            }
+
+            node::PathSeg {
+                id: self.next_air_id(seg.id),
+                res: self.lower_resolved(res),
+                sym: seg.name.interned,
+            }
+        }));
 
         let res = self.map.resolve(path.id);
 
@@ -731,6 +742,7 @@ impl<'air> AirBuilder<'air> {
             segments,
             path.span,
             self.next_air_id(path.id),
+            res_count,
         ))
     }
 

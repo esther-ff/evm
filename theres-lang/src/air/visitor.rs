@@ -141,6 +141,7 @@ pub fn walk_path<'vis, V: AirVisitor<'vis>>(v: &mut V, path: &'vis Path<'vis>) -
         segments: _,
         span: _,
         air_id: _,
+        resolved: _,
     } = path;
 
     v.visit_resolved(res)

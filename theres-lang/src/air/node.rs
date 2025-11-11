@@ -447,16 +447,31 @@ pub enum TyKind<'h> {
 #[derive(Debug, Clone, Copy)]
 pub struct Path<'h> {
     pub res: Resolved<AirId>,
-    pub segments: &'h [SymbolId],
+    pub segments: &'h [PathSeg],
+    pub resolved: usize,
     pub span: Span,
     pub air_id: AirId,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PathSeg {
+    pub id: AirId,
+    pub res: Resolved<AirId>,
+    pub sym: SymbolId,
+}
+
 impl<'h> Path<'h> {
-    pub fn new(res: Resolved<AirId>, segments: &'h [SymbolId], span: Span, air_id: AirId) -> Self {
+    pub fn new(
+        res: Resolved<AirId>,
+        segments: &'h [PathSeg],
+        span: Span,
+        air_id: AirId,
+        resolved: usize,
+    ) -> Self {
         Self {
             res,
             segments,
+            resolved,
             span,
             air_id,
         }

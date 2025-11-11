@@ -278,6 +278,7 @@ impl<'ty> FunCx<'ty> {
                 match *callable {
                     TyKind::FnDef(did) => {
                         let sig = self.s.fn_sig_for(did);
+                        dbg!(sig);
                         self.verify_arguments_for_call(sig.inputs, args, expr.span);
                         sig.output
                     }
@@ -547,20 +548,24 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
-        let res = path.res;
+        if path.segments.iter().filter(|x| !x.res.is_err()).count() == path.segments.len() {
+            let res = path.res;
 
-        match res {
-            Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
+            match res {
+                Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
 
-            Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
-                self.s.intern_ty(TyKind::FnDef(ctor_def_id))
+                Resolved::Def(ctor_def_id, DefType::AdtCtor) => {
+                    self.s.intern_ty(TyKind::FnDef(ctor_def_id))
+                }
+
+                Resolved::Local(air_id) => *self.node_type.get(&air_id).unwrap(),
+
+                Resolved::Err => self.s.types.err,
+
+                _ => unreachable!("what the fuck?"),
             }
-
-            Resolved::Local(air_id) => *self.node_type.get(&air_id).unwrap(),
-
-            Resolved::Err => self.s.types.err,
-
-            _ => unreachable!("what the fuck?"),
+        } else {
+            todo!()
         }
     }
 
@@ -604,7 +609,6 @@ impl<'ty> FunCx<'ty> {
         }
 
         let binds = self.s.binds_for_type(recv_ty);
-
         let Some((def_id, _, span)) = binds
             .iter()
             .filter_map(|item| {
@@ -623,7 +627,6 @@ impl<'ty> FunCx<'ty> {
                 },
                 receiver.span,
             );
-
             return self.s.types.err;
         };
 
@@ -638,6 +641,8 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_block(&mut self, block: &Block<'_>) -> Ty<'ty> {
+        log::trace!("typeck_block");
+
         for stmt in block.stmts {
             self.typeck_stmt(stmt);
         }
@@ -1013,7 +1018,6 @@ pub fn binds_for_type<'cx>(cx: &'cx Session<'cx>, ty: Ty<'cx>) -> &'cx [BindItem
             .filter_map(node::Thing::get_bind)
             .filter_map(|bind| {
                 let bind_ty = cx.lower_ty(bind.with);
-                dbg!(ty, bind_ty);
                 if ty == bind_ty {
                     Some(bind.items)
                 } else {
