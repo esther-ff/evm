@@ -136,8 +136,8 @@ impl Compiler {
                 return;
             }
 
-            let to_build = crate::pill::collect_build::collect_build_items(session, main_did);
-            dbg!(to_build);
+            // let to_build = crate::pill::collect_build::collect_build_items(session, main_did);
+            // dbg!(to_build);
         });
     }
 

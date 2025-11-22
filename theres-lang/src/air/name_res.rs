@@ -442,6 +442,8 @@ struct SecondPass<'res> {
 
     current_item: Option<AstId>,
 
+    current_loop_label: Option<AstId>,
+
     arg_stack: Vec<(SymbolId, Resolved<AstId>)>,
 }
 
@@ -491,6 +493,7 @@ impl<'res> SecondPass<'res> {
             realm_scopes,
             path,
             current_scope,
+            current_loop_label: None,
         }
     }
 
@@ -923,9 +926,33 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                 todo!("patterns?");
             }
 
-            ExprType::Loop { body } => self.visit_block(body),
+            ExprType::Loop { body, label } => {
+                if label.name != Name::DUMMY {
+                    self.current_scope_mut().add(
+                        Namespace::Values,
+                        label.name.interned,
+                        Resolved::Label {
+                            id: label.id,
+                            was_error: false,
+                        },
+                    );
+                }
 
-            ExprType::While { cond, body } | ExprType::Until { cond, body } => {
+                self.current_loop_label.replace(label.id);
+                self.visit_block(body);
+                self.current_loop_label.take();
+            }
+
+            ExprType::While {
+                cond,
+                body,
+                label: _,
+            }
+            | ExprType::Until {
+                cond,
+                body,
+                label: _,
+            } => {
                 self.visit_expr(cond);
                 self.visit_block(body);
             }
@@ -963,7 +990,27 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
                 }
             }
 
-            ExprType::Constant(..) | ExprType::Break => (),
+            ExprType::Constant(..) | ExprType::Err => (),
+
+            ExprType::Break { label } => {
+                if let Some(label) = *label {
+                    let res = self.get_name(label, Namespace::Values);
+
+                    if let Resolved::Label { .. } = res {
+                        self.maps.map_to_resolved(val.id, res);
+                    } else {
+                        todo!("not-label in resolution for a break")
+                    }
+                } else {
+                    self.maps.map_to_resolved(
+                        val.id,
+                        Resolved::Label {
+                            id: AstId::DUMMY,
+                            was_error: true,
+                        },
+                    );
+                };
+            }
 
             ExprType::Block(b) => self.visit_block(b),
 
@@ -1038,6 +1085,7 @@ impl<'vis> Visitor<'vis> for SecondPass<'_> {
             span: _,
             id: _,
             expr,
+            label: _,
         } = val;
 
         for stmt in stmts {

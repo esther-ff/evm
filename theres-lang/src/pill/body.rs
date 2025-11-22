@@ -30,10 +30,12 @@ use crate::air::AirId;
 use crate::air::def::DefId;
 use crate::air::node::{AirLiteral, Constant};
 use crate::ast;
-use crate::eair::{Block, BodyKind, Expr, ExprKind, LocalId as EairLocal, LogicalOp, ParamId};
+use crate::eair::{
+    Block, BodyKind, Expr, ExprKind, Label, LocalId as EairLocal, LogicalOp, ParamId,
+};
 use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{
-    AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, Stmt, StmtKind,
+    AdtKind, BasicBlock, BlockExitKind, Cfg, Imm, Operand, Rvalue, Stmt, StmtKind,
 };
 use crate::pill::errors::PillError;
 use crate::pill::op::{BinOp, UnOp};
@@ -105,6 +107,15 @@ impl<'il> Pill<'il> {
     }
 }
 
+enum LabelTarget<'il> {
+    /// A break should be translated to assigning to the block's return place.
+    Block(Access<'il>),
+
+    /// A break should be translated to a goto to the end of the loop
+    /// and an assignment to the return place of the loop.
+    Loop(BasicBlock, Access<'il>),
+}
+
 struct PillBuilder<'il> {
     cx: &'il Session<'il>,
     cfg: Cfg<'il>,
@@ -115,6 +126,8 @@ struct PillBuilder<'il> {
     current_loop_end: Option<BasicBlock>,
     params: HashMap<ParamId, Local>,
     alive: HashSet<Local>,
+    labels: HashMap<Label, LabelTarget<'il>>,
+    current_label: Option<Label>,
 }
 
 impl<'il> PillBuilder<'il> {
@@ -338,8 +351,14 @@ impl<'il> PillBuilder<'il> {
             }
 
             // TODO: dedup somewhere too
-            ExprKind::Break => {
-                let goto = self.current_loop_end.expect("break outside loop!");
+            ExprKind::Break(label) => {
+                dbg!(&label);
+                let goto = match self.labels[label] {
+                    LabelTarget::Block(_acc) => return bb,
+                    LabelTarget::Loop(bb, _acc) => bb,
+                };
+
+                // panic!("We got into a break {goto}");
 
                 self.cfg.assign(
                     bb,
@@ -493,19 +512,28 @@ impl<'il> PillBuilder<'il> {
                 bb
             }
 
-            ExprKind::Block(block) => self.process_block(into, block, bb),
+            ExprKind::Block(block, label) => {
+                if let Some(label) = *label {
+                    self.labels.insert(label, LabelTarget::Block(into.into()));
+                };
 
-            ExprKind::Loop(body) => {
-                let dest = into;
+                self.process_block(into, block, bb)
+            }
+
+            ExprKind::Loop(body, label) => {
                 let loop_start = self.cfg.new_block();
                 self.cfg.goto(bb, loop_start, expr.span);
+
                 let loop_end = self.cfg.new_block();
                 self.current_loop_end.replace(loop_end);
+                dbg!("loop", label);
+                self.labels
+                    .insert(*label, LabelTarget::Loop(loop_end, into.into()));
 
-                let bb = self.process_block(dest, body, loop_start);
-
+                let bb = self.process_block(into, body, loop_start);
                 self.cfg.goto(bb, loop_start, expr.span);
                 self.current_loop_end.take();
+
                 self.cfg.live(bb, Span::DUMMY, into);
                 loop_end
             }
@@ -532,17 +560,16 @@ impl<'il> PillBuilder<'il> {
         false_: Option<&Expr<'il>>,
         bb: BasicBlock,
     ) -> BasicBlock {
-        let cond_span = cond.span;
-        let loc = local;
-        let local = local.into();
-        let (bb, cond) = self.as_operand(cond, bb);
+        let (bb, cond_op) = self.as_operand(cond, bb);
 
         let bb_true = self.cfg.new_block();
-        let bb_false = self.cfg.new_block();
-
-        self.cfg.branch(bb, cond, bb_true, bb_false, cond_span);
-
         let bb_end = self.cfg.new_block();
+        let bb_false = match false_ {
+            Some(..) => self.cfg.new_block(),
+            None => bb_end,
+        };
+
+        self.cfg.branch(bb, cond_op, bb_true, bb_false, cond.span);
 
         let (bb_true_end, cond_succ) = self.as_rvalue(true_, bb_true);
         let (bb_false_end, cond_fail) = match false_ {
@@ -553,14 +580,15 @@ impl<'il> PillBuilder<'il> {
             }
         };
 
-        self.cfg.assign(bb_true_end, local, cond_succ, true_.span);
+        self.cfg
+            .assign(bb_true_end, local.into(), cond_succ, true_.span);
 
         if let Some(cond_fail) = cond_fail {
             self.cfg
-                .assign(bb_false_end, local, cond_fail, false_.unwrap().span);
+                .assign(bb_false_end, local.into(), cond_fail, false_.unwrap().span);
         }
 
-        self.cfg.live(bb_end, Span::DUMMY, loc);
+        self.cfg.live(bb_end, Span::DUMMY, local);
         self.cfg.goto(bb_true_end, bb_end, Span::DUMMY);
         self.cfg.goto(bb_false_end, bb_end, Span::DUMMY);
 
@@ -980,6 +1008,8 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     }
 
     let mut builder = PillBuilder {
+        current_label: None,
+        labels: HashMap::new(),
         cx,
         cfg,
         locals,
@@ -1001,19 +1031,19 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
     builder.cfg.bb_return(ret_bb, span);
 
-    for (_, block) in builder.cfg.blocks_mut() {
-        let Some(exit) = block.exit() else {
-            unreachable!("basic block without terminator")
-        };
+    // for (_, block) in builder.cfg.blocks_mut() {
+    //     let Some(exit) = block.exit() else {
+    //         unreachable!("basic block without terminator")
+    //     };
 
-        if let BlockExitKind::Goto(bb) = exit.kind()
-            && bb.is_dummy()
-        {
-            block
-                .exit
-                .replace(BlockExit::new(BlockExitKind::Goto(ret_bb), exit.span()));
-        }
-    }
+    //     if let BlockExitKind::Goto(bb) = exit.kind()
+    //         && bb.is_dummy()
+    //     {
+    //         block
+    //             .exit
+    //             .replace(BlockExit::new(BlockExitKind::Goto(ret_bb), exit.span()));
+    //     }
+    // }
 
     let body = Pill {
         argument_count: arg_count,

@@ -279,7 +279,7 @@ impl<'cx> Session<'cx> {
                 },
 
                 Resolved::Err => return self.types.err,
-                Resolved::Local(..) => {
+                Resolved::Local(..) | Resolved::Label { .. } => {
                     unreachable!()
                 }
             },

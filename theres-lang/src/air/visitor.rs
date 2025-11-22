@@ -312,7 +312,10 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
             visit_iter!(v: v, m: visit_expr, *args);
         }
 
-        ExprKind::Block(block) => return v.visit_block(block),
+        ExprKind::Block {
+            label: _,
+            body: block,
+        } => return v.visit_block(block),
 
         ExprKind::If {
             condition,
@@ -328,7 +331,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
 
         ExprKind::Field { src, field: _ } => return v.visit_expr(src),
 
-        ExprKind::Loop { body } => return v.visit_block(body),
+        ExprKind::Loop { body, label: _ } => return v.visit_block(body),
 
         ExprKind::Index {
             index,
@@ -341,7 +344,7 @@ pub fn walk_expr<'vis, V: AirVisitor<'vis>>(v: &mut V, expr: &'vis Expr<'vis>) -
 
         ExprKind::Path(path) => return v.visit_path(path),
 
-        ExprKind::Literal(..) | ExprKind::Break => (),
+        ExprKind::Literal(..) | ExprKind::Break(_) => (),
     }
 
     V::Result::normal()

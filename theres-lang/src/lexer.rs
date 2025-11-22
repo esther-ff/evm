@@ -321,6 +321,13 @@ impl Lexemes {
             .expect("above check guarantees this doesn't panic")
     }
 
+    pub fn peek2(&self) -> Token {
+        self.tokens
+            .get(self.pos + 1)
+            .copied()
+            .unwrap_or_else(|| self.eof_token())
+    }
+
     pub fn next_token(&mut self) -> Token {
         let ret = self.peek_token();
         self.pos += 1;

@@ -6,7 +6,6 @@ use crate::span::Span;
 use crate::symbols::SymbolId;
 
 use std::borrow::Cow;
-use std::panic::Location;
 
 impl TheresError for ParseError {
     fn message(&self) -> Cow<'static, str> {
@@ -32,6 +31,10 @@ impl TheresError for ParseError {
             ParseError::InvalidPattern => "this pattern is invalid syntatically".into(),
 
             ParseError::ExpectedExpr => "expected an expression here".into(),
+
+            Self::ExpectedIdentifier(instead) => {
+                format!("expected an identifier but got {instead}").into()
+            }
         }
     }
 }
@@ -56,6 +59,7 @@ enum ParseError {
     MalformedType,
     FunctionWithoutBody,
     InvalidPattern,
+    ExpectedIdentifier(TokenKind),
 }
 
 enum FunctionPart {
@@ -145,9 +149,7 @@ impl Parser<'_> {
             }
             TokenKind::Native => self.native_block()?,
 
-            got => {
-                return self.error_out(ParseError::ExpectedDecl { got }, tok.span);
-            }
+            got => return Err(ParseError::ExpectedDecl { got }),
         };
 
         Ok(decl)
@@ -242,10 +244,9 @@ impl Parser<'_> {
             }
 
             _ => {
-                let span = self.lexemes.peek_token().span;
                 self.lexemes.advance();
 
-                self.error_out(ParseError::MalformedType, span)
+                Err(ParseError::MalformedType)
             }
         }
     }
@@ -334,7 +335,9 @@ impl Parser<'_> {
             FunctionPart::Full(decl) => Ok(decl),
 
             FunctionPart::Signature(sig) => {
-                self.error_out(ParseError::FunctionWithoutBody, sig.span)
+                self.diag
+                    .emit_err(ParseError::FunctionWithoutBody, sig.span);
+                Err(ParseError::FunctionWithoutBody)
             }
         }
     }
@@ -343,7 +346,7 @@ impl Parser<'_> {
         let sig = self.function_signature()?;
 
         let maybe_block = if self.lexemes.peek_token().kind == TokenKind::LeftCurlyBracket {
-            Some(self.block()?)
+            Some(self.block(None)?)
         } else {
             None
         };
@@ -602,7 +605,9 @@ impl Parser<'_> {
         Ok(ExprOrStmt::Stmt(stmt))
     }
 
-    fn block(&mut self) -> Result<Block> {
+    fn block(&mut self, label: Option<Label>) -> Result<Block> {
+        let label = label.unwrap_or(Label::implicit(self.new_id()));
+
         let span_start = self.expect(t!(LeftCurlyBracket)).span;
         let mut stmts = Vec::new();
         let mut expr = None;
@@ -622,7 +627,23 @@ impl Parser<'_> {
 
         let span = Span::between(span_start, span_end);
 
-        Ok(Block::new(stmts, span, self.new_id(), expr))
+        Ok(Block {
+            stmts,
+            span,
+            id: self.new_id(),
+            expr: expr.map(Box::new),
+            label,
+        })
+    }
+
+    fn label(&mut self) -> Result<Label> {
+        let name = self.expect_ident_as_name()?;
+        self.expect(t!(Colon));
+
+        Ok(Label {
+            name,
+            id: self.new_id(),
+        })
     }
 
     fn expression(&mut self) -> Result<Expr> {
@@ -633,7 +654,7 @@ impl Parser<'_> {
         let begin = self.expect_token(TokenKind::If)?;
         let expr = self.expression()?;
 
-        let first_block = self.block()?;
+        let first_block = self.block(None)?;
 
         let mut end = first_block.span;
         let mut else_ifs = Vec::new();
@@ -655,7 +676,7 @@ impl Parser<'_> {
 
         // just an `if <expr> <block> else <block>`
         if !self.consume_if(TokenKind::If) {
-            otherwise = Some(self.block()?);
+            otherwise = Some(self.block(None)?);
             return Ok(Expr::new(
                 ExprType::If {
                     cond: Box::new(expr),
@@ -670,18 +691,18 @@ impl Parser<'_> {
 
         // `if <expr> <block> else if <expr> <block> ... (else <block>)?`
         let cond = self.expression()?;
-        let block = self.block()?;
+        let block = self.block(None)?;
         else_ifs.push(ElseIf::new(cond, block));
 
         while self.consume_if(TokenKind::Else) && self.consume_if(TokenKind::If) {
             let cond = self.expression()?;
-            let block = self.block()?;
+            let block = self.block(None)?;
             end = block.span;
             else_ifs.push(ElseIf::new(cond, block));
         }
 
         if self.lexemes.previous().kind == TokenKind::Else {
-            let block = self.block()?;
+            let block = self.block(None)?;
             end = block.span;
             otherwise.replace(block);
         }
@@ -698,12 +719,21 @@ impl Parser<'_> {
         ))
     }
 
-    fn loop_expr(&mut self) -> Result<Expr> {
+    fn loop_expr(&mut self, label: Option<Label>) -> Result<Expr> {
+        let label = label.unwrap_or(Label {
+            name: Name::DUMMY,
+            id: self.new_id(),
+        });
+
         let loop_ident = self.expect_token(TokenKind::Loop)?;
-        let body = self.block()?;
+        let body = self.block(None)?;
         let span = Span::between(loop_ident.span, body.span);
 
-        Ok(Expr::new(ExprType::Loop { body }, span, self.new_id()))
+        Ok(Expr::new(
+            ExprType::Loop { body, label },
+            span,
+            self.new_id(),
+        ))
     }
 
     fn for_loop(&mut self) -> Result<Expr> {
@@ -714,7 +744,7 @@ impl Parser<'_> {
 
         let iterable = self.expression().map(Box::new)?;
 
-        let body = self.block()?;
+        let body = self.block(None)?;
         let span = Span::between(for_ident.span, body.span);
 
         Ok(Expr::new(
@@ -755,7 +785,11 @@ impl Parser<'_> {
                 )
             }
 
-            _ => return self.error_out(ParseError::InvalidPattern, token.span),
+            _ => {
+                self.diag.emit_err(ParseError::InvalidPattern, token.span);
+
+                return Ok(Pat::new(PatType::Err, token.span));
+            }
         };
 
         Ok(pat)
@@ -765,11 +799,15 @@ impl Parser<'_> {
         let while_ident = self.expect_token(TokenKind::While)?;
         let cond = self.expression().map(Box::new)?;
 
-        let body = self.block()?;
+        let body = self.block(None)?;
         let span = Span::between(while_ident.span, body.span);
 
         Ok(Expr::new(
-            ExprType::While { cond, body },
+            ExprType::While {
+                cond,
+                body,
+                label: Label::implicit(self.new_id()),
+            },
             span,
             self.new_id(),
         ))
@@ -778,11 +816,16 @@ impl Parser<'_> {
     pub fn until_expr(&mut self) -> Result<Expr> {
         let until_ident = self.expect_token(TokenKind::Until)?;
         let cond = self.expression().map(Box::new)?;
-        let body = self.block()?;
+        let body = self.block(None)?;
         let span = Span::between(until_ident.span, body.span);
 
         Ok(Expr::new(
-            ExprType::Until { cond, body },
+            ExprType::Until {
+                cond,
+                body,
+
+                label: Label::implicit(self.new_id()),
+            },
             span,
             self.new_id(),
         ))
@@ -801,7 +844,13 @@ impl Parser<'_> {
 
         self.expect(TokenKind::RightArrow);
         let body = if self.is_next(t!(LeftCurlyBracket)) {
-            LambdaBody::Block(self.block()?)
+            let label = if let TokenKind::Identifier(..) = self.lexemes.peek_token().kind {
+                Some(self.label()?)
+            } else {
+                None
+            };
+
+            LambdaBody::Block(self.block(label)?)
         } else {
             LambdaBody::Expr(self.expression().map(Box::new)?)
         };
@@ -1115,7 +1164,9 @@ impl Parser<'_> {
                 TokenKind::Minus => UnaryOp::Negation,
                 _ => {
                     let span = tok.span;
-                    return self.error_out(ParseError::WrongUnaryOp { offender: tok }, span);
+                    self.diag
+                        .emit_err(ParseError::WrongUnaryOp { offender: tok }, span);
+                    return Ok(Expr::new(ExprType::Err, span, self.new_id()));
                 }
             };
 
@@ -1257,6 +1308,29 @@ impl Parser<'_> {
         ))
     }
 
+    fn break_expr(&mut self) -> Result<Expr> {
+        let kw = self.expect(t!(Break));
+        let name = if let TokenKind::Colon = self.lexemes.peek_token().kind {
+            self.lexemes.next_token();
+            Some(self.expect_ident_as_name()?)
+        } else {
+            None
+        };
+
+        let span = match name {
+            None => kw.span,
+            Some(name) => Span::between(kw.span, name.span),
+        };
+
+        Ok(Expr::new(
+            ExprType::Break {
+                label: name.map(|name| name.interned),
+            },
+            span,
+            self.new_id(),
+        ))
+    }
+
     fn primary(&mut self) -> Result<Expr> {
         let token = self.lexemes.peek_token();
 
@@ -1264,7 +1338,7 @@ impl Parser<'_> {
             TokenKind::Return => self.return_expr(token),
 
             TokenKind::If => self.if_expr(),
-            TokenKind::Loop => self.loop_expr(),
+            TokenKind::Loop => self.loop_expr(None),
             TokenKind::For => self.for_loop(),
             TokenKind::While => self.while_expr(),
             TokenKind::Until => self.until_expr(),
@@ -1277,17 +1351,41 @@ impl Parser<'_> {
             | TokenKind::True
             | TokenKind::StringLiteral(..) => Ok(self.literals(token.kind)),
             TokenKind::LeftParen => self.group_exprs(),
-            TokenKind::Identifier(..) => self.path_expr(),
-            TokenKind::Break => Ok(Expr::new(ExprType::Break, token.span, self.new_id())),
+            TokenKind::Identifier(..) => {
+                if let t!(Colon) = self.lexemes.peek2().kind {
+                    let label = self.label()?;
 
+                    match self.lexemes.peek_token().kind {
+                        TokenKind::LeftCurlyBracket => {
+                            let block = self.block(Some(label))?;
+                            let block_span = block.span;
+
+                            Ok(Expr::new(ExprType::Block(block), block_span, self.new_id()))
+                        }
+                        TokenKind::Loop => self.loop_expr(Some(label)),
+
+                        _ => {
+                            let tok = self.lexemes.next_token();
+                            Ok(Expr::new(ExprType::Err, tok.span, self.new_id()))
+                        }
+                    }
+                } else {
+                    self.path_expr()
+                }
+            }
+
+            TokenKind::Break => self.break_expr(),
             TokenKind::LeftCurlyBracket => {
-                let block = self.block()?;
+                let block = self.block(None)?;
                 let block_span = block.span;
 
                 Ok(Expr::new(ExprType::Block(block), block_span, self.new_id()))
             }
 
-            _ => self.error_out(ParseError::ExpectedExpr, token.span),
+            _ => {
+                self.diag.emit_err(ParseError::ExpectedExpr, token.span);
+                Ok(Expr::new(ExprType::Err, token.span, self.new_id()))
+            }
         }
     }
 
@@ -1368,12 +1466,9 @@ impl Parser<'_> {
         if let TokenKind::Identifier(id) = tok.kind {
             Ok(Name::new(id, tok.span))
         } else {
-            let kind = ParseError::Expected {
-                what: TokenKind::Identifier(SymbolId::DUMMY),
-                got: tok.kind,
-            };
-
-            self.error_out(kind, tok.span)
+            self.diag
+                .emit_err(ParseError::ExpectedIdentifier(tok.kind), tok.span);
+            Ok(Name::DUMMY)
         }
     }
 
@@ -1406,36 +1501,9 @@ impl Parser<'_> {
                 got: tok.kind,
             };
 
-            return self.error_out(kind, tok.span);
+            self.diag.emit_err(kind, tok.span);
         }
 
         Ok(tok)
-    }
-
-    #[track_caller]
-    fn error_out<T>(&mut self, kind: ParseError, span: Span) -> Result<T, ParseError> {
-        log::error!("`error_out` called at {}", Location::caller());
-        let mut end_span = None;
-
-        while !self.lexemes.is_empty() {
-            if self.lexemes.previous().kind == TokenKind::Semicolon {
-                end_span = Some(self.lexemes.previous().span);
-                break;
-            }
-
-            match self.lexemes.peek_token().kind {
-                TokenKind::RightSqBracket | TokenKind::RightParen | TokenKind::Eof => {
-                    self.lexemes.advance();
-                    break;
-                }
-
-                _ => self.lexemes.advance(),
-            }
-        }
-
-        self.diag
-            .emit_err(kind, end_span.map_or(span, |end| Span::between(span, end)));
-
-        Err(kind)
     }
 }

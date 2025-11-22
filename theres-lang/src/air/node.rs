@@ -155,7 +155,10 @@ pub enum ExprKind<'h> {
         args: &'h [Expr<'h>],
     },
 
-    Block(&'h Block<'h>),
+    Block {
+        label: Option<AirId>,
+        body: &'h Block<'h>,
+    },
 
     If {
         condition: &'h Expr<'h>,
@@ -174,6 +177,7 @@ pub enum ExprKind<'h> {
 
     Loop {
         body: &'h Block<'h>,
+        label: AirId,
     },
 
     Literal(AirLiteral),
@@ -187,7 +191,7 @@ pub enum ExprKind<'h> {
 
     Path(&'h Path<'h>),
 
-    Break,
+    Break(AirId),
 }
 
 #[derive(Debug, Clone, Copy)]

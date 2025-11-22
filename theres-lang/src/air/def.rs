@@ -99,6 +99,7 @@ pub enum Resolved<Id> {
     Def(DefId, DefType),
     Local(Id),
     Prim(PrimTy),
+    Label { id: Id, was_error: bool },
 
     Err,
 }

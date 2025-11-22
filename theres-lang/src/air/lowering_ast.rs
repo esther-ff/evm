@@ -297,6 +297,7 @@ pub struct AirBuilder<'air> {
     current_instance: Option<DefId>,
 
     current_bind_ty: Option<&'air node::Ty<'air>>,
+    current_loop_label: Option<AirId>,
 }
 
 impl<'air> AirBuilder<'air> {
@@ -307,6 +308,7 @@ impl<'air> AirBuilder<'air> {
             map,
             current_instance: None,
             current_bind_ty: None,
+            current_loop_label: None,
 
             air_id_counter: 0,
             ast_id_to_air_id: HashMap::new(),
@@ -318,7 +320,9 @@ impl<'air> AirBuilder<'air> {
     ///
     /// Panics if the same `AstId` is again used for this function
     /// as it maps `AstId`s to `AirId`s for lowering `Resolved`s
+    #[track_caller]
     pub fn next_air_id(&mut self, ast_id: AstId) -> AirId {
+        dbg!(Location::caller());
         log::trace!("next_air_id ast_id={ast_id}");
 
         let air_id = AirId::new(self.air_id_counter);
@@ -366,7 +370,30 @@ impl<'air> AirBuilder<'air> {
         let air_id = self.next_air_id(expr.id);
 
         let air_expr_kind = match &expr.ty {
-            ExprType::Break => node::ExprKind::Break,
+            ExprType::Err => todo!(),
+            ExprType::Break { label } => {
+                let id = match label {
+                    Some(..) => match self.map.resolve(expr.id) {
+                        Resolved::Label {
+                            id,
+                            was_error: false,
+                        } => self.ast_id_to_air_id[&id],
+                        Resolved::Label {
+                            id: _,
+                            was_error: true,
+                        } => todo!(),
+                        Resolved::Err => todo!("No idea"),
+                        _ => unreachable!(),
+                    },
+
+                    None => match self.current_loop_label {
+                        None => todo!("missing label!"),
+                        Some(id) => id,
+                    },
+                };
+
+                node::ExprKind::Break(id)
+            }
 
             ExprType::Index { indexed, index } => node::ExprKind::Index {
                 index: self.lower_expr(index),
@@ -443,17 +470,34 @@ impl<'air> AirBuilder<'air> {
                 todo!("lowering for loop")
             }
 
-            ExprType::While { cond, body } => node::ExprKind::Loop {
-                body: self.lower_while_or_until_loop(cond, body, DesugarLoop::While),
-            },
+            ExprType::While { cond, body, label } => {
+                let label = self.next_air_id(label.id);
 
-            ExprType::Until { cond, body } => node::ExprKind::Loop {
-                body: self.lower_while_or_until_loop(cond, body, DesugarLoop::Until),
-            },
+                node::ExprKind::Loop {
+                    body: self.lower_while_or_until_loop(cond, body, label, DesugarLoop::While),
+                    label,
+                }
+            }
 
-            ExprType::Loop { body } => node::ExprKind::Loop {
-                body: self.lower_block(body),
-            },
+            ExprType::Until { cond, body, label } => {
+                let label = self.next_air_id(label.id);
+
+                node::ExprKind::Loop {
+                    body: self.lower_while_or_until_loop(cond, body, label, DesugarLoop::Until),
+                    label,
+                }
+            }
+
+            ExprType::Loop { body, label } => {
+                let id = self.next_air_id(label.id);
+                self.current_loop_label.replace(id);
+                let kind = node::ExprKind::Loop {
+                    label: id,
+                    body: self.lower_block(body),
+                };
+                self.current_loop_label.take();
+                kind
+            }
 
             ExprType::Group(expr) => return self.lower_expr_noalloc(expr),
 
@@ -480,7 +524,10 @@ impl<'air> AirBuilder<'air> {
                         let lowered_block = self.lower_block(block);
 
                         self.arena.alloc(node::Expr::new(
-                            node::ExprKind::Block(lowered_block),
+                            node::ExprKind::Block {
+                                label: Some(self.next_air_id(block.label.id)),
+                                body: lowered_block,
+                            },
                             lowered_block.span,
                             lowered_block.air_id,
                         ))
@@ -510,7 +557,17 @@ impl<'air> AirBuilder<'air> {
 
             ExprType::Path(path) => node::ExprKind::Path(self.lower_path(path)),
 
-            ExprType::Block(b) => node::ExprKind::Block(self.lower_block(b)),
+            ExprType::Block(b) => {
+                let id = self.next_air_id(b.label.id);
+                self.current_loop_label.replace(id);
+                let a = node::ExprKind::Block {
+                    label: Some(id),
+                    body: self.lower_block(b),
+                };
+                self.current_loop_label.take();
+
+                a
+            }
 
             ExprType::If {
                 cond,
@@ -527,15 +584,17 @@ impl<'air> AirBuilder<'air> {
         &mut self,
         cond: &Expr,
         body: &Block,
+        label: AirId,
         desugar: DesugarLoop,
     ) -> &'air node::Block<'air> {
         log::debug!("lower while or until loop");
+        self.current_loop_label.replace(label);
         let cond_block = node::Block::new(
             Span::DUMMY,
             &[],
             self.new_air_id(),
             Some(self.arena.alloc(node::Expr::new(
-                node::ExprKind::Break,
+                node::ExprKind::Break(label),
                 Span::DUMMY,
                 self.new_air_id(),
             ))),
@@ -591,6 +650,8 @@ impl<'air> AirBuilder<'air> {
             }
         };
 
+        self.current_loop_label.take();
+
         self.arena.alloc(loop_body)
     }
 
@@ -622,7 +683,10 @@ impl<'air> AirBuilder<'air> {
                 .or_else(|| {
                     if let Some(expr) = otherwise {
                         let new_expr = node::Expr::new(
-                            node::ExprKind::Block(self.lower_block(expr)),
+                            node::ExprKind::Block {
+                                label: None,
+                                body: self.lower_block(expr),
+                            },
                             expr.span,
                             self.new_air_id(),
                         );
@@ -640,12 +704,14 @@ impl<'air> AirBuilder<'air> {
         self.arena.alloc(self.lower_expr_noalloc(expr))
     }
 
+    #[track_caller]
     fn lower_block_noalloc(&mut self, block: &Block) -> node::Block<'air> {
         let Block {
             stmts,
             expr,
             span,
             id,
+            label: _,
         } = block;
 
         node::Block::new(
@@ -805,16 +871,16 @@ impl<'air> AirBuilder<'air> {
                 let sig = self.lower_fn_sig(&fn_decl.sig, self.air_map.bodies.future_id());
 
                 let body = self.arena.alloc(node::Expr::new(
-                    node::ExprKind::Block(self.lower_block(&fn_decl.block)),
+                    node::ExprKind::Block {
+                        label: None,
+                        body: self.lower_block(&fn_decl.block),
+                    },
                     fn_decl.span,
                     self.new_air_id(),
                 ));
 
                 let def_id = self.map.def_id_of(kind.id);
                 self.air_map.insert_body_of(body, def_id);
-
-                log::trace!("after fn decl in bind");
-
                 (
                     node::BindItemKind::Fun {
                         sig,
@@ -844,7 +910,7 @@ impl<'air> AirBuilder<'air> {
         let body = self.lower_block(&fn_decl.block);
         let body_id = self.air_map.insert_body_of(
             self.arena.alloc(node::Expr::new(
-                node::ExprKind::Block(body),
+                node::ExprKind::Block { label: None, body },
                 body.span,
                 body.air_id,
             )),
@@ -934,6 +1000,10 @@ impl<'air> AirBuilder<'air> {
             Resolved::Def(id, deftype) => Resolved::Def(id, deftype),
             Resolved::Prim(ty) => Resolved::Prim(ty),
             Resolved::Err => Resolved::Err,
+            Resolved::Label {
+                id: _,
+                was_error: _,
+            } => unreachable!(),
         }
     }
 

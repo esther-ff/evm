@@ -68,6 +68,9 @@ impl<'ir> ParamData<'ir> {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Label(pub(crate) AirId);
+
 #[derive(Debug)]
 pub struct Expr<'ir> {
     pub kind: ExprKind<'ir>,
@@ -182,7 +185,7 @@ pub enum ExprKind<'ir> {
         op: UnaryOp,
     },
 
-    Block(Block<'ir>),
+    Block(Block<'ir>, Option<Label>),
 
     If {
         cond: &'ir Expr<'ir>,
@@ -192,7 +195,7 @@ pub enum ExprKind<'ir> {
 
     Return(Option<&'ir Expr<'ir>>),
 
-    Loop(Block<'ir>),
+    Loop(Block<'ir>, Label),
 
     Lit(AirLiteral),
 
@@ -227,7 +230,7 @@ pub enum ExprKind<'ir> {
 
     Semi(&'ir Expr<'ir>),
 
-    Break,
+    Break(Label),
 
     /// Represents the literal for some zero-sized type
     /// like a function type
@@ -457,14 +460,14 @@ impl<'ir> EairBuilder<'ir> {
                 span,
             },
 
-            Loop { body } => Expr {
-                kind: ExprKind::Loop(self.lower_block(body)),
+            Loop { body, label } => Expr {
+                kind: ExprKind::Loop(self.lower_block(body), Label(label)),
                 ty,
                 span,
             },
 
-            Block(block) => Expr {
-                kind: ExprKind::Block(self.lower_block(block)),
+            Block { label, body } => Expr {
+                kind: ExprKind::Block(self.lower_block(body), label.map(Label)),
                 ty,
                 span,
             },
@@ -561,7 +564,7 @@ impl<'ir> EairBuilder<'ir> {
 
                 let true_ = self.cx.arena().alloc(Expr {
                     ty: block.exprs.last().map_or(self.cx.types.nil, |expr| expr.ty),
-                    kind: ExprKind::Block(block),
+                    kind: ExprKind::Block(block, None),
                     span: block_span,
                 });
 
@@ -594,8 +597,8 @@ impl<'ir> EairBuilder<'ir> {
                 span,
             },
 
-            Break => Expr {
-                kind: ExprKind::Break,
+            Break(id) => Expr {
+                kind: ExprKind::Break(Label(id)),
                 ty,
                 span,
             },
@@ -635,7 +638,9 @@ impl<'ir> EairBuilder<'ir> {
                     | DefType::Realm => unreachable!("non-sense"),
                 },
 
-                Resolved::Prim(..) => unreachable!("`Resolved::Prim` in path expr?"),
+                Resolved::Prim(..) | Resolved::Label { .. } => {
+                    unreachable!("`Resolved::Prim` in path expr?")
+                }
             },
         }
     }

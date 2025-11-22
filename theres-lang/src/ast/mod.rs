@@ -148,6 +148,7 @@ pub enum PatType {
     Ident { name: Name },
     Tuple { pats: Vec<Pat> },
     Wild,
+    Err,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -193,15 +194,18 @@ pub enum ExprType {
     While {
         cond: Box<Expr>,
         body: Block,
+        label: Label,
     },
 
     Until {
         cond: Box<Expr>,
         body: Block,
+        label: Label,
     },
 
     Loop {
         body: Block,
+        label: Label,
     },
 
     If {
@@ -236,7 +240,11 @@ pub enum ExprType {
 
     Block(Block),
 
-    Break,
+    Break {
+        label: Option<SymbolId>,
+    },
+
+    Err,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -301,22 +309,27 @@ pub struct Ty {
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct Label {
+    pub name: Name,
+    pub id: AstId,
+}
+
+impl Label {
+    pub fn implicit(id: AstId) -> Self {
+        Self {
+            id,
+            name: Name::DUMMY,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub expr: Option<Box<Expr>>,
     pub span: Span,
     pub id: AstId,
-}
-
-impl Block {
-    pub fn new(stmts: Vec<Stmt>, span: Span, id: AstId, expr: Option<Expr>) -> Self {
-        Self {
-            stmts,
-            span,
-            id,
-            expr: expr.map(Box::new),
-        }
-    }
+    pub label: Label,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -716,7 +729,7 @@ pub trait Visitor<'a>: Sized {
                 Self::Result::normal()
             }
 
-            PatType::Wild => Self::Result::normal(),
+            PatType::Wild | PatType::Err => Self::Result::normal(),
         }
     }
 
@@ -787,6 +800,7 @@ pub trait Visitor<'a>: Sized {
             span: _,
             id: _,
             expr,
+            label: _,
         } = val;
 
         visit_iter!(v: self, m: visit_stmt, stmts);
@@ -821,7 +835,7 @@ pub fn walk_expr<'vis, V: Visitor<'vis>>(v: &mut V, expr: &'vis Expr) -> V::Resu
             try_visit!(v.visit_expr(indexed), v.visit_expr(index));
             V::Result::normal()
         }
-        ExprType::Break | ExprType::Constant(..) => V::Result::normal(),
+        ExprType::Break { label: _ } | ExprType::Constant(..) => V::Result::normal(),
 
         ExprType::BinaryExpr { lhs, rhs, op: _ } => {
             try_visit!(v.visit_expr(lhs), v.visit_expr(rhs));
@@ -865,7 +879,16 @@ pub fn walk_expr<'vis, V: Visitor<'vis>>(v: &mut V, expr: &'vis Expr) -> V::Resu
 
         ExprType::Path(p) => v.visit_path(p),
 
-        ExprType::While { cond, body } | ExprType::Until { cond, body } => {
+        ExprType::While {
+            cond,
+            body,
+            label: _,
+        }
+        | ExprType::Until {
+            cond,
+            body,
+            label: _,
+        } => {
             try_visit!(v.visit_expr(cond));
             v.visit_block(body)
         }
@@ -879,7 +902,7 @@ pub fn walk_expr<'vis, V: Visitor<'vis>>(v: &mut V, expr: &'vis Expr) -> V::Resu
             v.visit_block(body)
         }
 
-        ExprType::Loop { body } => v.visit_block(body),
+        ExprType::Loop { body, label: _ } => v.visit_block(body),
 
         ExprType::If {
             cond,
@@ -921,5 +944,7 @@ pub fn walk_expr<'vis, V: Visitor<'vis>>(v: &mut V, expr: &'vis Expr) -> V::Resu
         }
 
         ExprType::Block(b) => v.visit_block(b),
+
+        ExprType::Err => V::Result::normal(),
     }
 }

@@ -112,8 +112,6 @@ impl<'ty> FunCx<'ty> {
             (TyKind::Array(ty_left), TyKind::Array(ty_right)) => self.unify(ty_left, ty_right)?,
 
             (TyKind::InferTy(infer), concrete) | (concrete, TyKind::InferTy(infer)) => {
-                // log::trace!("unifying infer and a concrete ty {infer:#?}, {concrete:#?}");
-
                 if infer.is_integer() && !concrete.is_integer_like()
                 || infer.is_float() && !concrete.is_float_like() {
                     return Err(UnifyError)
@@ -240,11 +238,14 @@ impl<'ty> FunCx<'ty> {
             ExprKind::Binary { lhs, rhs, op } => self.typeck_expr_bin_op(lhs, rhs, op),
             ExprKind::Unary { target, op } => self.typeck_expr_un_op(target, op),
             ExprKind::Path(path) => self.typeck_expr_path(path),
-            ExprKind::Block(block) => self.typeck_block(block),
+            ExprKind::Block {
+                label: _,
+                body: block,
+            } => self.typeck_block(block),
             ExprKind::Field { src, field } => self.typeck_expr_field(src, field),
             ExprKind::List(exprs) => self.typeck_expr_list(exprs, expr.span),
-            ExprKind::Break => self.s.types.diverges,
-            ExprKind::Loop { body } => {
+            ExprKind::Break(..) => self.s.types.diverges,
+            ExprKind::Loop { body, label: _ } => {
                 self.typeck_block(body);
                 self.s.types.nil
             }
@@ -539,9 +540,6 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn typeck_expr_path(&mut self, path: &Path<'_>) -> Ty<'ty> {
-        dbg!(path.segments.iter().filter(|x| !x.res.is_err()).count());
-        dbg!(path.segments.len());
-
         let (res, ty) =
             if path.segments.iter().filter(|x| !x.res.is_err()).count() == path.segments.len() {
                 (path.res, self.type_res(path.res))
@@ -612,12 +610,11 @@ impl<'ty> FunCx<'ty> {
 
     fn typeck_expr_list(&mut self, exprs: &[Expr<'_>], span: Span) -> Ty<'ty> {
         if exprs.is_empty() {
-            return self
-                .s
-                .intern_ty(TyKind::Array(self.new_infer_var(InferKind::Regular, span)));
+            let ty = self.new_infer_var(InferKind::Regular, span);
+            return self.s.intern_ty(TyKind::Array(ty));
         }
 
-        exprs
+        let kind = exprs
             .iter()
             .fold(None, |state, expr| {
                 let Some(ty) = state else {
@@ -631,10 +628,10 @@ impl<'ty> FunCx<'ty> {
 
                 state
             })
-            .map_or_else(
-                || unreachable!(),
-                |output| self.s.intern_ty(TyKind::Array(output)),
-            )
+            .map(TyKind::Array)
+            .unwrap();
+
+        self.s.intern_ty(kind)
     }
 
     fn typeck_expr_meth_call(
