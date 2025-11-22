@@ -9,13 +9,64 @@ use crate::{
     span::Span,
 };
 
-use std::collections::HashSet;
+use std::{collections::HashSet, mem};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DataflowState {
     gen_: HashSet<Local>,
     in_: HashSet<Local>,
     out: HashSet<Local>,
+}
+
+pub fn dataflow_states(cfg: &Cfg<'_>) -> IdxVec<BasicBlock, DataflowState> {
+    let base: Vec<_> = std::iter::repeat_n(DataflowState::default(), cfg.len()).collect();
+    let mut states: IdxVec<BasicBlock, _> = IdxVec::new_from_vec(base);
+
+    for (bb, data) in cfg.blocks() {
+        let gen_set = &mut states[bb].gen_;
+
+        for instr in data.stmts() {
+            if let StmtKind::LocalLive(loc) = instr.kind() {
+                gen_set.insert(*loc);
+            }
+        }
+    }
+
+    let mut changed = true;
+
+    while changed {
+        changed = false;
+        for (bb, data) in cfg.blocks() {
+            let old_out = states[bb].out.clone();
+
+            states[bb].in_.clear();
+
+            let preds = data.predecessors();
+            if let Some(first) = preds.first().copied() {
+                let out = mem::take(&mut states[first].out);
+                states[bb].in_.clone_from(&out);
+                states[first].out = out;
+
+                for pred in &preds[1..] {
+                    states[bb].in_ = states[bb]
+                        .in_
+                        .intersection(&states[*pred].out)
+                        .copied()
+                        .collect();
+                }
+            }
+
+            let in_ = mem::take(&mut states[bb].in_);
+
+            states[bb].out.clone_from(&in_);
+            states[bb].in_ = in_;
+            states[bb].out = states[bb].out.union(&states[bb].gen_).copied().collect();
+
+            changed = states[bb].out != old_out;
+        }
+    }
+
+    states
 }
 
 struct MaybeInitVariables {
@@ -28,10 +79,8 @@ impl MaybeInitVariables {
             let gen_set = &mut self.states[bb].gen_;
 
             for instr in data.stmts() {
-                if let StmtKind::Assign { dest, .. } = instr.kind()
-                    && let Some(base) = dest.only_local()
-                {
-                    gen_set.insert(base);
+                if let StmtKind::LocalLive(loc) = instr.kind() {
+                    gen_set.insert(*loc);
                 }
             }
         }
@@ -117,19 +166,23 @@ fn analyze_rvalue(rvalue: &Rvalue<'_>, alive: &HashSet<Local>, span: Span) {
 }
 
 pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
+    let states = dataflow_states(cfg);
     let mut variables = MaybeInitVariables {
-        states: IdxVec::new_from_vec(vec![
-            DataflowState {
-                gen_: HashSet::new(),
-                in_: HashSet::new(),
-                out: HashSet::new(),
-            };
-            cfg.len()
-        ]),
+        // states: IdxVec::new_from_vec(vec![
+        //     DataflowState {
+        //         gen_: HashSet::new(),
+        //         in_: HashSet::new(),
+        //         out: HashSet::new(),
+        //     };
+        //     cfg.len()
+        // ]),
+        states,
     };
 
-    variables.compute_gen(cfg);
-    variables.analyze(cfg);
+    // variables.compute_gen(cfg);
+    // variables.analyze(cfg);
+
+    // dbg!(&states, &variables.states);
 
     let mut alive = HashSet::new();
     for (bb, data) in cfg.blocks() {
