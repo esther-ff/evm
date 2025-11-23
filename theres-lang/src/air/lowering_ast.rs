@@ -322,7 +322,6 @@ impl<'air> AirBuilder<'air> {
     /// as it maps `AstId`s to `AirId`s for lowering `Resolved`s
     #[track_caller]
     pub fn next_air_id(&mut self, ast_id: AstId) -> AirId {
-        dbg!(Location::caller());
         log::trace!("next_air_id ast_id={ast_id}");
 
         let air_id = AirId::new(self.air_id_counter);

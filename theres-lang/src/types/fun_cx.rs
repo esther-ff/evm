@@ -280,7 +280,6 @@ impl<'ty> FunCx<'ty> {
                 match *callable {
                     TyKind::FnDef(did) => {
                         let sig = self.s.fn_sig_for(did);
-                        dbg!(sig);
                         self.verify_arguments_for_call(sig.inputs, args, expr.span);
                         sig.output
                     }
@@ -589,7 +588,7 @@ impl<'ty> FunCx<'ty> {
     }
 
     fn type_res(&mut self, res: Resolved<AirId>) -> Ty<'ty> {
-        match dbg!(res) {
+        match res {
             Resolved::Def(def_id, DefType::Fun) => self.s.intern_ty(TyKind::FnDef(def_id)),
 
             Resolved::Def(ctor_def_id, DefType::AdtCtor) => {

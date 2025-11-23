@@ -484,10 +484,9 @@ pub fn fn_sig_for<'cx>(cx: &'cx Session<'cx>, def_id: DefId) -> FnSig<'cx> {
         }
 
         DefType::NativeFn => {
-            dbg!(def_id);
             let def = cx.air_get_def(def_id);
             let Node::NativeItem(item) = def else {
-                panic!()
+                unreachable!()
             };
 
             match item.kind {
