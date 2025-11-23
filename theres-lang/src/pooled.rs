@@ -1,4 +1,5 @@
 #![allow(clippy::zero_sized_map_values)]
+
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter, Result};

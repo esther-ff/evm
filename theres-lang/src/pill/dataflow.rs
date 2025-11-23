@@ -69,61 +69,6 @@ pub fn dataflow_states(cfg: &Cfg<'_>) -> IdxVec<BasicBlock, DataflowState> {
     states
 }
 
-struct MaybeInitVariables {
-    states: IdxVec<BasicBlock, DataflowState>,
-}
-
-impl MaybeInitVariables {
-    fn compute_gen<'a>(&mut self, cfg: &'a Cfg<'a>) {
-        for (bb, data) in cfg.blocks() {
-            let gen_set = &mut self.states[bb].gen_;
-
-            for instr in data.stmts() {
-                if let StmtKind::LocalLive(loc) = instr.kind() {
-                    gen_set.insert(*loc);
-                }
-            }
-        }
-    }
-
-    #[allow(clippy::assigning_clones)]
-    fn analyze<'a>(&mut self, cfg: &'a Cfg<'a>) {
-        let mut changed = true;
-
-        while changed {
-            changed = false;
-            for (bb, data) in cfg.blocks() {
-                let old_out = self.states[bb].out.clone();
-
-                self.states[bb].in_.clear();
-
-                let preds = data.predecessors();
-                if let Some(first) = preds.first().copied() {
-                    self.states[bb].in_ = self.states[first].out.clone();
-
-                    for pred in &preds[1..] {
-                        self.states[bb].in_ = self.states[bb]
-                            .in_
-                            .intersection(&self.states[*pred].out)
-                            .copied()
-                            .collect();
-                    }
-                }
-
-                self.states[bb].out = self.states[bb].in_.clone();
-
-                self.states[bb].out = self.states[bb]
-                    .out
-                    .union(&self.states[bb].gen_)
-                    .copied()
-                    .collect();
-
-                changed = self.states[bb].out != old_out;
-            }
-        }
-    }
-}
-
 fn analyze_operand(op: &Operand<'_>, alive: &HashSet<Local>, span: Span) {
     match op.maybe_use() {
         None => (),
@@ -166,27 +111,11 @@ fn analyze_rvalue(rvalue: &Rvalue<'_>, alive: &HashSet<Local>, span: Span) {
 }
 
 pub fn analyze_maybe_init_variables<'a>(cfg: &'a Cfg<'a>) {
-    let states = dataflow_states(cfg);
-    let mut variables = MaybeInitVariables {
-        // states: IdxVec::new_from_vec(vec![
-        //     DataflowState {
-        //         gen_: HashSet::new(),
-        //         in_: HashSet::new(),
-        //         out: HashSet::new(),
-        //     };
-        //     cfg.len()
-        // ]),
-        states,
-    };
-
-    // variables.compute_gen(cfg);
-    // variables.analyze(cfg);
-
-    // dbg!(&states, &variables.states);
+    let mut states = dataflow_states(cfg);
 
     let mut alive = HashSet::new();
     for (bb, data) in cfg.blocks() {
-        let state = &mut variables.states[bb];
+        let state = &mut states[bb];
         alive.clone_from(&state.in_);
 
         for stmt in data.stmts() {

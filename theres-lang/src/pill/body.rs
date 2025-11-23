@@ -35,12 +35,12 @@ use crate::eair::{
 };
 use crate::pill::access::{Access, AccessBuilder};
 use crate::pill::cfg::{
-    AdtKind, BasicBlock, BlockExitKind, Cfg, Imm, Operand, Rvalue, Stmt, StmtKind,
+    AdtKind, BasicBlock, BlockExit, BlockExitKind, Cfg, Imm, Operand, Rvalue, Stmt, StmtKind,
 };
 use crate::pill::errors::PillError;
 use crate::pill::op::{BinOp, UnOp};
 use crate::pill::scalar::Scalar;
-use crate::session::{Session, cx};
+use crate::session::Session;
 use crate::span::Span;
 use crate::symbols::SymbolId;
 use crate::types::fun_cx::FieldId;
@@ -127,7 +127,32 @@ struct PillBuilder<'il> {
     params: HashMap<ParamId, Local>,
     alive: HashSet<Local>,
     labels: HashMap<Label, LabelTarget<'il>>,
-    current_label: Option<Label>,
+}
+
+pub fn lit_to_scalar(lit: AirLiteral, ty: Ty<'_>) -> Scalar {
+    use crate::air::def::IntTy;
+    match (lit, *ty) {
+        (AirLiteral::Uint(val), TyKind::Int(size)) => match size {
+            IntTy::N8 => Scalar::new_u8(val.try_into().unwrap()),
+            IntTy::N16 => Scalar::new_u16(val.try_into().unwrap()),
+            IntTy::N32 => Scalar::new_u32(val.try_into().unwrap()),
+            IntTy::N64 => Scalar::new_u64(val),
+        },
+
+        (AirLiteral::Int(val), TyKind::Int(size)) => match size {
+            IntTy::N8 => Scalar::new_i8(val.try_into().unwrap()),
+            IntTy::N16 => Scalar::new_i16(val.try_into().unwrap()),
+            IntTy::N32 => Scalar::new_i32(val.try_into().unwrap()),
+            IntTy::N64 => Scalar::new_i64(val),
+        },
+
+        (AirLiteral::Bool(val), TyKind::Bool) => Scalar::new_bool(val),
+        #[allow(clippy::cast_possible_truncation)]
+        (AirLiteral::Float(val), TyKind::Float) => Scalar::new_f32(val as f32),
+        (AirLiteral::Float(val), TyKind::Double) => Scalar::new_f64(val),
+
+        _ => unreachable!("what the holy FUCK??"),
+    }
 }
 
 impl<'il> PillBuilder<'il> {
@@ -138,40 +163,13 @@ impl<'il> PillBuilder<'il> {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    #[track_caller]
     fn as_operand(&mut self, expr: &Expr<'il>, mut bb: BasicBlock) -> (BasicBlock, Operand<'il>) {
         match &expr.kind {
             ExprKind::Lit(lit) => {
-                use crate::air::def::IntTy;
-                #[allow(clippy::cast_possible_truncation)]
-                let scalar = match (lit, *expr.ty) {
-                    (AirLiteral::Uint(val), TyKind::Int(size)) => match size {
-                        IntTy::N8 => Scalar::new_u8(*val as u8),
-                        IntTy::N16 => Scalar::new_u16(*val as u16),
-                        IntTy::N32 => Scalar::new_u32(*val as u32),
-                        IntTy::N64 => Scalar::new_u64(*val),
-                    },
+                let ty = expr.ty;
+                let imm = Imm::scalar(self.cx, lit_to_scalar(*lit, ty), ty, expr.span);
 
-                    (AirLiteral::Int(val), TyKind::Int(size)) => match size {
-                        IntTy::N8 => Scalar::new_i8(*val as i8),
-                        IntTy::N16 => Scalar::new_i16(*val as i16),
-                        IntTy::N32 => Scalar::new_i32(*val as i32),
-                        IntTy::N64 => Scalar::new_i64(*val),
-                    },
-
-                    (AirLiteral::Bool(val), TyKind::Bool) => Scalar::new_bool(*val),
-
-                    (AirLiteral::Float(val), TyKind::Float) => Scalar::new_f32(*val as f32),
-                    (AirLiteral::Float(val), TyKind::Double) => Scalar::new_f64(*val),
-
-                    _ => unreachable!("what the holy FUCK??"),
-                };
-
-                (
-                    bb,
-                    Operand::Imm(Imm::scalar(self.cx, scalar, expr.ty, expr.span)),
-                )
+                (bb, Operand::Imm(imm))
             }
 
             ExprKind::Local(loc) => (bb, Operand::Use(self.map[loc].into())),
@@ -208,7 +206,6 @@ impl<'il> PillBuilder<'il> {
     }
 
     #[allow(clippy::too_many_lines)]
-    #[track_caller]
     fn lower_expr_into(&mut self, expr: &Expr<'il>, mut bb: BasicBlock, into: Local) -> BasicBlock {
         let bb = match &expr.kind {
             ExprKind::Lambda => {
@@ -264,23 +261,11 @@ impl<'il> PillBuilder<'il> {
             }
 
             ExprKind::Lit(lit) => {
-                let scalar = match lit {
-                    AirLiteral::Str(..) => todo!("idfk"),
-                    AirLiteral::Bool(val) => Scalar::new_bool(*val),
-                    AirLiteral::Float(val) => Scalar::new_f64(*val),
-                    AirLiteral::Uint(val) => Scalar::new_u64(*val),
-                    AirLiteral::Int(val) => Scalar::new_i64(*val),
-                };
+                let scalar = lit_to_scalar(*lit, expr.ty);
+                let imm = Imm::scalar(self.cx, scalar, expr.ty, expr.span);
+                let rvalue = Rvalue::Regular(Operand::Imm(imm));
 
-                self.cfg.assign(
-                    bb,
-                    into.into(),
-                    Rvalue::Regular(Operand::Imm(Imm::scalar(
-                        self.cx, scalar, expr.ty, expr.span,
-                    ))),
-                    expr.span,
-                );
-
+                self.cfg.assign(bb, into.into(), rvalue, expr.span);
                 bb
             }
 
@@ -336,7 +321,6 @@ impl<'il> PillBuilder<'il> {
             }
 
             ExprKind::Logical { lhs, rhs, op } => self.process_logical_op(lhs, rhs, bb, into, *op),
-
             ExprKind::List(exprs) => self.process_list(into, exprs, bb, expr.span),
 
             ExprKind::Empty => {
@@ -352,13 +336,10 @@ impl<'il> PillBuilder<'il> {
 
             // TODO: dedup somewhere too
             ExprKind::Break(label) => {
-                dbg!(&label);
                 let goto = match self.labels[label] {
                     LabelTarget::Block(_acc) => return bb,
                     LabelTarget::Loop(bb, _acc) => bb,
                 };
-
-                // panic!("We got into a break {goto}");
 
                 self.cfg.assign(
                     bb,
@@ -515,7 +496,7 @@ impl<'il> PillBuilder<'il> {
             ExprKind::Block(block, label) => {
                 if let Some(label) = *label {
                     self.labels.insert(label, LabelTarget::Block(into.into()));
-                };
+                }
 
                 self.process_block(into, block, bb)
             }
@@ -526,15 +507,13 @@ impl<'il> PillBuilder<'il> {
 
                 let loop_end = self.cfg.new_block();
                 self.current_loop_end.replace(loop_end);
-                dbg!("loop", label);
                 self.labels
                     .insert(*label, LabelTarget::Loop(loop_end, into.into()));
 
                 let bb = self.process_block(into, body, loop_start);
                 self.cfg.goto(bb, loop_start, expr.span);
                 self.current_loop_end.take();
-
-                self.cfg.live(bb, Span::DUMMY, into);
+                self.live(bb, into, Span::DUMMY);
                 loop_end
             }
 
@@ -943,6 +922,7 @@ impl<'il> PillBuilder<'il> {
 
 pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     let body = cx.build_eair(did);
+
     let mut captures = HashMap::new();
     let mut cfg = Cfg::new();
     let mut alive = HashSet::with_capacity(body.params.len());
@@ -1001,14 +981,16 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
     locals.reserve(body.locals.len());
     let mut map = HashMap::with_capacity(body.locals.len());
+
     for (local, data) in body.locals.iter() {
         assert!(data.ty().maybe_infer().is_none());
-        let id = locals.push((*data).into());
+
+        let data = (*data).into();
+        let id = locals.push(data);
         map.insert(local, id);
     }
 
     let mut builder = PillBuilder {
-        current_label: None,
         labels: HashMap::new(),
         cx,
         cfg,
@@ -1031,19 +1013,19 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
 
     builder.cfg.bb_return(ret_bb, span);
 
-    // for (_, block) in builder.cfg.blocks_mut() {
-    //     let Some(exit) = block.exit() else {
-    //         unreachable!("basic block without terminator")
-    //     };
+    for (_, block) in builder.cfg.blocks_mut() {
+        let Some(exit) = block.exit() else {
+            unreachable!("basic block without terminator")
+        };
 
-    //     if let BlockExitKind::Goto(bb) = exit.kind()
-    //         && bb.is_dummy()
-    //     {
-    //         block
-    //             .exit
-    //             .replace(BlockExit::new(BlockExitKind::Goto(ret_bb), exit.span()));
-    //     }
-    // }
+        if let BlockExitKind::Goto(bb) = exit.kind()
+            && bb.is_dummy()
+        {
+            block
+                .exit
+                .replace(BlockExit::new(BlockExitKind::Goto(ret_bb), exit.span()));
+        }
+    }
 
     let body = Pill {
         argument_count: arg_count,
@@ -1054,20 +1036,22 @@ pub fn build_pill<'cx>(cx: &'cx Session<'cx>, did: DefId) -> &'cx Pill<'cx> {
     let alloc = cx.arena().alloc(body);
 
     if cx.flags().dump_pill {
-        let w = std::io::stderr();
-        let mut lock = w.lock();
-        dump_pill(&mut lock, alloc, did).expect("writing to stderr failed!");
+        let stderr = std::io::stderr();
+        let name = cx.name_of(did);
+        let lock = &mut stderr.lock();
+
+        dump_pill(lock, alloc, name).expect("writing to stderr failed!");
     }
 
     alloc
 }
 
 const INDENT: &str = "      ";
-fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, did: DefId) -> io::Result<()> {
+fn dump_pill(w: &mut dyn Write, pill: &Pill<'_>, name: &str) -> io::Result<()> {
     writeln!(
         w,
         "fun {}({arg_count}) :: {ty}",
-        cx(|cx| cx.name_of(did)),
+        name,
         arg_count = pill.argument_count,
         ty = pill.locals[Local::ZERO].ty
     )?;
