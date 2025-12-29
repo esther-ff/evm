@@ -1,0 +1,9 @@
+[package]
+name = "lychee-parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lychee-ast = { path = "../lychee-ast"}
+lychee-util = { path = "../lychee-util"}
+lychee-lexer = { path = "../lychee-lexer"}

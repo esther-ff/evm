@@ -1,0 +1,8 @@
+[package]
+name = "lychee-util"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+codespan-reporting = "0.13.1"
+log = "0.4.28"

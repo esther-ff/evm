@@ -1,0 +1,137 @@
+use crate::id::IdxVec;
+use std::{io, path::Path, sync::Arc};
+
+use codespan_reporting::files::SimpleFiles;
+
+// #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+// pub struct OneWayVec<T>(Vec<T>);
+
+// impl<T> OneWayVec<T> {
+//     pub fn new() -> Self {
+//         Self(Vec::new())
+//     }
+
+//     pub fn push(&mut self, item: T) {
+//         self.0.push(item);
+//     }
+
+//     pub fn get(&self, idx: usize) -> Option<&T> {
+//         self.0.get(idx)
+//     }
+
+//     pub fn len(&self) -> usize {
+//         self.0.len()
+//     }
+// }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LineSpan {
+    start: usize,
+    end: usize,
+}
+
+impl LineSpan {
+    pub const DUMMY: Self = Self {
+        start: usize::MAX,
+        end: usize::MAX,
+    };
+}
+
+crate::newtyped_index!(SourceId, SourceMap, SourceVec);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SourceFile {
+    id: SourceId,
+    access_name: Arc<str>,
+    data: Arc<str>,
+    lines: Vec<LineSpan>,
+}
+
+impl SourceFile {
+    pub fn new(id: SourceId, access_name: Arc<str>, data: String) -> Self {
+        let mut lines = vec![LineSpan::DUMMY];
+        Self::count_lines_as_spans(&mut lines, data.as_bytes());
+
+        Self {
+            lines,
+            data: data.into(),
+            access_name,
+            id,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.access_name
+    }
+
+    fn count_lines_as_spans(storage: &mut Vec<LineSpan>, data: &[u8]) {
+        let mut start = 0;
+
+        for (ix, byte) in data.iter().enumerate() {
+            if *byte == b'\n' {
+                storage.push(LineSpan { start, end: ix });
+                start = ix + 1;
+            }
+
+            if ix == data.len().saturating_sub(1) {
+                storage.push(LineSpan { start, end: ix + 1 });
+            }
+        }
+    }
+
+    pub fn data(&self) -> &[u8] {
+        self.data.as_bytes()
+    }
+}
+
+pub trait FileManager {
+    fn open_file(&mut self, path: &Path) -> io::Result<Vec<u8>>;
+}
+
+pub struct Sources {
+    simple: SimpleFiles<Arc<str>, Arc<str>>,
+    files: SourceVec<SourceFile>,
+    io: Box<dyn FileManager>,
+}
+
+impl Sources {
+    pub fn new(io: Box<dyn FileManager>) -> Self {
+        Self {
+            io,
+            simple: SimpleFiles::new(),
+            files: IdxVec::new(),
+        }
+    }
+}
+
+impl Sources {
+    pub fn open<A>(&mut self, filepath: A) -> io::Result<SourceId>
+    where
+        A: AsRef<Path>,
+    {
+        let bytes = self.io.open_file(filepath.as_ref())?;
+        let data = String::from_utf8(bytes).expect("file wasn't valid utf-8");
+        let id = self.files.future_id();
+        let access_name: Arc<str> = filepath
+            .as_ref()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+            .into();
+
+        let file = SourceFile::new(id, access_name.clone(), data);
+
+        self.simple.add(access_name.clone(), file.data.clone());
+        self.files.push(file);
+        Ok(id)
+    }
+
+    pub fn get_by_source_id(&self, id: SourceId) -> &SourceFile {
+        self.files.get(id).expect("source ids should be valid")
+    }
+
+    pub fn files(&self) -> &SimpleFiles<Arc<str>, Arc<str>> {
+        &self.simple
+    }
+}

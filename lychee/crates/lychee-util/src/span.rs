@@ -1,0 +1,49 @@
+use crate::sources::SourceId;
+use std::fmt::{Debug, Display, Formatter};
+
+#[derive(Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub line: u32,
+    pub sourceid: SourceId,
+}
+
+impl Span {
+    pub const DUMMY: Self = Self {
+        start: u32::MAX,
+        end: u32::MAX,
+        line: u32::MAX,
+        sourceid: SourceId::DUMMY,
+    };
+
+    pub fn new(start: u32, end: u32, line: u32, sourceid: SourceId) -> Self {
+        Self {
+            start,
+            end,
+            line,
+            sourceid,
+        }
+    }
+
+    pub fn between(left: Self, right: Self) -> Span {
+        debug_assert!(left.sourceid == right.sourceid);
+        Span::new(left.start, right.end, right.line, right.sourceid)
+    }
+}
+
+impl Debug for Span {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if *self == Self::DUMMY {
+            return write!(f, "<dummy!>");
+        }
+
+        write!(f, "({}/{})@{}", self.start, self.end, self.line,)
+    }
+}
+
+impl Display for Span {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        <Self as Debug>::fmt(self, f)
+    }
+}

@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/*"]
+
+[package]
+name = "lychee"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.28"
+lychee-driver = { version = "0.1.0", path = "crates/lychee-driver" }
+lychee-util = { version = "0.1.0", path = "crates/lychee-util" }
+sap = "0.0.7"

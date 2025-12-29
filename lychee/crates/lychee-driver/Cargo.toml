@@ -1,0 +1,13 @@
+[package]
+name = "lychee-driver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = { version = "0.4.28", features = ["std"] }
+lychee-air = { version = "0.1.0", path = "../lychee-air" }
+lychee-ast = { version = "0.1.0", path = "../lychee-ast" }
+lychee-lexer = { version = "0.1.0", path = "../lychee-lexer" }
+lychee-middle = { version = "0.1.0", path = "../lychee-middle" }
+lychee-parser = { version = "0.1.0", path = "../lychee-parser" }
+lychee-util = { version = "0.1.0", path = "../lychee-util" }
